@@ -1,0 +1,31 @@
+# Private runtime state (never commit real account data or credentials)
+.runtime/
+.private/
+data/
+logs/
+cache/
+snapshots/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+*.key
+*.pem
+auth.json
+secrets.json
+# Python, frontend and visual QA outputs
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+node_modules/
+frontend/dist/
+output/
+.playwright-cli/
+test-results/
+*.tsbuildinfo
+.DS_Store
