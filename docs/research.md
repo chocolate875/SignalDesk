@@ -13,6 +13,20 @@
 
 ## 采用方案
 
+### 维护状态与平台核验
+
+以下由官方 GitHub API 的仓库元数据和 latest release 在核验日读取；`pushed_at`表示仓库最近推送，不能独自证明代码质量。未采用框架的版本仅作为调研快照，不进入运行锁文件。
+
+| 项目 | 调研版本 / 最近仓库推送（UTC） | Windows / Linux 与回放口径 |
+|---|---|---|
+| Qlib | [v0.9.8](https://github.com/microsoft/qlib/releases/tag/v0.9.8)，2026-10-22 | 官方提供两平台安装说明；完整数据集、训练与回测链路较重。借鉴表达式与Alpha158，V1用已完成K线自行回放。 |
+| vectorbt | [v1.2.0](https://github.com/polakowo/vectorbt/releases/tag/v1.2.0)，2026-10-23 | Python/NumPy/Numba栈可覆盖两平台，依赖二进制轮子；向量化回测便于比较参数，V1不引入其交易组合模拟。 |
+| vn.py | [4.5.0](https://github.com/vnpy/vnpy/releases/tag/4.5.0)，2026-10-27 | Windows/Linux安装路径齐全，GUI和交易网关增大部署面；借鉴事件引擎、历史/实时解耦，不启用订单链路。 |
+| LEAN | 主分支参考，2026-10-27 | C#/.NET和Docker跨平台，历史/实盘事件机制完整；GitHub latest release仍显示2017年的v2.4.0.1，**不把旧release时间误判为停止维护**。V1只参考架构。 |
+| ta | 直接采用0.11.0，2026-03-18 | 纯Python/pandas栈适用于两平台；提供指标、不提供提醒/账户/完整回放。维护节奏比上述框架低，V1用独立数值及边界测试约束依赖行为。 |
+
+上述五个仓库核验时均未归档。元数据来源为各官方仓库的 `https://api.github.com/repos/{owner}/{repo}` 与 `/releases/latest`；ta未发布GitHub latest release，采用安装锁定版本。Windows安装及实际测试结果见验收文档；Linux为代码兼容设计，未宣称目标硬件实测。
+
 以 pandas/numpy + ta 建立轻量计算核心，SQLite持久化状态和通知队列，LongPort独立数据适配器，React/ECharts本机静态看板。运行依赖的精确版本由 `uv.lock`、`frontend/package-lock.json` 锁定。上述未采用框架按核验日公开主分支作设计参照，**没有复制上游实现**；不声称固定了它们的发行版本或实盘收益。
 
 算子 -> 因子 -> 三维评分 -> 独立风险门控 -> 事件 -> 通知/Codex，所有层携带数据时间与规则版本。回放只处理当时已经结束的K线。当前持仓的模拟历史不能充当真实账户业绩。
