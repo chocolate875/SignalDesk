@@ -135,7 +135,7 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
         "distance_to_stop_percent": stock.get("distance_to_stop_percent"),
         "market": {
             key: stock.get("quote", {}).get(key)
-            for key in ["last", "timestamp", "trade_status", "spread_ratio"]
+            for key in ["last", "timestamp", "trade_status", "spread_ratio", "stale"]
         },
         "technical": summaries,
     }

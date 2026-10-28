@@ -38,9 +38,12 @@ def command(executable: str, directory: Path, defaults: dict) -> list[str]:
     # No --sandbox preset: legacy read-only would silently override exact filesystem roots.
     config = {
         "default_permissions": profile,
-        f'permissions.{profile}.filesystem.":minimal"': "read",
-        f"permissions.{profile}.filesystem.{json.dumps(str(directory))}": "read",
-        f"permissions.{profile}.network.enabled": False,
+        "permissions": {
+            profile: {
+                "filesystem": {":minimal": "read", str(directory): "read"},
+                "network": {"enabled": False},
+            }
+        },
         "project_doc_max_bytes": 0,
         "web_search": "disabled",
         "windows.sandbox": "elevated",
@@ -79,8 +82,18 @@ def command(executable: str, directory: Path, defaults: dict) -> list[str]:
         args += ["--disable", feature]
     args += ["--enable", "skip_host_skill_discovery"]
     for key, value in config.items():
-        args += ["-c", f"{key}={json.dumps(value)}"]
+        args += ["-c", f"{key}={inline_toml(value)}"]
     return args + ["-"]
+
+
+def inline_toml(value) -> str:
+    # CLI -c splits dotted keys literally; quoted path segments are NOT TOML-decoded there.
+    # Pass the complete permissions table as one inline TOML value instead.
+    if isinstance(value, dict):
+        return (
+            "{" + ", ".join(f"{json.dumps(key)} = {inline_toml(item)}" for key, item in value.items()) + "}"
+        )
+    return json.dumps(value)
 
 
 class CodexBridge:
