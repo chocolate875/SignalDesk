@@ -56,14 +56,21 @@ const dimensionColors: Record<string, string> = {
   momentum: "#a3a6ed",
   volume_score: "#d8b875",
 };
-const colorFor = (score: number | null | undefined) =>
-  score == null
-    ? "muted"
-    : score >= 70
-      ? "positive"
-      : score <= 30
-        ? "negative"
-        : "neutral";
+const colorFor = (score: number | null | undefined, state?: string) =>
+  state
+    ? ({
+        strong: "positive",
+        weak: "negative",
+        neutral: "neutral",
+        unavailable: "muted",
+      }[state] ?? "muted")
+    : score == null
+      ? "muted"
+      : score >= 70
+        ? "positive"
+        : score <= 30
+          ? "negative"
+          : "neutral";
 
 function MiniBars({ stock }: { stock: Stock }) {
   return (
@@ -91,12 +98,14 @@ function MiniBars({ stock }: { stock: Stock }) {
 function Score({
   value,
   large = false,
+  state,
 }: {
   value: number | null | undefined;
   large?: boolean;
+  state?: string;
 }) {
   return (
-    <span className={`score ${colorFor(value)} ${large ? "large" : ""}`}>
+    <span className={`score ${colorFor(value, state)} ${large ? "large" : ""}`}>
       {fmt(value)}
       {large && <small>/100</small>}
     </span>
@@ -808,8 +817,13 @@ export default function App() {
               </div>
               <div className="stat-meta">三维因子融合，独立风险约束</div>
               <div className="stat-bottom">
-                <span>趋势 40%</span>
-                <span>动量 30% · 量价 30%</span>
+                <span>
+                  趋势 {fmt((data?.rules?.trend_weight ?? 0.4) * 100, 0)}%
+                </span>
+                <span>
+                  动量 {fmt((data?.rules?.momentum_weight ?? 0.3) * 100, 0)}% ·
+                  量价 {fmt((data?.rules?.volume_weight ?? 0.3) * 100, 0)}%
+                </span>
               </div>
             </article>
             <article className="stat-card">
@@ -822,7 +836,9 @@ export default function App() {
               <div className="stat-number positive">
                 {data?.summary.strong ?? "—"}
                 <small>只</small>
-                <span className="small-tag positive">≥70分</span>
+                <span className="small-tag positive">
+                  ≥{data?.rules?.strong_threshold ?? 70}分
+                </span>
               </div>
               <div className="stat-meta">关注共振，不把强势当作买入指令</div>
               <div className="stat-bottom">
@@ -963,9 +979,12 @@ export default function App() {
                             </small>
                           </td>
                           <td>
-                            <Score value={s.primary.score} />
+                            <Score
+                              value={s.primary.score}
+                              state={s.primary.state}
+                            />
                             <small
-                              className={`regime ${colorFor(s.primary.score)}`}
+                              className={`regime ${colorFor(s.primary.score, s.primary.state)}`}
                             >
                               {labels[s.primary.state] ?? "等待数据"}
                             </small>
@@ -974,7 +993,10 @@ export default function App() {
                             <MiniBars stock={s} />
                           </td>
                           <td className="align-right">
-                            <b className="price">
+                            <b
+                              className="price"
+                              title={time(s.quote.timestamp)}
+                            >
                               {s.quote.last != null
                                 ? "$" + fmt(s.quote.last, 2)
                                 : "—"}
@@ -1086,9 +1108,22 @@ export default function App() {
                 <div className="chart-subhead">
                   <div className="chart-legend">
                     <span className="legend-dot gold" />
-                    MA20
-                    <span className="legend-dot purple" />
-                    MA50<span className="muted">纽约时间 · 已确认K线</span>
+                    {overlay === "MA"
+                      ? "MA20"
+                      : overlay === "BOLL"
+                        ? "布林中轨"
+                        : "VWAP"}
+                    {overlay !== "VWAP" && (
+                      <>
+                        <span className="legend-dot purple" />
+                        {overlay === "MA" ? "MA50" : "布林上下轨"}
+                      </>
+                    )}
+                    <span className="muted">
+                      {overlay === "VWAP" && timeframe === "day"
+                        ? "VWAP仅适用于分时"
+                        : "纽约时间 · 已确认K线"}
+                    </span>
                   </div>
                   <div className="overlay-switch">
                     {["MA", "BOLL", "VWAP"].map((o) => (
@@ -1198,7 +1233,8 @@ export default function App() {
                 </div>
                 <div className="signal-panel-foot">
                   <span className="tiny-dot teal" />
-                  普通信号冷却30分钟 · 关键价实时监控
+                  普通信号冷却{data?.rules?.cooldown_minutes ?? 30}分钟 ·
+                  关键价实时监控
                 </div>
               </section>
               <section className="panel fusion-panel">
@@ -1210,8 +1246,10 @@ export default function App() {
                   <span className="tiny-tag">{ticker(selected)}</span>
                 </div>
                 <div className="fusion-score">
-                  <Score value={summary?.score} large />
-                  <span className={`fusion-state ${colorFor(summary?.score)}`}>
+                  <Score value={summary?.score} state={summary?.state} large />
+                  <span
+                    className={`fusion-state ${colorFor(summary?.score, summary?.state)}`}
+                  >
                     {labels[summary?.state ?? "unavailable"]}
                   </span>
                 </div>

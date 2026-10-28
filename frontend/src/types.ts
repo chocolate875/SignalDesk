@@ -67,6 +67,7 @@ export type Analysis = {
   } | null;
 };
 export type Dashboard = {
+  rules?: Record<string, number>;
   mode: string;
   status: string;
   detail: string;
