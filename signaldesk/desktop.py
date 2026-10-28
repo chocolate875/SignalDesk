@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 import time
 import urllib.request
@@ -12,6 +13,23 @@ import uvicorn
 
 from .app import create_app
 from .security import data_directory
+
+
+def server_config(app, port: int):
+    options = {}
+    if sys.stdout is None or sys.stderr is None:
+        # pythonw has no console streams. Uvicorn's default formatter calls stdout.isatty().
+        # Operational failures are exposed through local status; never dump requests/account data.
+        options["log_config"] = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "handlers": {"silent": {"class": "logging.NullHandler"}},
+            "loggers": {
+                name: {"handlers": ["silent"], "level": "WARNING", "propagate": False}
+                for name in ["uvicorn", "uvicorn.error", "uvicorn.access"]
+            },
+        }
+    return uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False, **options)
 
 
 def already_running(port: int) -> bool:
@@ -66,7 +84,7 @@ def main():
             webbrowser.open(url)
         return
     app = create_app(directory)
-    config = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning", access_log=False)
+    config = server_config(app, args.port)
     server = uvicorn.Server(config)
     if args.headless or os.name != "nt":
         try:
