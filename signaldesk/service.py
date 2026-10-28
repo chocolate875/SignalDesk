@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from datetime import datetime
 
@@ -172,16 +173,38 @@ class Monitor:
 
     def stock(self, allocation: Allocation) -> dict:
         mode = self.settings.mode
-        quote = self.quotes.get((mode, allocation.symbol), {})
+        quote = dict(self.quotes.get((mode, allocation.symbol), {}))
         summaries = {
-            f"{tf}:{session}": summary
+            f"{tf}:{session}": dict(summary)
             for (source, symbol, tf, session), summary in self.summaries.items()
             if source == mode and symbol == allocation.symbol
         }
+        if str(quote.get("trade_status", "normal")).lower() not in {
+            "normal",
+            "normaltrade",
+            "normal_trade",
+            "",
+        }:
+            for value in summaries.values():
+                value.update(valid=False, score=None, state="unavailable", opportunity_allowed=False)
+                value["risks"] = ["停牌或交易状态受限"] + [
+                    r for r in value.get("risks", []) if r != "停牌或交易状态受限"
+                ]
         market = session_for(utcnow())
         active_session = "regular" if mode == "demo" or market["session"] == "closed" else market["session"]
         primary = "day:regular" if allocation.sleeves() == ["long"] else f"15m:{active_session}"
-        summary = summaries.get(primary, {})
+        summary = dict(summaries.get(primary, {}))
+        quote_stale = False
+        if mode == "live" and market["session"] != "closed":
+            try:
+                quote_stale = (
+                    not 0 <= (utcnow() - datetime.fromisoformat(quote["timestamp"])).total_seconds() <= 120
+                )
+            except (ValueError, KeyError):
+                quote_stale = True
+        quote["stale"] = quote_stale
+        if quote_stale:
+            summary["risks"] = ["报价过期或尚未确认"] + summary.get("risks", [])
         last = quote.get("last")
         net = self.store.get(f"account:{mode}", {}).get("net_assets")
         if mode == "demo":
@@ -228,6 +251,7 @@ class Monitor:
             for sleeve in ["long", "short"]
         }
         return {
+            "rules": self.settings.rules.model_dump(),
             "mode": self.settings.mode,
             "status": self.status,
             "detail": self.detail,
@@ -244,8 +268,8 @@ class Monitor:
             },
             "summary": {
                 "count": len(stocks),
-                "strong": sum(s >= 70 for s in scores),
-                "weak": sum(s <= 30 for s in scores),
+                "strong": sum(s["primary"].get("state") == "strong" for s in stocks),
+                "weak": sum(s["primary"].get("state") == "weak" for s in stocks),
                 "average": sum(scores) / len(scores) if scores else None,
                 "risk_count": sum(bool(s["primary"].get("risks")) or not s["reconciled"] for s in stocks),
                 "sleeve_weights": weights,
@@ -259,10 +283,11 @@ class Monitor:
             raise ValueError("股票不在本机监控列表")
         frame = self.frames.get((self.settings.mode, symbol, timeframe))
         rows = chart_rows(frame, session) if frame is not None else []
+        stock = self.stock(allocation)
         return {
-            "stock": self.stock(allocation),
+            "stock": stock,
             "rows": rows,
-            "summary": self.summaries.get((self.settings.mode, symbol, timeframe, session)),
+            "summary": stock["summaries"].get(f"{timeframe}:{session}"),
             "timeframe": timeframe,
             "session": session,
         }
@@ -279,6 +304,8 @@ class Monitor:
             self.loop.call_soon_threadsafe(enqueue)
 
     async def on_events(self, events: list[dict]):
+        if self.settings.mode != "live":
+            return
         for event in events:
             if event["historical"] or event["source"] != "live":
                 continue
@@ -286,9 +313,11 @@ class Monitor:
                 continue  # Ordinary long-horizon changes go into the closing digest.
             if self.settings.pause_ordinary and event["severity"] != "critical":
                 continue
-            self.notifications.enqueue(event, self.settings.desktop_notifications, self.settings.qq.enabled)
             allocation = next((a for a in self.portfolio() if a.symbol == event["symbol"]), None)
-            if allocation:
+            if allocation is None or not allocation.reconciled or event.get("sleeve") == "unassigned":
+                continue
+            self.notifications.enqueue(event, self.settings.desktop_notifications, self.settings.qq.enabled)
+            if allocation and allocation.reconciled and event.get("sleeve") != "unassigned":
                 try:
                     await self.codex.request(
                         self.stock(allocation), "live", automatic=True, event_id=event["id"]
@@ -358,12 +387,22 @@ class Monitor:
         mode = self.settings.mode
         old = self.quotes.get((mode, symbol), {})
         value = {**old, **quote}
-        self.quotes[(mode, symbol)] = value
         try:
-            stamp = datetime.fromisoformat(value["timestamp"])
-            if not 0 <= (utcnow() - stamp).total_seconds() <= 120:
-                return
+            last = float(value.get("last"))
+            if not math.isfinite(last) or last <= 0:
+                last = None
         except (ValueError, TypeError):
+            last = None
+        value["last"] = last
+        try:
+            stamp = datetime.fromisoformat(quote["timestamp"])
+            if old.get("timestamp") and stamp < datetime.fromisoformat(old["timestamp"]):
+                return  # Late delivery must not rewind price crossing state or the displayed quote.
+            fresh = 0 <= (utcnow() - stamp).total_seconds() <= 120
+        except (ValueError, TypeError, KeyError):
+            fresh = False
+        self.quotes[(mode, symbol)] = value
+        if not fresh or last is None or str(value.get("trade_status", "normal")).lower() != "normal":
             return
         for allocation in self.portfolio():
             if allocation.symbol != symbol or not allocation.reconciled:

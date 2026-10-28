@@ -15,6 +15,9 @@ snapshots/
 *.pem
 auth.json
 secrets.json
+*.encrypted
+**/credentials/
+**/codex-exports/
 # Python, frontend and visual QA outputs
 .venv/
 __pycache__/

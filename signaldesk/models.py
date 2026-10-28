@@ -88,7 +88,7 @@ class CodexSettings(StrictModel):
     automatic: bool = True
     daily_limit: int = Field(default=24, ge=0, le=500)
     cooldown_minutes: int = Field(default=30, ge=1, le=1440)
-    timeout_seconds: int = Field(default=180, ge=15, le=900)
+    timeout_seconds: int = Field(default=600, ge=15, le=900)
 
 
 class Settings(StrictModel):
@@ -124,6 +124,8 @@ class NotificationEnvelope(StrictModel):
     severity: Literal["info", "warning", "critical"]
     title: str
     message: str
+    evidence: list[str] = Field(default_factory=list, max_length=12)
+    rule_version: str = ""
     score: float | None = None
     data_as_of: str
     source: Literal["demo", "live", "test"] = "live"

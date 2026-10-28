@@ -233,7 +233,7 @@ def summarize(
         "timeframe": timeframe,
         "session": session,
         "valid": valid,
-        "score": score,
+        "score": score if valid else None,
         "dimensions": dimensions,
         "indicators": indicators,
         "risks": risks,

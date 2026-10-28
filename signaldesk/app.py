@@ -117,7 +117,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             "settings": monitor.settings.model_dump(),
             "credentials": {service: monitor.vault.configured(service) for service in ["longport", "qq"]},
             "startup": startup.state(),
-            "operators": [{"name": op.name, "description": op.description} for op in REGISTRY.values()],
+            "operators": [op.metadata() for op in REGISTRY.values()],
         }
 
     @app.put("/api/settings")

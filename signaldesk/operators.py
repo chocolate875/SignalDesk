@@ -14,6 +14,19 @@ class Operator:
     description: str
     windowed: bool = True
 
+    def metadata(self, window: int = 20) -> dict:
+        size = _window(window) if self.windowed else None
+        warmup = (size + 1 if self.name in {"delay", "delta", "returns"} else size) if size else 1
+        return {
+            "name": self.name,
+            "description": self.description,
+            "inputs": ["x", "other"] if self.name == "corr" else ["x"],
+            "windowed": self.windowed,
+            "example_window": size,
+            "warmup_length": warmup,
+            "validity": "完整历史窗口；缺失输入返回不可用；零分母/零方差返回不可用",
+        }
+
 
 def _window(window: int) -> int:
     if not isinstance(window, int) or isinstance(window, bool) or window < 1:

@@ -18,6 +18,38 @@ from .models import RuleSettings, utcnow
 from .storage import Store
 
 
+def load_bars(path: Path, session: str) -> list[dict]:
+    if path.suffix.lower() == ".json":
+        records = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(records, list):
+            raise ValueError("JSON必须是OHLCV记录数组")
+        table = pd.DataFrame(records)
+    else:
+        table = pd.read_csv(path)
+    required = {"timestamp", "open", "high", "low", "close", "volume"}
+    if not required.issubset(table.columns):
+        raise ValueError(f"缺少必需列：{', '.join(sorted(required - set(table.columns)))}")
+    for value in table["timestamp"]:
+        stamp = pd.Timestamp(value)
+        if pd.isna(stamp) or stamp.tzinfo is None:
+            raise ValueError("timestamp必须是带时区的有效ISO8601时间")
+    for name in ["open", "high", "low", "close", "volume"]:
+        table[name] = pd.to_numeric(table[name], errors="coerce")
+    if "confirmed" not in table:
+        table["confirmed"] = True
+    if not table["confirmed"].isin([True, False]).all():
+        raise ValueError("confirmed必须为true/false")
+    if "session" not in table:
+        table["session"] = session
+    if not table["session"].isin(["regular", "pre", "post", "overnight"]).all():
+        raise ValueError("session必须为regular/pre/post/overnight")
+    if "turnover" not in table:
+        table["turnover"] = table["close"] * table["volume"]
+    else:
+        table["turnover"] = pd.to_numeric(table["turnover"], errors="coerce")
+    return table.to_dict("records")
+
+
 def replay(bars: list[dict], symbol: str, timeframe: str, session: str = "regular") -> dict:
     frame = enrich(bars, timeframe, datetime(2035, 1, 1, tzinfo=timezone.utc), RuleSettings())
     with tempfile.TemporaryDirectory(prefix="signaldesk-replay-") as temporary:
@@ -59,17 +91,7 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.input:
-        if args.input.suffix.lower() == "json":
-            bars = json.loads(args.input.read_text(encoding="utf-8"))
-        else:
-            table = pd.read_csv(args.input)
-            if "confirmed" not in table:
-                table["confirmed"] = True
-            if "session" not in table:
-                table["session"] = args.session
-            if "turnover" not in table:
-                table["turnover"] = table["close"] * table["volume"]
-            bars = table.to_dict("records")
+        bars = load_bars(args.input, args.session)
     else:
         bars = make_bars(args.symbol, args.timeframe, utcnow())
     report = replay(bars, args.symbol, args.timeframe, args.session)
