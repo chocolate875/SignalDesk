@@ -82,3 +82,5 @@ npm run build
 Linux复用Python核心，先构建/复制前端资源，再运行 `python -m signaldesk.desktop --headless`。ARM64依赖可用性与实际模型调用、长桥连接性能仍须在目标开发板验证。
 
 回放及精确公式见 [算子与评分说明](docs/signals.md)。项目选型、许可证和来源见 [量化项目调研](docs/research.md)。验收记录见 [验收说明](docs/verification.md)。Python与前端分别由 `uv.lock`、`frontend/package-lock.json` 锁定版本。
+
+用户反馈、下次优化顺序及图表/界面技术候选见 [后续待办](TODO.md)。
