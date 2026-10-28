@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 from datetime import datetime, timedelta
 
@@ -14,9 +15,31 @@ from .calendar import NY, bar_end, latest_expected_end
 from .models import RuleSettings
 
 RULE_VERSION = "fusion-1.0.0"
-FEATURE_COLUMNS = ["ma20", "ma50", "ma200", "ema20", "ema50", "rsi", "macd", "macd_signal",
-                   "macd_hist", "bb_upper", "bb_middle", "bb_lower", "atr", "vwap", "rvol",
-                   "trend", "momentum", "volume_score", "score", "return_1", "zscore20", "rank20", "corr20"]
+FEATURE_COLUMNS = [
+    "ma20",
+    "ma50",
+    "ma200",
+    "ema20",
+    "ema50",
+    "rsi",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "atr",
+    "vwap",
+    "rvol",
+    "trend",
+    "momentum",
+    "volume_score",
+    "score",
+    "return_1",
+    "zscore20",
+    "rank20",
+    "corr20",
+]
 
 
 def finite(value):
@@ -32,14 +55,19 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
     frame = pd.DataFrame(bars).copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
     frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
-    frame = frame[frame["confirmed"] & frame["timestamp"].map(
-        lambda t: bar_end(t.to_pydatetime(), timeframe) <= now)].reset_index(drop=True)
+    frame = frame[
+        frame["confirmed"] & frame["timestamp"].map(lambda t: bar_end(t.to_pydatetime(), timeframe) <= now)
+    ].reset_index(drop=True)
     if frame.empty:
         return frame
-    invalid = (~np.isfinite(frame[["open", "high", "low", "close", "volume"]]).all(axis=1)
-               | (frame["close"] <= 0) | (frame["open"] <= 0) | (frame["volume"] < 0)
-               | (frame["high"] < frame[["open", "close", "low"]].max(axis=1))
-               | (frame["low"] > frame[["open", "close", "high"]].min(axis=1)))
+    invalid = (
+        ~np.isfinite(frame[["open", "high", "low", "close", "volume"]]).all(axis=1)
+        | (frame["close"] <= 0)
+        | (frame["open"] <= 0)
+        | (frame["volume"] < 0)
+        | (frame["high"] < frame[["open", "close", "low"]].max(axis=1))
+        | (frame["low"] > frame[["open", "close", "high"]].min(axis=1))
+    )
     # Retain invalid rows as a break: never bridge/fill missing data into a valid signal.
     frame.loc[invalid, ["open", "high", "low", "close", "volume"]] = np.nan
     for col in FEATURE_COLUMNS:
@@ -48,12 +76,20 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
     groups = frame.groupby("session", sort=False)
     for _, session_frame in groups:
         valid = session_frame["close"].notna()
-        segments = (~valid).cumsum()
+        local = session_frame["timestamp"].dt.tz_convert(NY)
+        dates = local.map(lambda t: (t.to_pydatetime() + timedelta(hours=4)).date())
+        same_day = dates == dates.shift(1)
+        gaps = (
+            same_day & (session_frame["timestamp"].diff().dt.total_seconds() > 900)
+            if timeframe != "day"
+            else pd.Series(False, index=session_frame.index)
+        )
+        segments = ((~valid) | gaps).cumsum()
         for _, part in session_frame[valid].groupby(segments[valid]):
             if part.empty:
                 continue
             ix = part.index
-            c, h, l, v = (part[k].astype(float) for k in ["close", "high", "low", "volume"])
+            c, h, low, v = (part[k].astype(float) for k in ["close", "high", "low", "volume"])
             values = {}
             for period in [20, 50, 200]:
                 values[f"ma{period}"] = SMAIndicator(c, period, fillna=False).sma_indicator()
@@ -63,19 +99,27 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
             macd = MACD(c, 26, 12, 9, fillna=False)
             values.update(macd=macd.macd(), macd_signal=macd.macd_signal(), macd_hist=macd.macd_diff())
             bb = BollingerBands(c, 20, 2, fillna=False)
-            values.update(bb_upper=bb.bollinger_hband(), bb_middle=bb.bollinger_mavg(), bb_lower=bb.bollinger_lband())
-            atr = AverageTrueRange(h, l, c, 14, fillna=False).average_true_range() if len(part) >= 14 else c * np.nan
+            values.update(
+                bb_upper=bb.bollinger_hband(), bb_middle=bb.bollinger_mavg(), bb_lower=bb.bollinger_lband()
+            )
+            atr = (
+                AverageTrueRange(h, low, c, 14, fillna=False).average_true_range()
+                if len(part) >= 14
+                else c * np.nan
+            )
             atr = atr.where(np.arange(len(part)) >= 13).replace(0, np.nan)
             values["atr"] = atr
             local_time = part["timestamp"].dt.tz_convert(NY)
-            trading_dates = local_time.map(lambda t: (t + pd.Timedelta(hours=4)).date() if t.hour >= 20 else t.date())
-            typical = (h + l + c) / 3
+            trading_dates = local_time.map(lambda t: (t.to_pydatetime() + timedelta(hours=4)).date())
+            typical = (h + low + c) / 3
             if timeframe == "day":
                 values["vwap"] = c * np.nan  # One daily OHLC bar is not an intraday VWAP.
                 baseline = op.mean(op.delay(v), 20)
             else:
                 turn = part["turnover"].where(part["turnover"] > 0, typical * v)
-                values["vwap"] = turn.groupby(trading_dates).cumsum() / v.groupby(trading_dates).cumsum().replace(0, np.nan)
+                values["vwap"] = turn.groupby(trading_dates).cumsum() / v.groupby(
+                    trading_dates
+                ).cumsum().replace(0, np.nan)
                 # Same exchange-local clock slot, same session, preceding 20 trading days only.
                 slots = local_time.dt.strftime("%H:%M")
                 baseline = v.groupby(slots).transform(lambda x: x.shift(1).rolling(20, min_periods=10).mean())
@@ -88,26 +132,55 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
             momentum = ((values["rsi"] - 50) / 50 + op.clip(values["macd_hist"] / atr)) / 2
             ret = op.returns(c)
             quantity = np.sign(ret) * op.clip(rvol - 1, 0, 1)
-            values.update(trend=(trend + 1) * 50, momentum=(momentum + 1) * 50,
-                          volume_score=(quantity + 1) * 50, return_1=ret,
-                          zscore20=op.zscore(c, 20), rank20=op.ts_rank(c, 20), corr20=op.corr(ret, op.delta(v), 20))
-            values["score"] = (rules.trend_weight * values["trend"] + rules.momentum_weight * values["momentum"]
-                               + rules.volume_weight * values["volume_score"])
+            values.update(
+                trend=(trend + 1) * 50,
+                momentum=(momentum + 1) * 50,
+                volume_score=(quantity + 1) * 50,
+                return_1=ret,
+                zscore20=op.zscore(c, 20),
+                rank20=op.ts_rank(c, 20),
+                corr20=op.corr(ret, op.delta(v), 20),
+            )
+            values["score"] = (
+                rules.trend_weight * values["trend"]
+                + rules.momentum_weight * values["momentum"]
+                + rules.volume_weight * values["volume_score"]
+            )
             for key, series in values.items():
                 frame.loc[ix, key] = series
     return frame.replace([np.inf, -np.inf], np.nan)
 
 
-def summarize(frame: pd.DataFrame, timeframe: str, session: str, now: datetime,
-              rules: RuleSettings, quote: dict | None = None, demo: bool = False) -> dict:
+def summarize(
+    frame: pd.DataFrame,
+    timeframe: str,
+    session: str,
+    now: datetime,
+    rules: RuleSettings,
+    quote: dict | None = None,
+    demo: bool = False,
+) -> dict:
     part = frame[frame["session"] == session] if not frame.empty else frame
-    empty = {"timeframe": timeframe, "session": session, "valid": False, "score": None,
-             "dimensions": {}, "indicators": {}, "risks": ["预热数据不足"], "state": "unavailable",
-             "as_of": None, "rule_version": RULE_VERSION, "opportunity_allowed": False, "evidence": []}
+    empty = {
+        "timeframe": timeframe,
+        "session": session,
+        "valid": False,
+        "score": None,
+        "dimensions": {},
+        "indicators": {},
+        "risks": ["预热数据不足"],
+        "state": "unavailable",
+        "as_of": None,
+        "rule_version": RULE_VERSION,
+        "opportunity_allowed": False,
+        "evidence": [],
+    }
     if part.empty:
         return empty
     row = part.iloc[-1]
-    indicators = {k: finite(row[k]) for k in FEATURE_COLUMNS if k not in ["trend", "momentum", "volume_score", "score"]}
+    indicators = {
+        k: finite(row[k]) for k in FEATURE_COLUMNS if k not in ["trend", "momentum", "volume_score", "score"]
+    }
     dimensions = {k: finite(row[k]) for k in ["trend", "momentum", "volume_score"]}
     score = finite(row["score"])
     risks = []
@@ -130,6 +203,12 @@ def summarize(frame: pd.DataFrame, timeframe: str, session: str, now: datetime,
     if rsi is not None and (rsi >= 70 or rsi <= 30):
         risks.append("RSI进入极值区")
     spread = (quote or {}).get("spread_ratio")
+    if not demo and (quote or {}).get("timestamp"):
+        try:
+            if (now - datetime.fromisoformat(quote["timestamp"])).total_seconds() > 120:
+                spread = None
+        except ValueError:
+            spread = None
     liquidity_ok = True
     if session != "regular":
         if spread is None or spread > rules.max_extended_spread:
@@ -138,22 +217,53 @@ def summarize(frame: pd.DataFrame, timeframe: str, session: str, now: datetime,
         if float(row["turnover"]) < rules.min_extended_turnover:
             risks.append("盘外成交额不足")
             liquidity_ok = False
-    valid = score is not None and (demo or not stale) and status in ["normal", "normaltrade", "normal_trade", ""]
-    state = "strong" if score is not None and score >= rules.strong_threshold else "weak" if score is not None and score <= rules.weak_threshold else "neutral"
+    valid = (
+        score is not None and (demo or not stale) and status in ["normal", "normaltrade", "normal_trade", ""]
+    )
+    state = (
+        "strong"
+        if score is not None and score >= rules.strong_threshold
+        else "weak"
+        if score is not None and score <= rules.weak_threshold
+        else "neutral"
+    )
     if not valid:
         state = "unavailable"
-    return {"timeframe": timeframe, "session": session, "valid": valid, "score": score,
-            "dimensions": dimensions, "indicators": indicators, "risks": risks, "state": state,
-            "as_of": end.isoformat(), "rule_version": RULE_VERSION,
-            "opportunity_allowed": valid and liquidity_ok,
-            "evidence": [f"趋势 {dimensions.get('trend') or 0:.1f} ×40%",
-                         f"动量 {dimensions.get('momentum') or 0:.1f} ×30%",
-                         f"量价 {dimensions.get('volume_score') or 0:.1f} ×30%"] if score is not None else []}
+    return {
+        "timeframe": timeframe,
+        "session": session,
+        "valid": valid,
+        "score": score,
+        "dimensions": dimensions,
+        "indicators": indicators,
+        "risks": risks,
+        "state": state,
+        "as_of": end.isoformat(),
+        "rule_version": RULE_VERSION + "+" + hashlib.sha256(rules.model_dump_json().encode()).hexdigest()[:8],
+        "weights": {
+            "trend": rules.trend_weight,
+            "momentum": rules.momentum_weight,
+            "volume_score": rules.volume_weight,
+        },
+        "opportunity_allowed": valid and liquidity_ok,
+        "evidence": [
+            f"趋势 {dimensions.get('trend') or 0:.1f} ×{rules.trend_weight:.0%}",
+            f"动量 {dimensions.get('momentum') or 0:.1f} ×{rules.momentum_weight:.0%}",
+            f"量价 {dimensions.get('volume_score') or 0:.1f} ×{rules.volume_weight:.0%}",
+        ]
+        if score is not None
+        else [],
+    }
 
 
 def chart_rows(frame: pd.DataFrame, session: str, count: int = 220) -> list[dict]:
     if frame.empty:
         return []
     part = frame[frame["session"] == session].tail(count)
-    return [{"timestamp": row["timestamp"].isoformat(), **{k: finite(row[k]) for k in
-             ["open", "close", "low", "high", "volume"] + FEATURE_COLUMNS}} for _, row in part.iterrows()]
+    return [
+        {
+            "timestamp": row["timestamp"].isoformat(),
+            **{k: finite(row[k]) for k in ["open", "close", "low", "high", "volume"] + FEATURE_COLUMNS},
+        }
+        for _, row in part.iterrows()
+    ]

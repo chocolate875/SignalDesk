@@ -1,0 +1,85 @@
+"""Replay the same causal indicator/event pipeline; this is not a portfolio return backtest."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pandas as pd
+
+from .calendar import bar_end
+from .demo import make_bars
+from .events import EventEngine
+from .indicators import enrich, summarize
+from .models import RuleSettings, utcnow
+from .storage import Store
+
+
+def replay(bars: list[dict], symbol: str, timeframe: str, session: str = "regular") -> dict:
+    frame = enrich(bars, timeframe, datetime(2035, 1, 1, tzinfo=timezone.utc), RuleSettings())
+    with tempfile.TemporaryDirectory(prefix="signaldesk-replay-") as temporary:
+        store = Store(Path(temporary))
+        engine = EventEngine(store)
+        valid = 0
+        for ix in frame.index[frame["session"] == session]:
+            now = bar_end(frame.loc[ix, "timestamp"].to_pydatetime(), timeframe)
+            summary = summarize(frame.loc[:ix], timeframe, session, now, RuleSettings(), demo=True)
+            valid += bool(summary["valid"])
+            engine.fusion(
+                symbol,
+                "long" if timeframe == "day" else "short",
+                summary,
+                RuleSettings(),
+                "demo",
+                historical=True,
+            )
+        events = store.events(count=10000)
+        store.close()
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "session": session,
+        "bar_count": len(frame),
+        "valid_snapshots": valid,
+        "event_count": len(events),
+        "events": list(reversed(events)),
+        "note": "仅复现技术事件，不是收益回测；缺少盘外盘口时不能验证盘外机会的可交易性",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="用相同信号引擎回放本机OHLCV数据")
+    parser.add_argument("--input", type=Path, help="本机CSV或JSON文件，缺省使用合成数据")
+    parser.add_argument("--symbol", default="NVDA.US")
+    parser.add_argument("--timeframe", choices=["day", "15m"], default="15m")
+    parser.add_argument("--session", choices=["regular", "pre", "post", "overnight"], default="regular")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    if args.input:
+        if args.input.suffix.lower() == "json":
+            bars = json.loads(args.input.read_text(encoding="utf-8"))
+        else:
+            table = pd.read_csv(args.input)
+            if "confirmed" not in table:
+                table["confirmed"] = True
+            if "session" not in table:
+                table["session"] = args.session
+            if "turnover" not in table:
+                table["turnover"] = table["close"] * table["volume"]
+            bars = table.to_dict("records")
+    else:
+        bars = make_bars(args.symbol, args.timeframe, utcnow())
+    report = replay(bars, args.symbol, args.timeframe, args.session)
+    text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text, encoding="utf-8")
+    else:
+        print(text)
+
+
+if __name__ == "__main__":
+    main()

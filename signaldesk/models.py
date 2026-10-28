@@ -30,6 +30,7 @@ class Allocation(StrictModel):
     stop_price: float | None = Field(default=None, gt=0)
     target_price: float | None = Field(default=None, gt=0)
     watch_only: bool = False
+    watch_sleeve: Sleeve = "short"
 
     @field_validator("symbol")
     @classmethod
@@ -48,6 +49,8 @@ class Allocation(StrictModel):
         return abs(self.long_quantity + self.short_quantity - self.broker_quantity) < 1e-6
 
     def sleeves(self) -> list[Sleeve]:
+        if self.watch_only and self.broker_quantity == 0:
+            return [self.watch_sleeve]
         result: list[Sleeve] = []
         if self.long_quantity > 0:
             result.append("long")
@@ -124,4 +127,3 @@ class NotificationEnvelope(StrictModel):
     score: float | None = None
     data_as_of: str
     source: Literal["demo", "live", "test"] = "live"
-

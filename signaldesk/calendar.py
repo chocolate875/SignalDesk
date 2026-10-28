@@ -24,9 +24,15 @@ def session_for(now: datetime) -> dict:
     cal = calendar()
     minutes = local.hour * 60 + local.minute
     trade_day = day + pd.Timedelta(days=1) if minutes >= 1200 else day
-    result = {"session": "closed", "label": "休市", "trading_date": str(trade_day.date()),
-              "new_york": local.isoformat(), "beijing": now.astimezone(SH).isoformat(),
-              "early_close": False, "calendar": "XNYS"}
+    result = {
+        "session": "closed",
+        "label": "休市",
+        "trading_date": str(trade_day.date()),
+        "new_york": local.isoformat(),
+        "beijing": now.astimezone(SH).isoformat(),
+        "early_close": False,
+        "calendar": "XNYS",
+    }
     if minutes >= 1200 or minutes < 240:
         if cal.is_session(trade_day):
             result.update(session="overnight", label="夜盘")
@@ -75,7 +81,10 @@ def latest_expected_end(now: datetime, timeframe: str, session: str) -> datetime
         bounds = {
             "regular": (regular_open, regular_close),
             "pre": (local_start + timedelta(hours=4), regular_open),
-            "post": (regular_close, local_start + timedelta(hours=17 if regular_close.astimezone(NY).hour < 16 else 20)),
+            "post": (
+                regular_close,
+                local_start + timedelta(hours=17 if regular_close.astimezone(NY).hour < 16 else 20),
+            ),
             "overnight": (local_start - timedelta(hours=4), local_start + timedelta(hours=4)),
         }
         start, end = bounds[session]

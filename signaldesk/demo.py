@@ -1,4 +1,5 @@
 """Deterministic synthetic fixtures. No downloaded market prices, no real holdings."""
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -22,13 +23,26 @@ DEMO_NAMES = [
 
 
 def allocations() -> list[Allocation]:
-    return [Allocation(symbol=s, name=name, long_quantity=l, short_quantity=q,
-                       broker_quantity=l+q, available_quantity=l+q, cost_price=round(price*0.93, 2))
-            for s, name, price, l, q, _ in DEMO_NAMES]
+    return [
+        Allocation(
+            symbol=s,
+            name=name,
+            long_quantity=long_qty,
+            short_quantity=q,
+            broker_quantity=long_qty + q,
+            available_quantity=long_qty + q,
+            cost_price=round(price * 0.93, 2),
+        )
+        for s, name, price, long_qty, q, _ in DEMO_NAMES
+    ]
 
 
 def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
-    n = next(i for i, item in enumerate(DEMO_NAMES) if item[0] == symbol) if symbol in {x[0] for x in DEMO_NAMES} else 1
+    n = (
+        next(i for i, item in enumerate(DEMO_NAMES) if item[0] == symbol)
+        if symbol in {x[0] for x in DEMO_NAMES}
+        else 1
+    )
     _, _, base, _, _, drift = DEMO_NAMES[n]
     rng = np.random.default_rng(2000 + n + (0 if timeframe == "day" else 100))
     cal = calendar()
@@ -44,10 +58,12 @@ def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
         for day in days[-32:]:
             midnight = datetime.combine(day.date(), datetime.min.time(), NY)
             close = cal.session_close(day).to_pydatetime()
-            bounds = [(midnight-timedelta(hours=4), midnight+timedelta(hours=4), "overnight"),
-                      (midnight+timedelta(hours=4), midnight+timedelta(hours=9, minutes=30), "pre"),
-                      (cal.session_open(day).to_pydatetime(), close, "regular"),
-                      (close, midnight+timedelta(hours=17 if close.astimezone(NY).hour < 16 else 20), "post")]
+            bounds = [
+                (midnight - timedelta(hours=4), midnight + timedelta(hours=4), "overnight"),
+                (midnight + timedelta(hours=4), midnight + timedelta(hours=9, minutes=30), "pre"),
+                (cal.session_open(day).to_pydatetime(), close, "regular"),
+                (close, midnight + timedelta(hours=17 if close.astimezone(NY).hour < 16 else 20), "post"),
+            ]
             for start, finish, session in bounds:
                 while start + timedelta(minutes=15) <= finish and start + timedelta(minutes=15) <= now:
                     clocks.append((start, session))
@@ -62,13 +78,24 @@ def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
     result = []
     for i, (ts, session) in enumerate(clocks):
         closing = float(closes[i])
-        opening = float(closes[i-1] if i else closes[i] * 0.999)
+        opening = float(closes[i - 1] if i else closes[i] * 0.999)
         width = closing * rng.uniform(0.001, 0.004)
-        volume = int(rng.integers(80_000, 650_000) if timeframe != "day" else rng.integers(8_000_000, 45_000_000))
+        volume = int(
+            rng.integers(80_000, 650_000) if timeframe != "day" else rng.integers(8_000_000, 45_000_000)
+        )
         if i >= count - 3:
             volume *= 3
-        result.append({"timestamp": ts.astimezone(pd.Timestamp.now(tz="UTC").tz).isoformat(),
-                       "session": session, "open": opening, "close": closing,
-                       "high": max(opening, closing) + width, "low": min(opening, closing) - width,
-                       "volume": volume, "turnover": float(volume * closing), "confirmed": True})
+        result.append(
+            {
+                "timestamp": ts.astimezone(pd.Timestamp.now(tz="UTC").tz).isoformat(),
+                "session": session,
+                "open": opening,
+                "close": closing,
+                "high": max(opening, closing) + width,
+                "low": min(opening, closing) - width,
+                "volume": volume,
+                "turnover": float(volume * closing),
+                "confirmed": True,
+            }
+        )
     return result

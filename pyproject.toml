@@ -5,7 +5,7 @@ description = "Local-first technical signal monitoring with Codex analysis and Q
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "websockets>=14,<17",
-  "pandas>=2.2,<3", "numpy>=2,<3", "ta==0.11.0", "httpx>=0.27,<1",
+  "pandas>=2.2,<3", "numpy>=2,<2.4", "ta==0.11.0", "httpx>=0.27,<1",
   "pydantic>=2.8,<3", "cryptography>=43", "exchange-calendars>=4.6,<5",
   "longport>=3,<5", "pillow>=10", "pystray>=0.19; sys_platform == 'win32'",
 ]
@@ -26,7 +26,11 @@ packages = ["signaldesk"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
