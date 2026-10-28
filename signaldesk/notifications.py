@@ -23,6 +23,12 @@ class DeliveryResult:
     retry_after: float = 0
 
 
+class QQPlatformError(ValueError):
+    def __init__(self, code: int, status: int):
+        self.code, self.status = code, status
+        super().__init__(f"QQ平台错误码 {code or status}")
+
+
 class NotificationChannel(Protocol):
     async def send(self, envelope: NotificationEnvelope) -> DeliveryResult: ...
     async def health(self) -> dict: ...
@@ -32,9 +38,10 @@ def qq_text(event: NotificationEnvelope) -> str:
     # Allowlisted fields only. Never append a raw portfolio object or arbitrary analysis context.
     source = "【测试】" if event.source == "test" else "【演示】" if event.source == "demo" else ""
     score = f"\n技术结构评分 {event.score:.1f}/100" if event.score is not None else ""
+    evidence = "\n证据 " + "；".join(event.evidence[:3])[:240] if event.evidence else ""
     return (
         f"{source}SignalDesk · {event.title}\n{event.symbol} · {event.timeframe} · {event.session}"
-        f"{score}\n{event.message[:350]}\n数据时间 {event.data_as_of}\n事件 {event.event_id[:8]}\n仅监控提醒，未执行交易"
+        f"{score}\n{event.message[:350]}{evidence}\n数据时间 {event.data_as_of}\n事件 {event.event_id[:8]}\n仅监控提醒，未执行交易"
     )[:1500]
 
 
@@ -71,6 +78,10 @@ class QQOfficial:
             and self.vault.configured("qq")
         )
 
+    def receipt(self, result: DeliveryResult) -> DeliveryResult:
+        self.last_status, self.last_detail = result.status, result.detail
+        return result
+
     async def _token(self, force=False) -> str:
         async with self._lock:
             if not force and self.access_token and time.monotonic() < self.expires_at - 50:
@@ -86,14 +97,14 @@ class QQOfficial:
                 or payload.get("code", 0) not in [0, None]
                 or not payload.get("access_token")
             ):
-                raise ValueError(f"QQ凭据验证失败，错误码 {payload.get('code', response.status_code)}")
+                raise QQPlatformError(int(payload.get("code", 0) or 0), response.status_code)
             self.access_token = payload["access_token"]
             self.expires_at = time.monotonic() + max(0, float(payload.get("expires_in", 0)))
             return self.access_token
 
     async def send(self, envelope: NotificationEnvelope) -> DeliveryResult:
         if not self.ready():
-            return DeliveryResult("blocked", "QQ未配置完整或未启用")
+            return self.receipt(DeliveryResult("blocked", "QQ未配置完整或未启用"))
         # An OpenID belongs to this AppID; it must never be treated as a raw QQ numeric UIN.
         from urllib.parse import quote
 
@@ -129,15 +140,22 @@ class QQOfficial:
                     result = DeliveryResult(
                         "blocked", f"QQ发送未成功，平台错误码 {code or response.status_code}"
                     )
-                self.last_status, self.last_detail = result.status, result.detail
-                return result
+                return self.receipt(result)
+        except QQPlatformError as error:
+            if error.status == 429 or error.code == 100001:
+                return self.receipt(DeliveryResult("limited", "QQ凭据请求限流，请稍后重试", True, 30))
+            if error.status >= 500:
+                return self.receipt(DeliveryResult("failed", "QQ凭据服务暂时不可用", True, 10))
+            return self.receipt(
+                DeliveryResult("blocked", f"QQ凭据验证失败，错误码 {error.code or error.status}")
+            )
         except (httpx.ConnectError, httpx.ConnectTimeout):
-            return DeliveryResult("failed", "QQ连接失败", True, 10)
+            return self.receipt(DeliveryResult("failed", "QQ连接失败", True, 10))
         except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError):
-            return DeliveryResult("unknown", "QQ请求结果未知，请核对接收端后重试")
+            return self.receipt(DeliveryResult("unknown", "QQ请求结果未知，请核对接收端后重试"))
         except (ValueError, KeyError):
-            return DeliveryResult("blocked", "QQ认证或响应格式异常，请检查本机凭据与平台权限")
-        return DeliveryResult("blocked", "QQ认证失败")
+            return self.receipt(DeliveryResult("blocked", "QQ认证或响应格式异常，请检查本机凭据与平台权限"))
+        return self.receipt(DeliveryResult("blocked", "QQ认证失败"))
 
     async def health(self) -> dict:
         return {
@@ -176,7 +194,9 @@ class NotificationDispatcher:
         self.pause_ordinary = False
 
     def enqueue(self, event: dict, desktop: bool, qq: bool):
-        envelope = NotificationEnvelope(**{k: event[k] for k in NotificationEnvelope.model_fields})
+        envelope = NotificationEnvelope(
+            **{k: v for k, v in event.items() if k in NotificationEnvelope.model_fields}
+        )
         if desktop:
             self.store.enqueue(event["id"], "desktop", "local", envelope.model_dump())
         if qq and self.qq.ready():
@@ -219,6 +239,7 @@ class NotificationDispatcher:
                         "symbol": "MULTI",
                         "title": f"{len(group)}项普通技术信号汇总",
                         "message": content[:350],
+                        "evidence": [f"{e.symbol} {e.title}" for _, e in group][:12],
                     }
                 )
             for entry, _ in group:
