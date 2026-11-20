@@ -211,6 +211,145 @@ function PlanRangeBar({
   );
 }
 
+function ForecastCard({
+  stock,
+  onApplyForecastLevels,
+}: {
+  stock: Stock;
+  onApplyForecastLevels: (stopLoss: number, sellLow: number) => void;
+}) {
+  const forecast = stock.forecast;
+  const rating = forecast?.rating;
+  const levels = forecast?.levels;
+  const available = Boolean(
+    forecast && levels?.available && rating?.available,
+  );
+
+  return (
+    <section className="insp-card forecast-card">
+      <div className="insp-card-head">
+        <h3>买卖评级与点位预测</h3>
+        <div className="forecast-head-badges">
+          {rating?.available && (
+            <span className="muted-tag">置信度 {rating.confidence}</span>
+          )}
+          <span className={`verdict-chip tone-${rating?.tone ?? "muted"}`}>
+            {rating?.label ?? "暂不评级"}
+            {rating?.score != null ? ` ${fmt(rating.score, 1)}分` : ""}
+          </span>
+        </div>
+      </div>
+
+      {!available ? (
+        <div className="forecast-unavail">
+          <p>
+            {levels?.reason ||
+              rating?.summary ||
+              "已确认日线窗口或波动率数据不足，暂不生成点位预测。"}
+          </p>
+          {rating?.disclaimer && (
+            <p className="forecast-disclaimer">{rating.disclaimer}</p>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="forecast-levels-grid">
+            <div className="forecast-level-cell buy">
+              <small>参考买点区间</small>
+              <strong>
+                ${fmt(levels!.buy_low, 2)} – ${fmt(levels!.buy_high, 2)}
+              </strong>
+              <span>
+                距买点 {fmt(levels!.buy_discount_pct, 1)}% · 中枢 $
+                {fmt(levels!.ideal_buy, 2)}
+              </span>
+            </div>
+            <div className="forecast-level-cell sell">
+              <small>参考卖点区间</small>
+              <strong>
+                ${fmt(levels!.sell_low, 2)} – ${fmt(levels!.sell_high, 2)}
+              </strong>
+              <span>
+                空间 +{fmt(levels!.upside_pct, 1)}% / +
+                {fmt(levels!.target_upside_pct, 1)}%
+              </span>
+            </div>
+            <div className="forecast-level-cell stop">
+              <small>防守止损 &amp; 赔率</small>
+              <strong>${fmt(levels!.stop_loss, 2)}</strong>
+              <span>
+                回撤 {fmt(levels!.downside_pct, 1)}% · 赔率{" "}
+                {fmt(levels!.risk_reward_ratio, 2)}:1
+              </span>
+            </div>
+          </div>
+
+          <div className="forecast-action-row">
+            <div className="forecast-pos-tags">
+              <span className="source-pill">{levels!.position_label}</span>
+              <span className="muted-tag">
+                买点盈亏比 {fmt(levels!.entry_risk_reward_ratio, 2)}:1
+              </span>
+            </div>
+            {levels!.stop_loss != null && levels!.sell_low != null && (
+              <button
+                type="button"
+                className="button secondary forecast-apply-btn"
+                onClick={() =>
+                  onApplyForecastLevels(levels!.stop_loss!, levels!.sell_low!)
+                }
+              >
+                采纳为计划价
+              </button>
+            )}
+          </div>
+
+          <div className="forecast-anchors">
+            <div>
+              <b>买入支撑：</b>
+              <span>{levels!.buy_anchors.join(" · ")}</span>
+            </div>
+            <div>
+              <b>卖出压力：</b>
+              <span>{levels!.sell_anchors.join(" · ")}</span>
+            </div>
+            <div>
+              <b>防守依据：</b>
+              <span>{levels!.stop_anchor}</span>
+            </div>
+          </div>
+
+          {rating!.guardrails.length > 0 && (
+            <div className="forecast-guardrails">
+              {rating!.guardrails.map((g, i) => (
+                <div key={i}>
+                  <TriangleAlert size={14} />
+                  <span>{g}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="rating-factors">
+            {rating!.factors.map((f) => (
+              <div className="rating-factor-row" key={f.key}>
+                <div className="rf-head">
+                  <span>{f.label}</span>
+                  <em>权重 {fmt(f.weight * 100, 0)}%</em>
+                  <b>{f.score != null ? `${fmt(f.score, 1)}分` : "暂缺"}</b>
+                </div>
+                <small>{f.detail}</small>
+              </div>
+            ))}
+          </div>
+
+          <p className="forecast-disclaimer">{rating!.disclaimer}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function StockInspector({
   tab,
   onTabChange,
@@ -223,6 +362,7 @@ export default function StockInspector({
   status,
   cooldownMinutes,
   onEditPlan,
+  onApplyForecastLevels,
   onAnalyze,
   onPreview,
   onSelectSymbol,
@@ -240,6 +380,7 @@ export default function StockInspector({
   status: string;
   cooldownMinutes: number;
   onEditPlan: () => void;
+  onApplyForecastLevels: (stopLoss: number, sellLow: number) => void;
   onAnalyze: () => void;
   onPreview: () => void;
   onSelectSymbol: (symbol: string) => void;
@@ -302,6 +443,11 @@ export default function StockInspector({
       <div className="inspector-body">
         {tab === "summary" && stock && (
           <>
+            <ForecastCard
+              stock={stock}
+              onApplyForecastLevels={onApplyForecastLevels}
+            />
+
             <PlanRangeBar stock={stock} onEditPlan={onEditPlan} />
 
             <section className="insp-card">

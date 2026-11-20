@@ -150,6 +150,7 @@ export default function Chart({
   const [showMacd, setShowMacd] = useState(true);
   const [showRsi, setShowRsi] = useState(true);
   const [showCost, setShowCost] = useState(true);
+  const [showForecast, setShowForecast] = useState(true);
   const [activeRange, setActiveRange] = useState<number>(252);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -317,7 +318,7 @@ export default function Chart({
         ? detail.stock.cost_price
         : null;
 
-    const markLines = [
+    const planLines = [
       {
         label: "失效价",
         price: detail.stock.long_plan.stop,
@@ -338,8 +339,33 @@ export default function Chart({
       .map(({ label, price, color }) => ({
         name: `${label} $${fmt(price, 2)}`,
         yAxis: price,
-        lineStyle: { color, width: 1.4, type: "dashed" },
+        lineStyle: { color, width: 1.5, type: "dashed" },
+        label: { position: "insideStartTop" },
       }));
+
+    const fl = detail.stock.forecast?.levels;
+    const forecastBuyColor = "#10b981";
+    const forecastSellColor = dark ? "#60a5fa" : "#1e40af";
+    const forecastStopColor = dark ? "#ef5f6c" : "#dc2626";
+    const forecastLines =
+      showForecast && fl?.available
+        ? [
+            { label: "参考买点", price: fl.buy_high, color: forecastBuyColor },
+            { label: "深度买点", price: fl.buy_low, color: forecastBuyColor },
+            { label: "参考卖点", price: fl.sell_low, color: forecastSellColor },
+            { label: "目标卖点", price: fl.sell_high, color: forecastSellColor },
+            { label: "参考止损", price: fl.stop_loss, color: forecastStopColor },
+          ]
+            .filter(({ price }) => price != null)
+            .map(({ label, price, color }) => ({
+              name: `${label} $${fmt(price, 2)}`,
+              yAxis: price,
+              lineStyle: { color, width: 1.2, type: "dotted", opacity: 0.85 },
+              label: { position: "insideEndTop" },
+            }))
+        : [];
+
+    const markLines = [...planLines, ...forecastLines];
 
     const series: any[] = [
       {
@@ -520,7 +546,7 @@ export default function Chart({
       series,
     };
     instance.setOption(option, { notMerge: true });
-  }, [detail, dates, overlay, showMacd, showRsi, showCost, theme, reverse]);
+  }, [detail, dates, overlay, showMacd, showRsi, showCost, showForecast, theme, reverse]);
 
   const paneTitles = useMemo(() => {
     if (showMacd && showRsi) {
@@ -640,6 +666,15 @@ export default function Chart({
                 成本线
               </button>
             )}
+          {detail?.stock.forecast?.levels.available && (
+            <button
+              type="button"
+              className={showForecast ? "active" : ""}
+              onClick={() => setShowForecast(!showForecast)}
+            >
+              预测点位
+            </button>
+          )}
         </div>
 
         <button

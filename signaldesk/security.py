@@ -137,6 +137,9 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
         long_qty = stock.get("long_quantity")
         weight = weight * long_qty / stock["broker_quantity"] if long_qty is not None else None
     research = stock.get("research", {})
+    forecast = stock.get("forecast", {})
+    rating = forecast.get("rating", {})
+    levels = forecast.get("levels", {})
     return {
         "source": mode,
         "symbol": stock["symbol"],
@@ -145,6 +148,25 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
         "long_position_assigned": "long" in stock.get("sleeves", []) and not stock.get("watch_only"),
         "position_weight_percent": weight if stock.get("reconciled", True) else None,
         "long_plan": plan_context,
+        "forecast": {
+            "rating": {
+                k: rating.get(k) for k in ("code", "label", "score", "confidence")
+            },
+            "levels": {
+                k: levels.get(k)
+                for k in (
+                    "available",
+                    "buy_low",
+                    "buy_high",
+                    "sell_low",
+                    "sell_high",
+                    "stop_loss",
+                    "risk_reward_ratio",
+                )
+            },
+        }
+        if forecast
+        else {},
         "research": {
             "valuation": {
                 k: research.get("valuation", {}).get(k)

@@ -34,11 +34,15 @@ import {
 
 function AllocationEditor({
   stock,
+  presetStop,
+  presetTarget,
   onClose,
   onSaved,
   notify,
 }: {
   stock: Stock | null;
+  presetStop?: number | null;
+  presetTarget?: number | null;
   onClose: () => void;
   onSaved: () => void;
   notify: (s: string) => void;
@@ -48,9 +52,11 @@ function AllocationEditor({
   const [long, setLong] = useState(stock?.long_quantity ?? 0);
   const [short, setShort] = useState(stock?.short_quantity ?? 0);
   const [watchSleeve, setWatchSleeve] = useState(stock?.watch_sleeve ?? "long");
-  const [stop, setStop] = useState(stock?.long_plan.stop?.toString() ?? "");
+  const [stop, setStop] = useState(
+    (presetStop ?? stock?.long_plan.stop)?.toString() ?? "",
+  );
   const [target, setTarget] = useState(
-    stock?.long_plan.target?.toString() ?? "",
+    (presetTarget ?? stock?.long_plan.target)?.toString() ?? "",
   );
   const [favorite, setFavorite] = useState(stock?.favorite ?? false);
   const [busy, setBusy] = useState(false);
@@ -273,7 +279,14 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [first, setFirst] = useState(!localStorage.getItem("sd-onboarded"));
   const [toast, setToast] = useState("");
-  const [editor, setEditor] = useState<Stock | null | undefined>(undefined);
+  const [editor, setEditor] = useState<
+    | {
+        stock: Stock | null;
+        presetStop?: number | null;
+        presetTarget?: number | null;
+      }
+    | undefined
+  >(undefined);
   const [preview, setPreview] = useState<any>(null);
   const [deliveries, setDeliveries] = useState<any[] | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("summary");
@@ -651,7 +664,7 @@ export default function App() {
           selected={selected}
           onSelect={setSelected}
           onToggleFavorite={toggleFavorite}
-          onAddWatch={() => setEditor(null)}
+          onAddWatch={() => setEditor({ stock: null })}
           onSyncWatchlist={syncWatchlist}
           syncing={syncingWatchlist}
           onOpenSettings={() => setSettings(true)}
@@ -726,7 +739,7 @@ export default function App() {
                     <button
                       type="button"
                       className="button secondary"
-                      onClick={() => setEditor(stock)}
+                      onClick={() => setEditor({ stock })}
                     >
                       <SlidersHorizontal size={15} />
                       编辑计划
@@ -757,9 +770,20 @@ export default function App() {
               {verdict && (
                 <div className={`verdict-banner tone-${verdict.tone}`}>
                   <div className="verdict-main">
-                    <span className={`verdict-badge tone-${verdict.tone}`}>
-                      {verdict.action}
-                    </span>
+                    <div className="verdict-badges">
+                      <span className={`verdict-badge tone-${verdict.tone}`}>
+                        {verdict.action}
+                      </span>
+                      {stock.forecast?.rating.available && (
+                        <span
+                          className={`verdict-badge forecast-rating-badge tone-${stock.forecast.rating.tone}`}
+                          title={stock.forecast.rating.summary}
+                        >
+                          {stock.forecast.rating.label}{" "}
+                          {fmt(stock.forecast.rating.score, 0)}分
+                        </span>
+                      )}
+                    </div>
                     <div className="verdict-copy">
                       <p className="verdict-headline">{verdict.headline}</p>
                       <p className="verdict-next">
@@ -778,6 +802,52 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+                  {stock.forecast?.levels.available && (
+                    <div className="forecast-strip">
+                      <div className="forecast-strip-item">
+                        <span>参考买点</span>
+                        <strong className="up">
+                          ${fmt(stock.forecast.levels.buy_low, 2)} – $
+                          {fmt(stock.forecast.levels.buy_high, 2)}
+                        </strong>
+                      </div>
+                      <div className="forecast-strip-item">
+                        <span>参考卖点</span>
+                        <strong className="accent-val">
+                          ${fmt(stock.forecast.levels.sell_low, 2)} – $
+                          {fmt(stock.forecast.levels.sell_high, 2)}
+                        </strong>
+                      </div>
+                      <div className="forecast-strip-item">
+                        <span>防守止损</span>
+                        <strong className="down">
+                          ${fmt(stock.forecast.levels.stop_loss, 2)}
+                        </strong>
+                      </div>
+                      <div className="forecast-strip-item">
+                        <span>现价盈亏比</span>
+                        <strong>
+                          {fmt(stock.forecast.levels.risk_reward_ratio, 2)}:1
+                        </strong>
+                      </div>
+                      {stock.forecast.levels.stop_loss != null &&
+                        stock.forecast.levels.sell_low != null && (
+                          <button
+                            type="button"
+                            className="text-btn forecast-strip-apply"
+                            onClick={() =>
+                              setEditor({
+                                stock,
+                                presetStop: stock.forecast!.levels.stop_loss,
+                                presetTarget: stock.forecast!.levels.sell_low,
+                              })
+                            }
+                          >
+                            采纳为计划价
+                          </button>
+                        )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -810,7 +880,7 @@ export default function App() {
                 <button
                   type="button"
                   className="button secondary"
-                  onClick={() => setEditor(null)}
+                  onClick={() => setEditor({ stock: null })}
                 >
                   <Plus size={15} />
                   添加本地观察股
@@ -831,7 +901,15 @@ export default function App() {
           mode={data?.mode ?? "demo"}
           status={data?.status ?? "starting"}
           cooldownMinutes={data?.rules?.cooldown_minutes ?? 30}
-          onEditPlan={() => stock && setEditor(stock)}
+          onEditPlan={() => stock && setEditor({ stock })}
+          onApplyForecastLevels={(stopLoss, sellLow) =>
+            stock &&
+            setEditor({
+              stock,
+              presetStop: stopLoss,
+              presetTarget: sellLow,
+            })
+          }
           onAnalyze={analyze}
           onPreview={showPreview}
           onSelectSymbol={setSelected}
@@ -852,7 +930,9 @@ export default function App() {
 
       {editor !== undefined && (
         <AllocationEditor
-          stock={editor}
+          stock={editor.stock}
+          presetStop={editor.presetStop}
+          presetTarget={editor.presetTarget}
           onClose={() => setEditor(undefined)}
           onSaved={refresh}
           notify={notify}

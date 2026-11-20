@@ -10,6 +10,7 @@ from . import demo
 from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
 from .events import EventEngine
+from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
 from .models import Allocation, Settings, utcnow
 from .notifications import NotificationDispatcher
@@ -214,6 +215,7 @@ class Monitor:
         mode = self.settings.mode
         quote = dict(self.quotes.get((mode, allocation.symbol), {}))
         with self.frame_lock:
+            frame = self.frames.get((mode, allocation.symbol, "day"))
             summaries = {
                 f"{tf}:{session}": dict(summary)
                 for (source, symbol, tf, session), summary in self.summaries.items()
@@ -318,6 +320,7 @@ class Monitor:
             "target_distance_percent": ((close / target - 1) * 100) if close and target else None,
         }
         verdict = self._build_verdict(allocation, summary, research, long_plan)
+        forecast = compute_forecast(frame, summary, research, long_plan)
         result = {
             **allocation.model_dump(),
             "sleeves": allocation.sleeves(),
@@ -329,6 +332,7 @@ class Monitor:
             "research": research,
             "long_plan": long_plan,
             "verdict": verdict,
+            "forecast": forecast,
             "weight_percent": (qty * last / net * 100) if last and net else None,
             "pnl_percent": ((last / allocation.cost_price - 1) * 100)
             if last and allocation.cost_price
@@ -639,6 +643,18 @@ class Monitor:
                 "average": sum(scores) / len(scores) if scores else None,
                 "risk_count": sum(bool(s["primary"].get("risks")) or not s["reconciled"] for s in stocks),
                 "sleeve_weights": weights,
+                "buy_rated": sum(
+                    (s.get("forecast") or {}).get("rating", {}).get("code") in {"strong_buy", "buy"}
+                    for s in stocks
+                ),
+                "hold_rated": sum(
+                    (s.get("forecast") or {}).get("rating", {}).get("code") == "hold"
+                    for s in stocks
+                ),
+                "sell_rated": sum(
+                    (s.get("forecast") or {}).get("rating", {}).get("code") in {"reduce", "sell"}
+                    for s in stocks
+                ),
             },
             "unsupported": self.unsupported if self.settings.mode == "live" else [],
         }

@@ -102,3 +102,37 @@ def test_favorites_toggle_and_watchlist_sync_endpoints(client):
         == 200
     )
     assert client.delete("/api/watchlist/ORCL.US").status_code == 200
+
+
+def test_forecast_levels_rating_and_safe_snapshot_privacy(client):
+    dashboard = client.get("/api/bootstrap").json()
+    summary = dashboard["summary"]
+    assert {"buy_rated", "hold_rated", "sell_rated"}.issubset(summary)
+    assert (
+        summary["buy_rated"] + summary["hold_rated"] + summary["sell_rated"]
+        <= summary["count"]
+    )
+
+    for stock in dashboard["stocks"]:
+        fc = stock["forecast"]
+        lv = fc["levels"]
+        rt = fc["rating"]
+        assert lv["available"] is True and rt["available"] is True
+        close = stock["long_plan"]["close"]
+        assert (
+            0
+            < lv["stop_loss"]
+            < lv["buy_low"]
+            < lv["buy_high"]
+            <= close
+            < lv["sell_low"]
+            < lv["sell_high"]
+        )
+        assert rt["code"] in {"strong_buy", "buy", "hold", "reduce", "sell"}
+
+    preview = client.get("/api/analysis/preview/NVDA.US").json()
+    assert "forecast" in preview
+    assert preview["forecast"]["rating"]["code"] in {"strong_buy", "buy", "hold", "reduce", "sell"}
+    assert "broker_quantity" not in str(preview)
+    assert "cost_price" not in str(preview)
+    assert "net_assets" not in str(preview)

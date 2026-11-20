@@ -112,7 +112,52 @@ export type Stock = {
     target_distance_percent?: number | null;
   };
   verdict?: Verdict;
+  forecast?: StockForecast;
   summaries: Record<string, Summary>;
+};
+export type RatingFactor = {
+  key: string;
+  label: string;
+  weight: number;
+  score: number | null;
+  detail: string;
+};
+export type StockRating = {
+  available: boolean;
+  code: "strong_buy" | "buy" | "hold" | "reduce" | "sell" | "unavailable" | string;
+  label: string;
+  tone: "danger" | "warning" | "positive" | "neutral" | "muted" | string;
+  score: number | null;
+  stars: number;
+  confidence: string;
+  summary: string;
+  factors: RatingFactor[];
+  guardrails: string[];
+  disclaimer: string;
+};
+export type PriceLevels = {
+  available: boolean;
+  reason: string;
+  buy_low: number | null;
+  buy_high: number | null;
+  ideal_buy: number | null;
+  sell_low: number | null;
+  sell_high: number | null;
+  stop_loss: number | null;
+  buy_discount_pct: number | null;
+  upside_pct: number | null;
+  target_upside_pct: number | null;
+  downside_pct: number | null;
+  risk_reward_ratio: number | null;
+  entry_risk_reward_ratio: number | null;
+  position_label: string;
+  buy_anchors: string[];
+  sell_anchors: string[];
+  stop_anchor: string;
+};
+export type StockForecast = {
+  levels: PriceLevels;
+  rating: StockRating;
 };
 export type Signal = {
   id: string;
@@ -175,6 +220,9 @@ export type Dashboard = {
     average: number | null;
     risk_count: number;
     sleeve_weights: Record<string, number>;
+    buy_rated?: number;
+    hold_rated?: number;
+    sell_rated?: number;
   };
   unsupported: string[];
 };

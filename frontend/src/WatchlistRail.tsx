@@ -16,7 +16,7 @@ import {
 } from "./types";
 
 type RailTab = "all" | "favorite" | "held" | "watchlist";
-type SortMode = "plan" | "favorite" | "change" | "score" | "risk";
+type SortMode = "plan" | "rating" | "favorite" | "change" | "score" | "risk";
 
 export default function WatchlistRail({
   allStocks,
@@ -82,6 +82,12 @@ export default function WatchlistRail({
     });
 
     return [...filtered].sort((a, b) => {
+      if (sort === "rating") {
+        const ratingDiff =
+          (b.forecast?.rating.score ?? -1) - (a.forecast?.rating.score ?? -1);
+        if (ratingDiff !== 0) return ratingDiff;
+        return (a.verdict?.priority ?? 9) - (b.verdict?.priority ?? 9);
+      }
       if (sort === "favorite") {
         const favDiff = Number(b.favorite) - Number(a.favorite);
         if (favDiff !== 0) return favDiff;
@@ -210,6 +216,7 @@ export default function WatchlistRail({
             onChange={(e) => setSort(e.target.value as SortMode)}
           >
             <option value="plan">待复核优先</option>
+            <option value="rating">买卖评级优先</option>
             <option value="favorite">收藏优先</option>
             <option value="change">涨跌幅</option>
             <option value="score">技术评分</option>
@@ -313,13 +320,22 @@ export default function WatchlistRail({
                         "%"
                       : "待更新"}
                   </span>
-                  <span className="stock-row-meta">
-                    {s.primary.score != null
-                      ? `分 ${fmt(s.primary.score, 0)}`
-                      : s.research.valuation.pe_ttm != null
-                        ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
-                        : "—"}
-                  </span>
+                  {s.forecast?.rating.available ? (
+                    <span
+                      className={`rating-mini tone-text-${s.forecast.rating.tone}`}
+                      title={s.forecast.rating.summary}
+                    >
+                      {s.forecast.rating.label} {fmt(s.forecast.rating.score, 0)}
+                    </span>
+                  ) : (
+                    <span className="stock-row-meta">
+                      {s.primary.score != null
+                        ? `分 ${fmt(s.primary.score, 0)}`
+                        : s.research.valuation.pe_ttm != null
+                          ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
+                          : "—"}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
