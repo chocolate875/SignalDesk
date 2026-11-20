@@ -1,5 +1,15 @@
 # V0.1.0 验收记录
 
+## 2026-11-20 买卖点位预测与 5 级综合评级
+
+- **功能与架构变更。** 新增因果点位预测与 5 级评级引擎 `signaldesk/forecast.py`（`compute_forecast()`），并在 `signaldesk/service.py`（`Monitor.stock()` 与 `Monitor.snapshot()["summary"]` 聚合统计 `buy_rated` / `hold_rated` / `sell_rated`）与 `signaldesk/security.py`（`safe_snapshot()` 白名单透传脱敏 `rating`/`levels`）接入；前端新增 `frontend/src/StockInspector.tsx` 的「买卖评级与点位预测」卡片、中栏结论条 `forecast-strip` 点位速览、K 线工具栏 `预测点位` 虚线标注层、左侧列表 `买卖评级优先` 排序，以及一键「采纳为计划价」预填 `AllocationEditor`（由用户确认保存）。
+- **自动化测试与构建。** 全量 pytest **53 项通过**（含新建 `tests/test_forecast.py` 5 个测试与 `tests/test_api.py` 的 `/api/bootstrap` + `/api/analysis/preview` 隐私/单调断言，存在 1 条既有的 Starlette httpx 兼容弃用提示）；`ruff check signaldesk tests` 全通过；`frontend` 下 `tsc -b` 与 `vite build`（Windows 沙箱外执行以绕过 Vite `realpath` `EPERM`）生产构建通过（4.93s，输出 `index-CVSb66da.js`、`index-9abtaCjD.css`）；样式字号正则检查确认 `frontend/src/style.css` 共 131 条 `font-size` 声明，最小值为 `12.0px`，无低于 `12px` 字号。
+- **实盘看盘浏览器核对。** 重启本机无界面服务至最新构建后访问 `http://127.0.0.1:8765`（实盘只读模式，同步 92 只美股自选、自动忽略 44 只非美股），在 `1423×1269` 企业简洁风亮色桌面三栏视图核对通过：
+  - 左侧支持切换 `买卖评级优先` 并按分数降序重排；对盈利为负或缺有效评级标的（如 `ANT`/`SPCX`）诚实回落显示 PE，其余标的显示 `建议买入`/`中性观望`/`谨慎减持`/`建议卖出` 等迷你评级。
+  - 选中 `NVDA`（`$145.98 -3.30%`）：中栏显示 `● 暂缓观察` + `● 中性观望 48分` 与 `.forecast-strip`（买点 `$137.77 – $145.71`、卖点 `$163.76 – $195.41`、止损 `$129.86`、现价盈亏比 `1.10:1`），K 线工具栏开启 `预测点位` 后在图面右侧渲染对应虚线标注。
+  - 右栏「综合研判」中「买卖评级与点位预测」卡片单行对齐标题、`置信度 低` 与 `● 中性观望 47.5分`，三条水平价位行卡、锚点依据、空头弱势风控护栏与四因子明细完整无横向溢出；点击「采纳为计划价」正确预填失效价 `129.86` 与目标价 `163.76` 并通过「取消」关闭未改写实盘计划；最终重载检查控制台 **0 errors**，全部 7 个资源/API 请求均返回 HTTP **200**。
+- **未验证项。** 本轮未执行真实 Codex CLI 手动分析推理；未对照长桥 App 同屏历史分时/日线逐笔读数；未执行 24 小时断网与长时间挂机监控压测。
+
 ## 2026-11-20 桌面看盘重构、企业简洁风、自选同步与手动 Codex
 
 - **功能与架构变更。** 重构前端为三栏桌面看盘工作台并采用「企业简洁风」默认亮色主题（`#f8fafc` 浅灰蓝画布 + 白卡 `1px #e5e7eb` 描边 + 单一企业蓝 `#1e40af`，最小字号 `12px`）；新增后端确定性 `verdict` 研判结论条与右栏三标签；新增 LongPort 只读自选同步（`LongPortFeed.watchlist` + `POST /api/watchlist/sync`）、本地收藏（`PUT /api/favorites/{symbol}`）；关闭事件自动触发 Codex（`CodexSettings.automatic = False` 并在 `Monitor.on_events()` 移除自动调用）。

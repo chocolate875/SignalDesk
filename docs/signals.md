@@ -64,6 +64,23 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 2. **三支柱与通俗维度说明**：同步输出「计划价位」「估值利率」「日线结构」三项紧凑状态，并将趋势（MA200 与 EMA20/50 相对位置）、动量（RSI14 区间与 MACD 柱方向）、量价（RVOL 倍数与涨跌）翻译为直白中文短语。
 3. **与 Codex 的职责分工**：上述规则研判在本地毫秒级确定性计算；Codex 总结默认为**纯手动触发**（`CodexSettings.automatic = False`），事件与轮询不会自动调用模型，仅在用户主动点击「生成 Codex 总结」时基于白名单脱敏快照运行。
 
+## 点位预测与 5 级买卖评级（forecast）
+
+每只股票由 `signaldesk/forecast.py` 的 `compute_forecast()` 基于已确认日线序列、技术摘要、估值/美债研究上下文与长期计划价进行确定性因果计算，输出 `levels`（参考买卖点与防守止损）与 `rating`（5 级综合评级）。
+
+1. **前置因果条件**：仅截取最近一段无中断的连续有效常规时段（`regular`）日线尾部序列，要求连续有效常规日线 `>= 60` 根、`summary.valid == True`、`summary.confirmed_price_available == True`、`close >= 0.05` 且 `ATR14 > 0`。历史不足、缺交易日断档切断预热或行情失效时，诚实返回 `levels.available = False` 与 `rating.code = "unavailable"`（`暂不评级`）。
+2. **多锚点点位测算与严格单调约束**：结合已确认 `MA20`、`EMA20`、`BOLL 中/上/下轨`、`MA50`、`MA200`、近 20/60 日高低点、20 日枢轴支撑/阻力（`S1`/`R1`）、斐波那契 `1.618` 扩展位及 `ATR14` 波动倍数，分别锚定参考买点上沿（`buy_high`）、深度买点（`buy_low`）、防守止损（`stop_loss`）、第一卖点（`sell_low`）与第二卖点（`sell_high`）。经 `math.floor(close * 100) / 100` 与两位小数舍入后，强制满足严格单调关系：
+   `0 < stop_loss < buy_low < buy_high <= close < sell_low < sell_high`
+   同时输出买点中枢 `ideal_buy`、现价盈亏比 `risk_reward_ratio`、买点盈亏比 `entry_risk_reward_ratio` 与位置标记 `position_label`（`接近买点区` / `区间中段` / `接近卖点压力`）。
+3. **四因子加权 5 级评级**：
+   - 维度与基准权重：`技术结构`（40%，直接取日线 `summary.score`）、`估值利率`（30%，基于有效 `PE TTM`、股息率 `>= 2%` 与 `yield_gap_pp`）、`点位赔率`（20%，基于现价盈亏比与买点贴近度）、`风险控制`（10%，对波动偏高、偏离 `MA20` 超 `2 ATR`、`RSI` 极值与过期风险逐项扣分）。若估值数据缺失或过期，其余有效维度权重自动归一化至 100%。
+   - 五级映射：`>= 78` `strong_buy`（强烈买入，5 星）、`>= 64` `buy`（建议买入，4 星）、`>= 46` `hold`（中性观望，3 星）、`>= 32` `reduce`（谨慎减持，2 星）、`< 32` `sell`（建议卖出，1 星），并依估值/利率新鲜度与独立风险数给出置信度（`高` / `中` / `低`）。
+4. **保守风控护栏（评级上限封顶）**：
+   - 跌破个人计划失效价（`close <= long_plan.stop`）：评级上限封顶为 `reduce`（谨慎减持）。
+   - 有效滚动市盈率为负（`pe_ttm <= 0`）：评级上限封顶为 `hold`（中性观望），暂停给出买入评级。
+   - 技术处于空头弱势结构（`state == "weak"` 且 `trend < 25`）：评级上限封顶为 `hold`（中性观望），暂停给出买入提示。
+5. **脱敏边界与参考属性**：`safe_snapshot()` 仅将脱敏的 `rating`（`code/label/score/confidence`）与 `levels`（`available/buy_low/buy_high/sell_low/sell_high/stop_loss/risk_reward_ratio`）传入 Codex 快照，不含股数、成本与账户标识。输出均带免责说明，仅供复核参考，不构成投资建议。
+
 ## 回放
 
 ```
