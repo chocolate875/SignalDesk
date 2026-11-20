@@ -1,5 +1,14 @@
 # V0.1.0 验收记录
 
+## 2026-11-20 16:9 桌面紧凑排版与单行对齐修复
+
+- **排版与文案收紧。** 针对 16:9 桌面视口（`1440×810`）中个股抬头、`采纳为计划价`、`全屏`、OHLC 均线行及右栏中枢价/锚点文本各自单独折行占用垂直空间的问题，调整 `.terminal-grid` 默认列宽至 `296px / 1fr / 372px`（为中栏释放 `+50px` 横向空间），收敛 `.stock-hero`（自选分组标签上限 2 个、持仓上限 1 个并以 `+N` 提示完整分组）、`.verdict-banner` 与 `.forecast-strip`、`.chart-toolbar`（`近3月..最新` / `MA/BOLL/净图` / `MACD/RSI/点位` + `全屏`）、`.ohlc-hud`（合并均线色块间距并收敛大成交量位数）、右栏 `.forecast-level-cell`（改为首行标题+价位、次行通栏副说明避免 3 行折断）、`.button.forecast-apply-btn` 紧凑高度与 `.rating-factors` 2×2 网格；同步修复 `signaldesk/forecast.py` 卖出锚点重复价位并精简防守依据。
+- **实盘浏览器与自动检查（`1440×810` 企业简洁风亮色）。** 重启服务并重新构建生产包（`vite build` 6.13s，产出 `index-BYCPZQAs.js` / `index-BGQYuUa-.css`）后核对：
+  - `.stock-hero` 总高 `60px`（报价与按钮同处单行）；`.verdict-badges` 两枚徽章同行并排；`.forecast-strip`（`买点`/`卖点`/`止损`/`盈亏比`/`采纳计划价`）单行无折行；`.chart-toolbar`（含 `全屏`）单行无折行；`.ohlc-hud` 单行且最右侧 `MA200 203.58` 距容器右边界留有 `10px` 余量无截断；`.chart-plot` 首屏高度达 `393px`。
+  - 右栏 `买卖评级与点位预测` 标题与评级徽章单行对齐、三张价位卡严格 2 行（`距买点 -0.2% · 中枢 $141.74` 不再折行）、`采纳为计划价` 按钮高度 `29.2px`、四因子 2×2 网格清晰无截断；控制台 **0 errors**，全部 7 个资源/API 请求均返回 HTTP **200**。
+  - CSS 字号正则检查全部 133 条 `font-size` 声明最小值为 `12.0px`；全量 pytest **53 项通过**，`ruff check signaldesk tests` 全通过，无私密/运行产物进入 Git 跟踪。
+- **未验证项。** 同本轮此前说明（真实 Codex CLI 手动推理、长桥 App 同屏历史逐笔对账与 24 小时断网压测尚未实测）。
+
 ## 2026-11-20 买卖点位预测与 5 级综合评级
 
 - **功能与架构变更。** 新增因果点位预测与 5 级评级引擎 `signaldesk/forecast.py`（`compute_forecast()`），并在 `signaldesk/service.py`（`Monitor.stock()` 与 `Monitor.snapshot()["summary"]` 聚合统计 `buy_rated` / `hold_rated` / `sell_rated`）与 `signaldesk/security.py`（`safe_snapshot()` 白名单透传脱敏 `rating`/`levels`）接入；前端新增 `frontend/src/StockInspector.tsx` 的「买卖评级与点位预测」卡片、中栏结论条 `forecast-strip` 点位速览、K 线工具栏 `预测点位` 虚线标注层、左侧列表 `买卖评级优先` 排序，以及一键「采纳为计划价」预填 `AllocationEditor`（由用户确认保存）。

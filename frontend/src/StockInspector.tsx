@@ -230,9 +230,6 @@ function ForecastCard({
       <div className="insp-card-head">
         <h3>买卖评级与点位预测</h3>
         <div className="forecast-head-badges">
-          {rating?.available && (
-            <span className="muted-tag">置信度 {rating.confidence}</span>
-          )}
           <span className={`verdict-chip tone-${rating?.tone ?? "muted"}`}>
             {rating?.label ?? "暂不评级"}
             {rating?.score != null ? ` ${fmt(rating.score, 1)}分` : ""}
@@ -285,11 +282,12 @@ function ForecastCard({
           </div>
 
           <div className="forecast-action-row">
-            <div className="forecast-pos-tags">
+            <div
+              className="forecast-pos-tags"
+              title={`买点盈亏比 ${fmt(levels!.entry_risk_reward_ratio, 2)}:1`}
+            >
               <span className="source-pill">{levels!.position_label}</span>
-              <span className="muted-tag">
-                买点盈亏比 {fmt(levels!.entry_risk_reward_ratio, 2)}:1
-              </span>
+              <span className="muted-tag">置信度 {rating!.confidence}</span>
             </div>
             {levels!.stop_loss != null && levels!.sell_low != null && (
               <button
@@ -298,6 +296,7 @@ function ForecastCard({
                 onClick={() =>
                   onApplyForecastLevels(levels!.stop_loss!, levels!.sell_low!)
                 }
+                title="将参考止损与参考卖点预填到个人计划价"
               >
                 采纳为计划价
               </button>
@@ -335,7 +334,7 @@ function ForecastCard({
               <div className="rating-factor-row" key={f.key}>
                 <div className="rf-head">
                   <span>{f.label}</span>
-                  <em>权重 {fmt(f.weight * 100, 0)}%</em>
+                  <em>{fmt(f.weight * 100, 0)}%</em>
                   <b>{f.score != null ? `${fmt(f.score, 1)}分` : "暂缺"}</b>
                 </div>
                 <small>{f.detail}</small>

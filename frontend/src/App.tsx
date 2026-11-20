@@ -712,11 +712,29 @@ export default function App() {
                           {fmt(stock.pnl_percent, 1)}%
                         </span>
                       )}
-                      {stock.watchlist_groups?.map((g) => (
-                        <span className="tag-chip group" key={g}>
-                          {g}
-                        </span>
-                      ))}
+                      {(() => {
+                        const groups = stock.watchlist_groups ?? [];
+                        const maxGroups = stock.broker_quantity > 0 ? 1 : 2;
+                        const shown = groups.slice(0, maxGroups);
+                        const hiddenCount = groups.length - shown.length;
+                        return (
+                          <>
+                            {shown.map((g) => (
+                              <span className="tag-chip group" key={g}>
+                                {g}
+                              </span>
+                            ))}
+                            {hiddenCount > 0 && (
+                              <span
+                                className="tag-chip group"
+                                title={groups.join(" · ")}
+                              >
+                                +{hiddenCount}
+                              </span>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -805,27 +823,27 @@ export default function App() {
                   {stock.forecast?.levels.available && (
                     <div className="forecast-strip">
                       <div className="forecast-strip-item">
-                        <span>参考买点</span>
+                        <span>买点</span>
                         <strong className="up">
                           ${fmt(stock.forecast.levels.buy_low, 2)} – $
                           {fmt(stock.forecast.levels.buy_high, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
-                        <span>参考卖点</span>
+                        <span>卖点</span>
                         <strong className="accent-val">
                           ${fmt(stock.forecast.levels.sell_low, 2)} – $
                           {fmt(stock.forecast.levels.sell_high, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
-                        <span>防守止损</span>
+                        <span>止损</span>
                         <strong className="down">
                           ${fmt(stock.forecast.levels.stop_loss, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
-                        <span>现价盈亏比</span>
+                        <span>盈亏比</span>
                         <strong>
                           {fmt(stock.forecast.levels.risk_reward_ratio, 2)}:1
                         </strong>
@@ -835,6 +853,7 @@ export default function App() {
                           <button
                             type="button"
                             className="text-btn forecast-strip-apply"
+                            title="将参考止损与参考卖点预填到个人计划价"
                             onClick={() =>
                               setEditor({
                                 stock,
@@ -843,7 +862,7 @@ export default function App() {
                               })
                             }
                           >
-                            采纳为计划价
+                            采纳计划价
                           </button>
                         )}
                     </div>

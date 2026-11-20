@@ -239,21 +239,19 @@ def compute_forecast(
     else:
         position_label = "区间中段"
 
-    buy_anchors = [a for a in (bh_anchor, bl_anchor) if a]
-    if not buy_anchors:
-        buy_anchors = [f"ATR14 回调参考区间（ATR ${atr:.2f}）"]
-    elif len(buy_anchors) == 1:
-        buy_anchors.append(f"ATR14 波动参考（ATR ${atr:.2f}）")
-    buy_anchors = buy_anchors[:3]
+    buy_anchors = [
+        bh_anchor or f"ATR14 回调 ${buy_high:.2f}",
+        bl_anchor or f"ATR14 支撑 ${buy_low:.2f}",
+    ]
+    buy_anchors = list(dict.fromkeys(buy_anchors))[:3]
 
-    sell_anchors = [a for a in (sl_anchor, sh_anchor) if a]
-    if not sell_anchors:
-        sell_anchors = [f"ATR14 上行阻力测算（+{upside_pct:.1f}% / +{target_upside_pct:.1f}%）"]
-    elif len(sell_anchors) == 1:
-        sell_anchors.append(f"ATR14 波段扩展目标（${sell_high:.2f}）")
-    sell_anchors = sell_anchors[:3]
+    sell_anchors = [
+        sl_anchor or f"ATR14 一卖 ${sell_low:.2f}",
+        sh_anchor or f"ATR14 二卖 ${sell_high:.2f}",
+    ]
+    sell_anchors = list(dict.fromkeys(sell_anchors))[:3]
 
-    stop_anchor = f"买点区间与20日低点（${low_20:.2f}）下方 ATR14 防守位（${stop_loss:.2f}）"
+    stop_anchor = f"20日低点(${low_20:.2f})下方 ATR14 防守"
 
     levels = {
         "available": True,

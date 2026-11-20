@@ -29,8 +29,14 @@ type OverlayMode = "MA" | "BOLL" | "NONE";
 
 function formatVolume(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return "—";
-  if (v >= 1_000_000_000) return (v / 1_000_000_000).toFixed(2) + "B";
-  if (v >= 1_000_000) return (v / 1_000_000).toFixed(2) + "M";
+  if (v >= 1_000_000_000) {
+    const val = v / 1_000_000_000;
+    return val.toFixed(val >= 100 ? 1 : 2) + "B";
+  }
+  if (v >= 1_000_000) {
+    const val = v / 1_000_000;
+    return val.toFixed(val >= 100 ? 1 : 2) + "M";
+  }
   if (v >= 1_000) return (v / 1_000).toFixed(1) + "K";
   return v.toFixed(0);
 }
@@ -89,16 +95,16 @@ function OhlcHud({
     <div className="ohlc-hud" aria-live="off">
       <span className="hud-date">{dates[idx] ?? "—"}</span>
       <span>
-        开 <b>{fmt(row.open as number, 2)}</b>
+        开<b>{fmt(row.open as number, 2)}</b>
       </span>
       <span>
-        高 <b>{fmt(row.high as number, 2)}</b>
+        高<b>{fmt(row.high as number, 2)}</b>
       </span>
       <span>
-        低 <b>{fmt(row.low as number, 2)}</b>
+        低<b>{fmt(row.low as number, 2)}</b>
       </span>
       <span>
-        收 <b className={dirClass}>{fmt(close, 2)}</b>
+        收<b className={dirClass}>{fmt(close, 2)}</b>
       </span>
       <span className={dirClass}>
         {chgPct != null
@@ -106,26 +112,38 @@ function OhlcHud({
           : "—"}
       </span>
       <span>
-        量 <b>{formatVolume(row.volume as number)}</b>
+        量<b>{formatVolume(row.volume as number)}</b>
       </span>
       {overlay === "MA" && (
         <span className="hud-ma">
-          <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-          MA20 {fmt(row.ma20 as number, 2)}
-          <i style={{ background: theme === "dark" ? "#9e9cf2" : "#1e40af" }} />
-          MA50 {fmt(row.ma50 as number, 2)}
-          <i style={{ background: theme === "dark" ? "#5cb8e6" : "#64748b" }} />
-          MA200 {fmt(row.ma200 as number, 2)}
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
+            MA20 {fmt(row.ma20 as number, 2)}
+          </span>
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#9e9cf2" : "#1e40af" }} />
+            MA50 {fmt(row.ma50 as number, 2)}
+          </span>
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#5cb8e6" : "#64748b" }} />
+            MA200 {fmt(row.ma200 as number, 2)}
+          </span>
         </span>
       )}
       {overlay === "BOLL" && (
         <span className="hud-ma">
-          <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-          上 {fmt(row.bb_upper as number, 2)}
-          <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-          中 {fmt(row.bb_middle as number, 2)}
-          <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-          下 {fmt(row.bb_lower as number, 2)}
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
+            上 {fmt(row.bb_upper as number, 2)}
+          </span>
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
+            中 {fmt(row.bb_middle as number, 2)}
+          </span>
+          <span className="hud-ma-item">
+            <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
+            下 {fmt(row.bb_lower as number, 2)}
+          </span>
         </span>
       )}
     </div>
@@ -603,19 +621,20 @@ export default function Chart({
         <div className="toolbar-group" aria-label="时间范围">
           {(
             [
-              [63, "近3月"],
-              [126, "近6月"],
-              [252, "近1年"],
-              [0, "全部"],
-              [60, "回到最新"],
+              [63, "近3月", "查看近3个月日线"],
+              [126, "近6月", "查看近6个月日线"],
+              [252, "近1年", "查看近1年日线"],
+              [0, "全部", "查看全部历史日线"],
+              [60, "最新", "回到最新位置"],
             ] as const
-          ).map(([n, label]) => (
+          ).map(([n, label, tip]) => (
             <button
               key={label}
               type="button"
               className={activeRange === n ? "active" : ""}
               disabled={!detail?.rows.length}
               onClick={() => zoomTo(n)}
+              title={tip}
             >
               {label}
             </button>
@@ -625,16 +644,17 @@ export default function Chart({
         <div className="toolbar-group" aria-label="主图叠加指标">
           {(
             [
-              ["MA", "MA均线"],
-              ["BOLL", "布林带"],
-              ["NONE", "净图"],
+              ["MA", "MA", "叠加 MA20 / MA50 / MA200 均线"],
+              ["BOLL", "BOLL", "叠加布林带上下轨"],
+              ["NONE", "净图", "仅显示裸 K 线"],
             ] as const
-          ).map(([id, label]) => (
+          ).map(([id, label, tip]) => (
             <button
               key={id}
               type="button"
               className={overlay === id ? "active" : ""}
               onClick={() => setOverlay(id)}
+              title={tip}
             >
               {label}
             </button>
@@ -646,6 +666,7 @@ export default function Chart({
             type="button"
             className={showMacd ? "active" : ""}
             onClick={() => setShowMacd(!showMacd)}
+            title="显示或隐藏 MACD 副图"
           >
             MACD
           </button>
@@ -653,6 +674,7 @@ export default function Chart({
             type="button"
             className={showRsi ? "active" : ""}
             onClick={() => setShowRsi(!showRsi)}
+            title="显示或隐藏 RSI 副图"
           >
             RSI
           </button>
@@ -662,8 +684,9 @@ export default function Chart({
                 type="button"
                 className={showCost ? "active" : ""}
                 onClick={() => setShowCost(!showCost)}
+                title="显示/隐藏成本线"
               >
-                成本线
+                成本
               </button>
             )}
           {detail?.stock.forecast?.levels.available && (
@@ -671,8 +694,9 @@ export default function Chart({
               type="button"
               className={showForecast ? "active" : ""}
               onClick={() => setShowForecast(!showForecast)}
+              title="显示/隐藏预测买卖点参考线"
             >
-              预测点位
+              点位
             </button>
           )}
         </div>
