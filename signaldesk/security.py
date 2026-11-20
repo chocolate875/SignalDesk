@@ -125,17 +125,59 @@ def safe_child_environment() -> dict[str, str]:
 def safe_snapshot(stock: dict, mode: str) -> dict:
     """Explicit allowlist instead of trying to redact an unbounded account object."""
     summaries = stock.get("summaries", {})
+    plan = stock.get("long_plan", {})
+    close = plan.get("close")
+    plan_context = {k: plan.get(k) for k in ("status", "as_of", "basis", "watch_only")}
+    for level in ("stop", "target"):
+        plan_context[f"{level}_distance_percent"] = (
+            (close / plan[level] - 1) * 100 if close and plan.get(level) else None
+        )
+    weight = stock.get("weight_percent")
+    if weight is not None and stock.get("broker_quantity"):
+        long_qty = stock.get("long_quantity")
+        weight = weight * long_qty / stock["broker_quantity"] if long_qty is not None else None
+    research = stock.get("research", {})
     return {
         "source": mode,
         "symbol": stock["symbol"],
         "name": stock.get("name", ""),
-        "investment_horizon": stock.get("sleeves", ["unassigned"]),
-        "position_weight_percent": stock.get("weight_percent"),
-        "unrealized_return_percent": stock.get("pnl_percent"),
-        "distance_to_stop_percent": stock.get("distance_to_stop_percent"),
+        "investment_horizon": "long",
+        "long_position_assigned": "long" in stock.get("sleeves", []) and not stock.get("watch_only"),
+        "position_weight_percent": weight if stock.get("reconciled", True) else None,
+        "long_plan": plan_context,
+        "research": {
+            "valuation": {
+                k: research.get("valuation", {}).get(k)
+                for k in (
+                    "source",
+                    "pe_ttm",
+                    "pb",
+                    "dividend_yield_pct",
+                    "fetched_at",
+                    "fresh",
+                    "refresh_failed",
+                )
+            },
+            "curve": {
+                k: research.get("curve", {}).get(k)
+                for k in (
+                    "source",
+                    "as_of",
+                    "two_year",
+                    "ten_year",
+                    "spread_bp",
+                    "ten_change_bp",
+                    "prior_date",
+                    "fresh",
+                    "refresh_failed",
+                )
+            },
+            "earnings_yield_pct": research.get("earnings_yield_pct"),
+            "yield_gap_pp": research.get("yield_gap_pp"),
+        },
         "market": {
             key: stock.get("quote", {}).get(key)
-            for key in ["last", "timestamp", "trade_status", "spread_ratio", "stale"]
+            for key in ["last", "timestamp", "trade_status", "session", "stale"]
         },
-        "technical": summaries,
+        "technical": {"day:regular": summaries["day:regular"]} if "day:regular" in summaries else {},
     }

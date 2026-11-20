@@ -9,6 +9,7 @@ import pandas as pd
 
 from .calendar import NY, bar_end, calendar
 from .models import Allocation
+from .research import curve_summary
 
 DEMO_NAMES = [
     ("NVDA.US", "英伟达", 142.8, 12, 8, 0.0012),
@@ -22,19 +23,85 @@ DEMO_NAMES = [
 ]
 
 
+DEMO_PLANS = {
+    "NVDA.US": {
+        "favorite": True,
+        "groups": ["AI 与算力", "核心科技"],
+        "stop": 128.0,
+        "target": 160.0,
+    },
+    "AAPL.US": {
+        "favorite": True,
+        "groups": ["核心科技"],
+        "stop": 215.0,
+        "target": 250.0,
+    },
+    "MSFT.US": {
+        "favorite": False,
+        "groups": ["AI 与算力", "核心科技"],
+        "stop": 395.0,
+        "target": 465.0,
+    },
+    "GOOGL.US": {"favorite": False, "groups": ["核心科技"]},
+    "AMZN.US": {"favorite": False, "groups": []},
+    "META.US": {"favorite": False, "groups": ["核心科技", "成长观察"]},
+    "TSLA.US": {
+        "favorite": False,
+        "groups": ["成长观察"],
+        "stop": 240.0,
+        "target": 300.0,
+    },
+    "AMD.US": {"favorite": False, "groups": ["AI 与算力", "成长观察"]},
+}
+
+
 def allocations() -> list[Allocation]:
-    return [
-        Allocation(
-            symbol=s,
-            name=name,
-            long_quantity=long_qty,
-            short_quantity=q,
-            broker_quantity=long_qty + q,
-            available_quantity=long_qty + q,
-            cost_price=round(price * 0.93, 2),
+    items = []
+    for index, (symbol, name, price, long_qty, q, _) in enumerate(DEMO_NAMES):
+        held = index < 5
+        qty = float(long_qty + q) if held else 0.0
+        plan = DEMO_PLANS.get(symbol, {})
+        groups = list(plan.get("groups", []))
+        items.append(
+            Allocation(
+                symbol=symbol,
+                name=name,
+                long_quantity=qty,
+                broker_quantity=qty,
+                available_quantity=qty,
+                cost_price=round(price * 0.93, 2) if held else None,
+                watch_only=not held,
+                watch_sleeve="long",
+                long_stop_price=plan.get("stop"),
+                long_target_price=plan.get("target"),
+                favorite=bool(plan.get("favorite", False)),
+                in_watchlist=bool(groups),
+                watchlist_groups=groups,
+                manual_watch=not held and not groups,
+            )
         )
-        for s, name, price, long_qty, q, _ in DEMO_NAMES
+    return items
+
+
+def watchlist_groups() -> list[dict]:
+    grouped: dict[str, list[str]] = {}
+    for item in allocations():
+        for group_name in item.watchlist_groups:
+            grouped.setdefault(group_name, []).append(item.symbol)
+    return [
+        {"id": index + 1, "name": name, "symbols": symbols}
+        for index, (name, symbols) in enumerate(grouped.items())
     ]
+
+
+def yield_curve(last_close: datetime) -> dict:
+    end = pd.Timestamp(last_close.astimezone(NY).date())
+    days = calendar().sessions_in_range(end - pd.Timedelta(days=45), end)[-22:]
+    observations = {
+        day.date().isoformat(): (3.7, 4.1 - (len(days) - 1 - i) * 0.01)
+        for i, day in enumerate(days)
+    }
+    return curve_summary(observations)
 
 
 def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
@@ -47,10 +114,10 @@ def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
     rng = np.random.default_rng(2000 + n + (0 if timeframe == "day" else 100))
     cal = calendar()
     end_day = pd.Timestamp(now.astimezone(NY).date())
-    days = cal.sessions_in_range(end_day - pd.Timedelta(days=620 if timeframe == "day" else 55), end_day)
+    days = cal.sessions_in_range(end_day - pd.Timedelta(days=1500 if timeframe == "day" else 55), end_day)
     clocks = []
     if timeframe == "day":
-        for day in days[-320:]:
+        for day in days[-1000:]:
             ts = cal.session_open(day).to_pydatetime()
             if bar_end(ts, "day") <= now:
                 clocks.append((ts, "regular"))

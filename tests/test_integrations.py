@@ -128,6 +128,7 @@ def test_vault_encrypted_and_private_snapshot(tmp_path, monkeypatch):
         "symbol": "TEST.US",
         "name": "demo",
         "broker_quantity": 1234,
+        "long_quantity": 617,
         "cost_price": 88,
         "account_id": "TEST_ACCOUNT_ID",
         "net_assets": 999999,
@@ -138,7 +139,7 @@ def test_vault_encrypted_and_private_snapshot(tmp_path, monkeypatch):
         "quote": {"last": 100, "timestamp": "now"},
     }
     snapshot = safe_snapshot(stock, "demo")
-    assert snapshot["position_weight_percent"] == 4.2
+    assert snapshot["position_weight_percent"] == 2.1
     encoded = json.dumps(snapshot)
     for field in ["broker_quantity", "cost_price", "account_id", "net_assets", "TEST_ACCOUNT_ID"]:
         assert field not in encoded

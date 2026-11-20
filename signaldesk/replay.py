@@ -86,7 +86,7 @@ def main():
     parser = argparse.ArgumentParser(description="用相同信号引擎回放本机OHLCV数据")
     parser.add_argument("--input", type=Path, help="本机CSV或JSON文件，缺省使用合成数据")
     parser.add_argument("--symbol", default="NVDA.US")
-    parser.add_argument("--timeframe", choices=["day", "15m"], default="15m")
+    parser.add_argument("--timeframe", choices=["day", "15m"], default="day")
     parser.add_argument("--session", choices=["regular", "pre", "post", "overnight"], default="regular")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

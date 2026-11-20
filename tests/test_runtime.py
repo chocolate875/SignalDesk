@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from signaldesk.codex_bridge import CodexBridge
-from signaldesk.models import CodexSettings, QQSettings, utcnow
+from signaldesk.models import Allocation, CodexSettings, QQSettings, utcnow
 from signaldesk.notifications import DeliveryResult, NotificationDispatcher
 from signaldesk.storage import Store
 
@@ -176,12 +176,52 @@ async def test_codex_timeout_kills_child_without_blocking_monitor(tmp_path, monk
 @pytest.mark.asyncio
 async def test_automatic_codex_budget_persists_and_demo_does_not_auto_call(tmp_path):
     store = Store(tmp_path)
-    bridge = CodexBridge(store, CodexSettings(daily_limit=1))
+    bridge = CodexBridge(store, CodexSettings(automatic=True, daily_limit=1))
     bridge.executable = "synthetic-codex"
     stock = {"symbol": "TEST.US", "summaries": {}, "quote": {}}
     assert await bridge.request(stock, "demo", automatic=True) is None
     assert await bridge.request(stock, "live", automatic=True)
-    second = CodexBridge(store, CodexSettings(daily_limit=1))
+    second = CodexBridge(store, CodexSettings(automatic=True, daily_limit=1))
     second.executable = "synthetic-codex"
     assert await second.request({"symbol": "OTHER.US", "summaries": {}}, "live", automatic=True) is None
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_defaults_to_manual_only_and_events_do_not_auto_trigger(tmp_path):
+    from signaldesk.service import Monitor
+
+    assert CodexSettings().automatic is False
+    store = Store(tmp_path)
+    monitor = Monitor(store)
+    monitor.settings.mode = "live"
+    monitor.settings.codex.automatic = True
+    monitor.codex.executable = "synthetic-codex"
+    store.set(
+        "portfolio:live",
+        [Allocation(symbol="NVDA", long_quantity=5, broker_quantity=5).model_dump()],
+    )
+    event = {
+        "id": "evt-manual-check",
+        "event_id": "evt-manual-check",
+        "source": "live",
+        "symbol": "NVDA.US",
+        "sleeve": "long",
+        "timeframe": "day",
+        "session": "regular",
+        "severity": "critical",
+        "title": "触及计划失效价",
+        "message": "复核计划",
+        "data_as_of": utcnow().isoformat(),
+        "evidence": [],
+        "historical": False,
+    }
+    await monitor.on_events([event])
+    assert len(store.deliveries()) == 1
+    assert monitor.codex.queue.qsize() == 0
+    assert store.analyses() == []
+    job_id = await monitor.codex.request(
+        monitor.stock(monitor.portfolio("live")[0]), "live", automatic=False
+    )
+    assert job_id and monitor.codex.queue.qsize() == 1
+    await monitor.stop()

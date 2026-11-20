@@ -5,14 +5,14 @@ import pandas as pd
 import pytest
 
 from signaldesk import operators as op
-from signaldesk.calendar import NY, session_for
+from signaldesk.calendar import NY, calendar, session_for
 from signaldesk.indicators import enrich, summarize
 from signaldesk.models import RuleSettings
 
 
 @pytest.fixture
 def daily_bars():
-    dates = pd.bdate_range("2025-01-02", periods=340)
+    dates = calendar().sessions_in_range("2025-01-02", "2026-12-31")[:340]
     rng = np.random.default_rng(42)
     closes = 100 * np.exp(np.cumsum(rng.normal(0.001, 0.01, len(dates))))
     return [

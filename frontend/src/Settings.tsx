@@ -25,6 +25,7 @@ export default function SettingsPanel({
   const [tab, setTab] = useState("general");
   const [busy, setBusy] = useState(false);
   const [qqSecret, setQQSecret] = useState("");
+  const [brokerPlatform, setBrokerPlatform] = useState<string | null>(null);
   const [broker, setBroker] = useState({
     app_key: "",
     app_secret: "",
@@ -55,16 +56,31 @@ export default function SettingsPanel({
         });
         setQQSecret("");
       }
-      if (Object.values(broker).some(Boolean)) {
+      if (
+        Object.values(broker).some(Boolean) ||
+        (brokerPlatform && brokerPlatform !== data.broker_platform)
+      ) {
         await api("/credentials", {
           method: "POST",
-          body: JSON.stringify({ service: "longport", ...broker }),
+          body: JSON.stringify({
+            service: "longport",
+            platform: brokerPlatform ?? data.broker_platform,
+            ...broker,
+          }),
         });
         setBroker({ app_key: "", app_secret: "", access_token: "" });
+        setBrokerPlatform(null);
       }
+      const payloadSettings = {
+        ...data.settings,
+        codex: {
+          ...data.settings.codex,
+          automatic: false,
+        },
+      };
       await api("/settings", {
         method: "PUT",
-        body: JSON.stringify(data.settings),
+        body: JSON.stringify(payloadSettings),
       });
       notify("设置已保存。凭据只保存在本机。");
       const refreshed = await api("/settings");
@@ -138,7 +154,7 @@ export default function SettingsPanel({
               <>
                 {tab === "general" && (
                   <>
-                    <h3>让监控按你的节奏运行</h3>
+                    <h3>运行与通知</h3>
                     <p className="muted">
                       关闭看板后后台继续运行；从托盘可以完全退出。
                     </p>
@@ -227,6 +243,20 @@ export default function SettingsPanel({
                         ? "已保存加密凭据；留空保留现有值"
                         : "尚未配置，请在本机填写"}
                     </div>
+                    <label className="field">
+                      凭据签发网站
+                      <select
+                        value={brokerPlatform ?? data.broker_platform}
+                        onChange={(e) => setBrokerPlatform(e.target.value)}
+                      >
+                        <option value="longbridge">
+                          长桥 · open.longbridge.com
+                        </option>
+                        <option value="longport">
+                          LongPort · open.longportapp.com
+                        </option>
+                      </select>
+                    </label>
                     {(["app_key", "app_secret", "access_token"] as const).map(
                       (key) => (
                         <label className="field" key={key}>
@@ -243,8 +273,24 @@ export default function SettingsPanel({
                         </label>
                       ),
                     )}
+                    <div className="setting-row">
+                      <div>
+                        <b>自动同步账号自选股单</b>
+                        <small>
+                          只读同步长桥自选分组中的美股标的，绝不修改券商自选。
+                        </small>
+                      </div>
+                      <input
+                        type="checkbox"
+                        aria-label="自动同步账号自选股单"
+                        checked={data.settings.sync_watchlist ?? true}
+                        onChange={(e) =>
+                          patch(null, "sync_watchlist", e.target.checked)
+                        }
+                      />
+                    </div>
                     <div className="notice">
-                      保存凭据后，在运行方式中选择“实盘”。程序将同步持仓，并加载交易日历、历史K线和推送行情。
+                      保存凭据后，在运行方式中选择“实盘”。程序将同步持仓与自选，并加载交易日历、历史K线和推送行情。
                     </div>
                   </>
                 )}
@@ -339,15 +385,19 @@ export default function SettingsPanel({
                 )}
                 {tab === "codex" && (
                   <>
-                    <h3>把判断交给 Codex</h3>
+                    <h3>Codex 长期计划总结</h3>
                     <p className="muted">
                       使用本机 Codex CLI
                       的登录与模型设置。只有脱敏快照会进入分析输入，分析在
                       OpenAI 服务完成。
                     </p>
+                    <div className="notice">
+                      Codex 总结已设为手动触发模式，仅在您点击「生成 Codex
+                      总结」时调用，不会在后台自动触发。
+                    </div>
                     <div className="setting-row">
                       <div>
-                        <b>启用 Codex 分析</b>
+                        <b>启用 Codex 总结</b>
                         <small>使用精确读取范围与隔离运行配置。</small>
                       </div>
                       <input
@@ -358,40 +408,24 @@ export default function SettingsPanel({
                         }
                       />
                     </div>
-                    <div className="setting-row">
-                      <div>
-                        <b>关键事件自动分析</b>
-                        <small>普通行情计算和风险提醒不等待模型。</small>
-                      </div>
+                    <label className="field">
+                      单次超时 / 秒
                       <input
-                        type="checkbox"
-                        checked={data.settings.codex.automatic}
+                        type="number"
+                        min="15"
+                        max="900"
+                        value={data.settings.codex.timeout_seconds}
                         onChange={(e) =>
-                          patch("codex", "automatic", e.target.checked)
+                          patch(
+                            "codex",
+                            "timeout_seconds",
+                            Number(e.target.value),
+                          )
                         }
                       />
-                    </div>
-                    <div className="field-grid">
-                      {[
-                        ["daily_limit", "每日自动调用上限"],
-                        ["cooldown_minutes", "同股冷却 / 分钟"],
-                        ["timeout_seconds", "单次超时 / 秒"],
-                      ].map(([key, label]) => (
-                        <label className="field" key={key}>
-                          {label}
-                          <input
-                            type="number"
-                            min="0"
-                            value={data.settings.codex[key]}
-                            onChange={(e) =>
-                              patch("codex", key, Number(e.target.value))
-                            }
-                          />
-                        </label>
-                      ))}
-                    </div>
+                    </label>
                     <div className="notice">
-                      可发送股票、长短线分类、仓位和盈亏百分比；不会发送账户标识、持仓数量、金额、成本或流水。个股面板可预览发送内容。
+                      发送个股估值、美债利率、日线指标、长期仓位占比及计划价距离。个股面板可先查看脱敏预览。
                     </div>
                   </>
                 )}
@@ -409,8 +443,6 @@ export default function SettingsPanel({
                         ["strong_threshold", "偏强阈值"],
                         ["weak_threshold", "偏弱阈值"],
                         ["cooldown_minutes", "普通提醒冷却 / 分钟"],
-                        ["max_extended_spread", "盘外最大价差比例"],
-                        ["min_extended_turnover", "盘外最小15分钟成交额 / USD"],
                       ].map(([key, label]) => (
                         <label className="field" key={key}>
                           {label}

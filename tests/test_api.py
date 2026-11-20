@@ -43,3 +43,62 @@ def test_weights_invalid_and_oversubscribed_allocation_rejected(client):
     )
     assert result.status_code == 400
     assert client.get("/api/settings").json()["credentials"] == {"longport": False, "qq": False}
+
+
+def test_default_daily_view_quote_and_codex_share_the_same_close(client):
+    dashboard = client.get("/api/bootstrap").json()
+    detail = client.get("/api/stock/NVDA.US").json()
+    current, previous = detail["rows"][-1], detail["rows"][-2]
+    stock = detail["stock"]
+    assert len(detail["rows"]) > 750 and detail["timeframe"] == "day"
+    assert stock["quote"]["last"] == stock["long_plan"]["close"] == current["close"]
+    assert stock["quote"]["prev_close"] == previous["close"]
+    assert stock["quote"]["timestamp"] == detail["summary"]["as_of"]
+    preview = client.get("/api/analysis/preview/NVDA.US").json()
+    assert preview["investment_horizon"] == "long"
+    assert preview["technical"]["day:regular"]["as_of"] == detail["summary"]["as_of"]
+    assert preview["research"]["curve"]["as_of"] == dashboard["curve"]["as_of"]
+    assert all(event["sleeve"] == "long" for event in dashboard["events"])
+
+
+def test_favorites_toggle_and_watchlist_sync_endpoints(client):
+    dashboard = client.get("/api/bootstrap").json()
+    assert len(dashboard["watchlist_groups"]) >= 1
+    assert all("verdict" in stock and "action" in stock["verdict"] for stock in dashboard["stocks"])
+
+    fav = client.put("/api/favorites/MSFT.US", json={"favorite": True})
+    assert fav.status_code == 200 and fav.json() == {"symbol": "MSFT.US", "favorite": True}
+    msft = next(s for s in client.get("/api/dashboard").json()["stocks"] if s["symbol"] == "MSFT.US")
+    assert msft["favorite"] is True
+
+    # Updating plan without specifying favorite preserves favorite=True.
+    saved = client.put(
+        "/api/allocations",
+        json={
+            "symbol": "MSFT.US",
+            "name": "微软",
+            "long_quantity": 12,
+            "short_quantity": 0,
+            "long_stop_price": 390,
+            "long_target_price": 470,
+        },
+    )
+    assert saved.status_code == 200 and saved.json()["favorite"] is True
+
+    unfav = client.put("/api/favorites/MSFT.US", json={"favorite": False})
+    assert unfav.status_code == 200 and unfav.json()["favorite"] is False
+
+    sync_res = client.post("/api/watchlist/sync")
+    assert sync_res.status_code == 200 and sync_res.json()["ok"] is True
+    assert sync_res.json()["groups_count"] >= 1
+
+    # Broker watchlist stock cannot be deleted locally, whereas manual local watch stock can.
+    assert client.delete("/api/watchlist/META.US").status_code == 400
+    assert (
+        client.put(
+            "/api/allocations",
+            json={"symbol": "ORCL.US", "name": "甲骨文", "watch_only": True},
+        ).status_code
+        == 200
+    )
+    assert client.delete("/api/watchlist/ORCL.US").status_code == 200

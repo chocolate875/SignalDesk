@@ -103,7 +103,9 @@ class CodexBridge:
         self.executable = find_codex()
         self.defaults = model_defaults()
         self.status = "ready" if self.executable else "unavailable"
-        self.detail = "使用现有Codex登录；等待分析请求" if self.executable else "未发现Codex CLI"
+        self.detail = (
+            "手动触发模式 · 点击「生成 Codex 总结」后分析" if self.executable else "未发现Codex CLI"
+        )
         self.process = None
 
     def public_status(self):
@@ -113,7 +115,8 @@ class CodexBridge:
             "detail": self.detail,
             "configured": bool(self.executable),
             "model": self.defaults.get("model", "Codex默认模型"),
-            "automatic": self.settings.automatic,
+            "automatic": False,
+            "manual_only": True,
             "enabled": self.settings.enabled,
             "daily_used": self.store.get(f"codex-budget:{today}", 0),
             "daily_limit": self.settings.daily_limit,
@@ -142,6 +145,7 @@ class CodexBridge:
             "created": now,
             "status": "queued",
             "source": source,
+            "scope": "long_value",
             "event_id": event_id,
             "automatic": automatic,
             "result": None,
@@ -191,12 +195,13 @@ class CodexBridge:
         snapshot = json.dumps(job["snapshot"], ensure_ascii=False, allow_nan=False)
         (directory / "snapshot.json").write_text(snapshot, encoding="utf-8")
         prompt = (
-            "你是SignalDesk的技术信号分析师。只基于下面已脱敏、带时点的JSON分析。"
-            "不要调用工具、读取其他文件、联网、修改规则或执行交易。所有决策建议由你形成，"
-            "评分只描述技术结构而非上涨概率。用户偏保守，仅美股多头，长期仓与2至20交易日短线仓分别判断。"
-            "source=demo表示完全合成的数据，不得当成真实市场。缺失、过期或风险信息应优先指出。"
-            "不得编造新闻、财报、价格、胜率。解释支持与反对证据、等待条件；用中文回答，符合给定JSON Schema。"
-            "data_as_of取technical中最近有效数据时间。\n" + snapshot
+            "复核美股长期多头计划，只使用下方脱敏JSON。不要调用工具、读取其他文件、联网或执行交易。"
+            "用中文先给出继续持有、观察、等待、复核止损或分批止盈等一项意见，再给支持和反对证据。"
+            "区分用户的计划价、已确认日线、券商估值的取数时间、美债观察日期与模型意见。"
+            "以市盈率、市净率、盈利收益率和利率环境讨论估值。盈利收益率与国债收益率之差不能充当预期回报或风险溢价。"
+            "给出改变意见的具体条件和复核时点。技术分不能单独触发买卖。缺少盈利增长、现金流等依据时说明局限。"
+            "fresh=false、输入缺失、持仓未核对时说明暂不能判断。未分配长期持仓或仅观察时不给持仓退出意见。"
+            "source=demo须标明合成。不得编造财报、宏观数据或价格；data_as_of使用日线收盘时点，缺少则填未知。\n" + snapshot
         )
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = await asyncio.create_subprocess_exec(
@@ -235,6 +240,9 @@ class CodexBridge:
             )
         except (ValueError, OSError):
             raise ValueError("Codex未返回有效的结构化分析结果") from None
+        daily = job["snapshot"].get("technical", {}).get("day:regular")
+        if daily:
+            result.data_as_of = daily.get("as_of") or "未知"
         usage = []
         for line in stdout.decode("utf-8", errors="replace").splitlines():
             try:

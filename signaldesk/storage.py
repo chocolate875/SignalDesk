@@ -35,6 +35,9 @@ class Store:
             "UPDATE outbox SET status='unknown',result='进程中断，投递结果未知，请核对后重试' WHERE status='sending'"
         )
         self.db.execute("UPDATE analyses SET status='failed' WHERE status IN ('queued','running')")
+        self.db.execute("""UPDATE outbox SET status='cancelled',result='短线提醒已停用'
+                           WHERE status='pending' AND event_id IN
+                           (SELECT id FROM events WHERE json_extract(payload,'$.sleeve')='short')""")
         self.db.commit()
 
     def get(self, key: str, default=None):
@@ -51,13 +54,20 @@ class Store:
             )
 
     def put_bars(self, source: str, symbol: str, timeframe: str, bars: list[dict]):
+        # Legacy live rows used host-local SDK wall times as UTC. Refill from the broker.
+        source = "live-utc-v2" if source == "live" else source
         with self.lock, self.db:
-            self.db.executemany(
-                "INSERT INTO bars VALUES(?,?,?,?,?) ON CONFLICT(source,symbol,timeframe,timestamp) DO UPDATE SET payload=excluded.payload",
+            cursor = self.db.executemany(
+                """INSERT INTO bars VALUES(?,?,?,?,?) ON CONFLICT(source,symbol,timeframe,timestamp)
+                   DO UPDATE SET payload=excluded.payload
+                   WHERE excluded.payload != bars.payload AND
+                   (json_extract(excluded.payload,'$.confirmed') OR NOT json_extract(bars.payload,'$.confirmed'))""",
                 [(source, symbol, timeframe, b["timestamp"], json.dumps(b, allow_nan=False)) for b in bars],
             )
+            return cursor.rowcount
 
     def bars(self, source: str, symbol: str, timeframe: str, count: int = 6000) -> list[dict]:
+        source = "live-utc-v2" if source == "live" else source
         with self.lock:
             rows = self.db.execute(
                 "SELECT payload FROM bars WHERE source=? AND symbol=? AND timeframe=? ORDER BY timestamp DESC LIMIT ?",
@@ -73,13 +83,14 @@ class Store:
             )
         return cursor.rowcount == 1
 
-    def events(self, source: str | None = None, count: int = 100) -> list[dict]:
+    def events(self, source: str | None = None, count: int = 100, sleeve: str | None = None) -> list[dict]:
         with self.lock:
             rows = self.db.execute(
-                "SELECT payload FROM events ORDER BY created DESC LIMIT ?", (count * 3,)
+                """SELECT payload FROM events WHERE (? IS NULL OR json_extract(payload,'$.source')=?)
+                   AND (? IS NULL OR json_extract(payload,'$.sleeve')=?) ORDER BY created DESC LIMIT ?""",
+                (source, source, sleeve, sleeve, count),
             ).fetchall()
-        result = [json.loads(row[0]) for row in rows]
-        return [e for e in result if source is None or e.get("source") == source][:count]
+        return [json.loads(row[0]) for row in rows]
 
     def enqueue(self, event_id: str, channel: str, target: str, payload: dict, due: float = 0):
         with self.lock, self.db:
@@ -128,10 +139,11 @@ class Store:
                 ),
             )
 
-    def analyses(self, count: int = 50) -> list[dict]:
+    def analyses(self, count: int = 50, source: str | None = None) -> list[dict]:
         with self.lock:
             rows = self.db.execute(
-                "SELECT status,payload FROM analyses ORDER BY created DESC LIMIT ?", (count,)
+                """SELECT status,payload FROM analyses WHERE (? IS NULL OR json_extract(payload,'$.source')=?)
+                   ORDER BY created DESC LIMIT ?""", (source, source, count)
             ).fetchall()
         return [{**json.loads(r["payload"]), "status": r["status"]} for r in rows]
 

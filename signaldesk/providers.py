@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from .calendar import bar_end, session_for
+from .calendar import bar_end
+from .models import Allocation
 
 
 def aware(value: datetime) -> datetime:
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    # longport 4.3.7 converts the wire epoch using datetime.fromtimestamp(epoch, None).
+    return value.astimezone(timezone.utc)
 
 
 def normalize_bar(candle, timeframe: str, confirmed: bool = True) -> dict:
@@ -41,14 +43,17 @@ class LongPortFeed:
         import longport.openapi as lp
 
         self.lp, self.emit = lp, emit
+        domain = {"longport": "longportapp.com", "longbridge": "longbridge.com"}[
+            credentials.get("platform", "longport")
+        ]
         config = lp.Config.from_apikey(
-            credentials["app_key"],
-            credentials["app_secret"],
-            credentials["access_token"],
-            http_url="https://openapi.longportapp.com",
-            quote_ws_url="wss://openapi-quote.longportapp.com/v2",
-            trade_ws_url="wss://openapi-trade.longportapp.com/v2",
-            enable_overnight=True,
+            credentials["app_key"].strip(),
+            credentials["app_secret"].strip(),
+            credentials["access_token"].strip(),
+            http_url=f"https://openapi.{domain}",
+            quote_ws_url=f"wss://openapi-quote.{domain}/v2",
+            trade_ws_url=f"wss://openapi-trade.{domain}/v2",
+            enable_overnight=False,
             push_candlestick_mode=lp.PushCandlestickMode.Confirmed,
             enable_print_quote_packages=False,
         )
@@ -56,9 +61,10 @@ class LongPortFeed:
         self.trade_context = lp.TradeContext(config)
         self.symbols = set()
         self.quote_context.set_on_quote(self._on_quote)
-        self.quote_context.set_on_candlestick(self._on_candle)
 
     def _on_quote(self, symbol, quote):
+        if quote.trade_session != self.lp.TradeSession.Intraday:
+            return
         stamp = aware(quote.timestamp)
         self.emit(
             {
@@ -68,98 +74,126 @@ class LongPortFeed:
                     "last": float(quote.last_done),
                     "timestamp": stamp.isoformat(),
                     "trade_status": str(getattr(quote, "trade_status", "Normal")).split(".")[-1],
-                    "session": session_for(stamp)["session"],
+                    "session": "regular",
                 },
-            }
-        )
-
-    def _on_candle(self, symbol, event):
-        if not event.is_confirmed:
-            return
-        timeframe = "day" if event.period == self.lp.Period.Day else "15m"
-        self.emit(
-            {
-                "type": "bar",
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "bar": normalize_bar(event.candlestick, timeframe, True),
             }
         )
 
     def history(self, symbol: str, timeframe: str, initial: bool = False) -> list[dict]:
         lp, ctx = self.lp, self.quote_context
         period = lp.Period.Day if timeframe == "day" else lp.Period.Min_15
-        result = []
-        before = None
-        for _ in range(4 if initial and timeframe == "15m" else 1):
-            batch = ctx.history_candlesticks_by_offset(
-                symbol,
-                period,
-                lp.AdjustType.NoAdjust,
-                False,
-                1000 if timeframe == "15m" else 320,
-                before,
-                lp.TradeSessions.Intraday if timeframe == "day" else lp.TradeSessions.All,
+        batch = ctx.history_candlesticks_by_offset(
+            symbol,
+            period,
+            lp.AdjustType.NoAdjust,
+            False,
+            1000 if initial else 5,
+            None,
+            lp.TradeSessions.Intraday if timeframe == "day" else lp.TradeSessions.All,
+        )
+        now = datetime.now(timezone.utc)
+        return [normalize_bar(c, timeframe, bar_end(aware(c.timestamp), timeframe) <= now) for c in batch]
+
+    def valuations(self, symbols: list[str]) -> dict:
+        from .indicators import finite
+
+        idx = self.lp.CalcIndex
+        result = {}
+        for start in range(0, len(symbols), 100):
+            batch = self.quote_context.calc_indexes(
+                symbols[start : start + 100], [idx.PeTtmRatio, idx.PbRatio, idx.DividendRatioTtm]
             )
-            result.extend(
-                normalize_bar(
-                    c, timeframe, bar_end(aware(c.timestamp), timeframe) <= datetime.now(timezone.utc)
-                )
-                for c in batch
-            )
-            if len(batch) < 1000 or timeframe == "day":
-                break
-            before = min(c.timestamp for c in batch) - timedelta(seconds=1)
-        return sorted({b["timestamp"]: b for b in result}.values(), key=lambda b: b["timestamp"])
+            fetched = datetime.now(timezone.utc).isoformat()
+            for item in batch:
+                result[item.symbol] = {
+                    "pe_ttm": finite(item.pe_ttm_ratio),
+                    "pb": finite(item.pb_ratio),
+                    "dividend_yield_pct": finite(item.dividend_ratio_ttm),
+                    "fetched_at": fetched,
+                }
+        return result
 
     def subscribe(self, symbols: list[str]):
-        new = set(symbols) - self.symbols
+        new = [symbol for symbol in dict.fromkeys(symbols) if symbol not in self.symbols]
         for symbol in new:
-            self.quote_context.subscribe([symbol], [self.lp.SubType.Quote], is_first_push=True)
-            self.quote_context.subscribe_candlesticks(
-                symbol, self.lp.Period.Min_15, self.lp.TradeSessions.All
-            )
-            self.quote_context.subscribe_candlesticks(
-                symbol, self.lp.Period.Day, self.lp.TradeSessions.Intraday
-            )
-        self.symbols |= new
+            try:
+                self.quote_context.subscribe([symbol], [self.lp.SubType.Quote])
+            except Exception:
+                continue
+            self.symbols.add(symbol)
 
     def quotes(self, symbols: list[str]) -> list[dict]:
         if not symbols:
             return []
         result = []
-        session = session_for(datetime.now(timezone.utc))["session"]
-        for quote in self.quote_context.quote(symbols):
-            ext = getattr(
-                quote,
-                {"pre": "pre_market_quote", "post": "post_market_quote", "overnight": "overnight_quote"}.get(
-                    session, "__missing__"
-                ),
-                None,
-            )
-            active = ext or quote
-            spread = None
+        for start in range(0, len(symbols), 100):
+            batch = symbols[start : start + 100]
             try:
-                depth = self.quote_context.depth(quote.symbol)
-                bid, ask = float(depth.bids[0].price), float(depth.asks[0].price)
-                if ask >= bid > 0:
-                    spread = (ask - bid) / ((ask + bid) / 2)
+                items = self.quote_context.quote(batch)
             except Exception:
-                pass  # Level-one prices never stand in for unavailable depth.
-            result.append(
-                {
-                    "symbol": quote.symbol,
-                    "quote": {
-                        "last": float(active.last_done),
-                        "prev_close": float(quote.prev_close),
-                        "timestamp": aware(active.timestamp).isoformat(),
-                        "spread_ratio": spread,
-                        "trade_status": str(quote.trade_status).split(".")[-1],
-                        "session": session,
-                    },
-                }
-            )
+                items = []
+                for sym in batch:
+                    try:
+                        items.extend(self.quote_context.quote([sym]))
+                    except Exception:
+                        continue
+            for quote in items:
+                result.append(
+                    {
+                        "symbol": quote.symbol,
+                        "quote": {
+                            "last": float(quote.last_done),
+                            "prev_close": float(quote.prev_close),
+                            "timestamp": aware(quote.timestamp).isoformat(),
+                            "trade_status": str(quote.trade_status).split(".")[-1],
+                            "session": "regular",
+                        },
+                    }
+                )
         return result
+
+    def watchlist(self) -> dict:
+        groups_out = []
+        securities_by_symbol: dict[str, dict] = {}
+        unsupported: list[str] = []
+        unsupported_seen: set[str] = set()
+        for group in self.quote_context.watchlist():
+            group_id = int(getattr(group, "id", 0) or 0)
+            group_name = str(getattr(group, "name", "") or "").strip() or f"分组 {group_id}"
+            group_symbols: list[str] = []
+            for sec in getattr(group, "securities", None) or []:
+                raw_symbol = str(getattr(sec, "symbol", "") or "").strip().upper()
+                if not raw_symbol:
+                    continue
+                if not raw_symbol.endswith(".US"):
+                    if raw_symbol not in unsupported_seen:
+                        unsupported_seen.add(raw_symbol)
+                        unsupported.append(raw_symbol)
+                    continue
+                try:
+                    symbol = Allocation(symbol=raw_symbol).symbol
+                except ValueError:
+                    if raw_symbol not in unsupported_seen:
+                        unsupported_seen.add(raw_symbol)
+                        unsupported.append(raw_symbol)
+                    continue
+                if symbol not in group_symbols:
+                    group_symbols.append(symbol)
+                entry = securities_by_symbol.setdefault(
+                    symbol,
+                    {"symbol": symbol, "name": "", "groups": []},
+                )
+                sec_name = str(getattr(sec, "name", "") or "").strip()
+                if sec_name and not entry["name"]:
+                    entry["name"] = sec_name
+                if group_name not in entry["groups"]:
+                    entry["groups"].append(group_name)
+            groups_out.append({"id": group_id, "name": group_name, "symbols": group_symbols})
+        return {
+            "groups": groups_out,
+            "securities": list(securities_by_symbol.values()),
+            "unsupported": unsupported,
+        }
 
     def account(self) -> dict:
         positions = self.trade_context.stock_positions()

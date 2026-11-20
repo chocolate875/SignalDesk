@@ -4,15 +4,17 @@ import asyncio
 import math
 import time
 from datetime import datetime
+from threading import RLock
 
 from . import demo
-from .calendar import NY, bar_end, calendar, session_for
+from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
 from .events import EventEngine
 from .indicators import chart_rows, enrich, summarize
 from .models import Allocation, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed
+from .research import fetch_curve, research_context
 from .security import Vault
 from .storage import Store
 
@@ -29,6 +31,7 @@ class Monitor:
         self.codex = CodexBridge(store, self.settings.codex)
         self.frames = {}
         self.summaries = {}
+        self.frame_lock = RLock()
         self.quotes = {}
         self.feed = None
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=5000)
@@ -42,15 +45,31 @@ class Monitor:
         self.active_mode = self.settings.mode
         self.unsupported = []
         self.loop = None
+        self.valuation_retry = 0
+        self.history_retry_at = {}
+        self.valuations = store.get("valuations:live", {})
+        self.curve = store.get("treasury:live", {})
+        self.demo_curve = {}
+        self.watchlist_groups = store.get("watchlist-groups:live", [])
+        self.watchlist_unsupported = []
+        self.watchlist_sync_error = ""
+        self.last_watchlist_sync = store.get("watchlist-last-sync:live")
 
-    def portfolio(self) -> list[Allocation]:
-        raw = self.store.get(f"portfolio:{self.settings.mode}")
+    def portfolio(self, mode: str | None = None) -> list[Allocation]:
+        mode = mode or self.settings.mode
+        raw = self.store.get(f"portfolio:{mode}")
         if raw is None:
-            raw = [a.model_dump() for a in demo.allocations()] if self.settings.mode == "demo" else []
-            self.store.set(f"portfolio:{self.settings.mode}", raw)
+            raw = [a.model_dump() for a in demo.allocations()] if mode == "demo" else []
+            self.store.set(f"portfolio:{mode}", raw)
         return [Allocation.model_validate(a) for a in raw]
 
     def save_allocation(self, incoming: Allocation):
+        if (
+            incoming.long_stop_price
+            and incoming.long_target_price
+            and incoming.long_stop_price >= incoming.long_target_price
+        ):
+            raise ValueError("长期计划失效价应低于目标价")
         current = {a.symbol: a for a in self.portfolio()}
         old = current.get(incoming.symbol)
         actual = old.broker_quantity if old else 0
@@ -62,10 +81,31 @@ class Monitor:
             available_quantity=old.available_quantity if old else 0,
             cost_price=old.cost_price if old else None,
             watch_only=actual == 0,
+            favorite=(
+                incoming.favorite
+                if (old is None or "favorite" in incoming.model_fields_set)
+                else old.favorite
+            ),
+            in_watchlist=old.in_watchlist if old else False,
+            watchlist_groups=old.watchlist_groups if old else [],
+            manual_watch=old.manual_watch if old else (actual == 0),
         )
         current[incoming.symbol] = Allocation.model_validate(data)
         self.store.set(f"portfolio:{self.settings.mode}", [a.model_dump() for a in current.values()])
         return current[incoming.symbol]
+
+    def set_favorite(self, symbol: str, favorite: bool) -> Allocation:
+        items = self.portfolio()
+        target = None
+        for item in items:
+            if item.symbol == symbol:
+                item.favorite = favorite
+                target = item
+                break
+        if target is None:
+            raise ValueError("股票不在当前监控列表")
+        self.store.set(f"portfolio:{self.settings.mode}", [a.model_dump() for a in items])
+        return target
 
     def update_settings(self, value: Settings):
         self.settings = value
@@ -89,34 +129,37 @@ class Monitor:
                 asyncio.create_task(self.run()),
                 asyncio.create_task(self.notifications.run()),
                 asyncio.create_task(self.codex.run()),
+                asyncio.create_task(self.refresh_macro()),
             ]
 
     def prepare_demo(self):
         now = utcnow()
-        for item in self.portfolio():
+        end = latest_expected_end(now, "day", "regular")
+        self.demo_curve = demo.yield_curve(end)
+        for item in self.portfolio("demo"):
             if item.symbol not in {d[0] for d in demo.DEMO_NAMES}:
                 continue
-            for timeframe in ["day", "15m"]:
-                bars = demo.make_bars(item.symbol, timeframe, now)
-                self.store.put_bars("demo", item.symbol, timeframe, bars)
-            self.rebuild(item.symbol, initial=True)
-            frame = self.frames[("demo", item.symbol, "15m")]
-            regular = frame[frame["session"] == "regular"]
+            bars = demo.make_bars(item.symbol, "day", now)
+            self.store.put_bars("demo", item.symbol, "day", bars)
+            self.rebuild(item.symbol, initial=True, mode="demo")
+            regular = self.frames[("demo", item.symbol, "day")]
             if not regular.empty:
                 row = regular.iloc[-1]
                 self.quotes[("demo", item.symbol)] = {
                     "last": float(row["close"]),
                     "prev_close": float(regular.iloc[-2]["close"]),
-                    "timestamp": row["timestamp"].isoformat(),
+                    "timestamp": bar_end(row["timestamp"].to_pydatetime(), "day").isoformat(),
                     "spread_ratio": 0.0005,
                     "trade_status": "normal",
                     "session": "regular",
                 }
             # Replay actual factor crossings from synthetic history; no fabricated signal cards.
-            key = f"demo-seeded:{item.symbol}:{now.date()}"
+            key = f"daily-demo-seeded:{item.symbol}:{now.date()}"
             if not self.store.get(key):
                 for sleeve in item.sleeves():
-                    tf = "day" if sleeve == "long" else "15m"
+                    if sleeve != "long":
+                        continue
+                    tf = "day"
                     frame = self.frames[("demo", item.symbol, tf)]
                     self.store.set(f"state:demo:{item.symbol}:{sleeve}:{tf}:regular", None)
                     indexes = frame.index[frame["session"] == "regular"][-45:]
@@ -136,49 +179,46 @@ class Monitor:
                         )
                 self.store.set(key, True)
             # Establish current state for future live-like updates, with no historical notifications.
-            self.rebuild(item.symbol, initial=True)
+            self.rebuild(item.symbol, initial=True, mode="demo")
         self.status, self.detail = "demo", "合成行情与示例持仓 · 不代表真实市场 · 不自动对外发送"
 
-    def rebuild(self, symbol: str, initial=False, catchup=False) -> list[dict]:
-        mode, settings, now = self.settings.mode, self.settings, utcnow()
+    def rebuild(self, symbol: str, initial=False, catchup=False, mode=None) -> list[dict]:
+        mode, settings, now = mode or self.settings.mode, self.settings, utcnow()
         quote = self.quotes.get((mode, symbol), {})
-        events = []
-        allocation = next((a for a in self.portfolio() if a.symbol == symbol), None)
-        for timeframe in ["day", "15m"]:
-            bars = self.store.bars(mode, symbol, timeframe)
-            frame = enrich(bars, timeframe, now, settings.rules)
-            self.frames[(mode, symbol, timeframe)] = frame
-            sessions = ["regular"] if timeframe == "day" else ["regular", "pre", "post", "overnight"]
-            for session in sessions:
-                summary = summarize(
-                    frame, timeframe, session, now, settings.rules, quote, demo=mode == "demo"
-                )
-                self.summaries[(mode, symbol, timeframe, session)] = summary
-                if allocation is None:
-                    continue
-                for sleeve in allocation.sleeves():
-                    if (sleeve == "long") != (timeframe == "day"):
-                        continue
-                    historical = bool(
-                        catchup
-                        and summary.get("as_of")
-                        and now.timestamp() - datetime.fromisoformat(summary["as_of"]).timestamp() > 120
-                    )
-                    event = self.engine.fusion(
-                        symbol, sleeve, summary, settings.rules, mode, initial=initial, historical=historical
-                    )
-                    if event:
-                        events.append(event)
-        return events
+        bars = self.store.bars(mode, symbol, "day")
+        frame = enrich(bars, "day", now, settings.rules)
+        summary = summarize(frame, "day", "regular", now, settings.rules, demo=mode == "demo")
+        with self.frame_lock:
+            self.frames[(mode, symbol, "day")] = frame
+            self.summaries[(mode, symbol, "day", "regular")] = summary
+        allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
+        if (
+            not allocation
+            or not allocation.reconciled
+            or "long" not in allocation.sleeves()
+            or quote.get("trade_status", "normal").lower()
+            not in {"normal", "normaltrade", "normal_trade", ""}
+        ):
+            return []
+        historical = bool(
+            catchup
+            and summary.get("as_of")
+            and now.timestamp() - datetime.fromisoformat(summary["as_of"]).timestamp() > 120
+        )
+        event = self.engine.fusion(
+            symbol, "long", summary, settings.rules, mode, initial=initial, historical=historical
+        )
+        return [event] if event else []
 
     def stock(self, allocation: Allocation) -> dict:
         mode = self.settings.mode
         quote = dict(self.quotes.get((mode, allocation.symbol), {}))
-        summaries = {
-            f"{tf}:{session}": dict(summary)
-            for (source, symbol, tf, session), summary in self.summaries.items()
-            if source == mode and symbol == allocation.symbol
-        }
+        with self.frame_lock:
+            summaries = {
+                f"{tf}:{session}": dict(summary)
+                for (source, symbol, tf, session), summary in self.summaries.items()
+                if source == mode and symbol == allocation.symbol
+            }
         if str(quote.get("trade_status", "normal")).lower() not in {
             "normal",
             "normaltrade",
@@ -186,21 +226,43 @@ class Monitor:
             "",
         }:
             for value in summaries.values():
-                value.update(valid=False, score=None, state="unavailable", opportunity_allowed=False)
+                value.update(
+                    valid=False,
+                    confirmed_price_available=False,
+                    score=None,
+                    state="unavailable",
+                    opportunity_allowed=False,
+                    contributions={},
+                    contribution_changes={},
+                )
                 value["risks"] = ["停牌或交易状态受限"] + [
                     r for r in value.get("risks", []) if r != "停牌或交易状态受限"
                 ]
-        market = session_for(utcnow())
-        active_session = "regular" if mode == "demo" or market["session"] == "closed" else market["session"]
-        primary = "day:regular" if allocation.sleeves() == ["long"] else f"15m:{active_session}"
+        now = utcnow()
+        market = session_for(now)
+        expected = latest_expected_end(now, "day", "regular") if mode == "live" else None
+        primary = "day:regular"
+        day = summaries.get(primary)
+        if mode == "live" and day and day.get("confirmed_price_available") and day.get("as_of"):
+            if expected and datetime.fromisoformat(day["as_of"]) < expected:
+                day.update(
+                    valid=False,
+                    confirmed_price_available=False,
+                    state="unavailable",
+                    score=None,
+                    opportunity_allowed=False,
+                    contributions={},
+                    contribution_changes={},
+                )
+                day["risks"] = ["行情过期：最近应完成K线缺失", *day.get("risks", [])]
         summary = dict(summaries.get(primary, {}))
         quote_stale = False
-        if mode == "live" and market["session"] != "closed":
+        if mode == "live":
             try:
-                quote_stale = (
-                    not 0 <= (utcnow() - datetime.fromisoformat(quote["timestamp"])).total_seconds() <= 120
-                )
-            except (ValueError, KeyError):
+                stamp = datetime.fromisoformat(quote["timestamp"])
+                reference = now if market["session"] == "regular" else expected
+                quote_stale = stamp > now or reference is None or (reference - stamp).total_seconds() > 120
+            except (ValueError, KeyError, TypeError):
                 quote_stale = True
         quote["stale"] = quote_stale
         if quote_stale:
@@ -210,6 +272,52 @@ class Monitor:
         if mode == "demo":
             net = 50_000
         qty = allocation.broker_quantity
+        stop, target = allocation.long_levels()
+        valuation = self.valuations.get(allocation.symbol, {}) if mode == "live" else {}
+        curve = self.curve if mode == "live" else self.demo_curve
+        if mode == "demo" and summary.get("as_of"):
+            index = next((i for i, d in enumerate(demo.DEMO_NAMES) if d[0] == allocation.symbol), None)
+            if index is not None:
+                valuation = {
+                    "pe_ttm": 19.0 + index * 3,
+                    "pb": 3.5 + index,
+                    "dividend_yield_pct": index / 3,
+                    "fetched_at": summary["as_of"],
+                }
+        research = research_context(valuation, curve, now, mode == "demo")
+        close = summary.get("close")
+        if not allocation.reconciled:
+            review = "核对持仓分类"
+        elif "long" not in allocation.sleeves():
+            review = "未纳入长期计划"
+        elif not summary.get("confirmed_price_available") or close is None:
+            review = "等待有效日线"
+        elif stop is not None and close <= stop:
+            review = "复核计划失效价"
+        elif target is not None and close >= target:
+            review = "复核计划目标价"
+        elif (
+            research["valuation"]["fresh"]
+            and valuation.get("pe_ttm") is not None
+            and valuation["pe_ttm"] <= 0
+        ):
+            review = "复核盈利情况"
+        elif research["yield_gap_pp"] is None:
+            review = "补齐估值或利率依据"
+        else:
+            review = "按计划观察" if allocation.watch_only else "例行持仓复核"
+        long_plan = {
+            "status": review,
+            "stop": stop,
+            "target": target,
+            "basis": "regular_daily_close",
+            "close": close,
+            "as_of": summary.get("as_of"),
+            "watch_only": allocation.watch_only,
+            "stop_distance_percent": ((close / stop - 1) * 100) if close and stop else None,
+            "target_distance_percent": ((close / target - 1) * 100) if close and target else None,
+        }
+        verdict = self._build_verdict(allocation, summary, research, long_plan)
         result = {
             **allocation.model_dump(),
             "sleeves": allocation.sleeves(),
@@ -218,6 +326,9 @@ class Monitor:
             "summaries": summaries,
             "primary_key": primary,
             "primary": summary,
+            "research": research,
+            "long_plan": long_plan,
+            "verdict": verdict,
             "weight_percent": (qty * last / net * 100) if last and net else None,
             "pnl_percent": ((last / allocation.cost_price - 1) * 100)
             if last and allocation.cost_price
@@ -231,16 +342,248 @@ class Monitor:
         }
         return result
 
+    @staticmethod
+    def _build_verdict(
+        allocation: Allocation, summary: dict, research: dict, long_plan: dict
+    ) -> dict:
+        close = long_plan.get("close")
+        stop = long_plan.get("stop")
+        target = long_plan.get("target")
+        stop_dist = long_plan.get("stop_distance_percent")
+        target_dist = long_plan.get("target_distance_percent")
+        confirmed = bool(summary.get("confirmed_price_available")) and close is not None
+        valid = bool(summary.get("valid"))
+        score = summary.get("score")
+        state = summary.get("state", "unavailable")
+        risks = list(summary.get("risks") or [])
+        indicators = summary.get("indicators") or {}
+        val = research.get("valuation") or {}
+        pe = val.get("pe_ttm")
+        val_fresh = bool(val.get("fresh"))
+        ey = research.get("earnings_yield_pct")
+        gap = research.get("yield_gap_pp")
+        held = allocation.broker_quantity > 0
+        watch_only = allocation.watch_only
+        in_long = "long" in allocation.sleeves()
+
+        # Plan pillar
+        if stop is not None and target is not None and close is not None:
+            if close <= stop:
+                plan_status, plan_tone = "已破失效价", "danger"
+            elif close >= target:
+                plan_status, plan_tone = "已达目标价", "warning"
+            else:
+                plan_status, plan_tone = "区间内运行", "positive"
+            plan_detail = (
+                f"失效 ${stop:.2f}（{stop_dist:+.1f}%）· 目标 ${target:.2f}（{target_dist:+.1f}%）"
+            )
+        elif stop is not None:
+            if close is not None and close <= stop:
+                plan_status, plan_tone = "已破失效价", "danger"
+            else:
+                plan_status, plan_tone = "已设失效价", "neutral"
+            dist = f"（{stop_dist:+.1f}%）" if stop_dist is not None else ""
+            plan_detail = f"失效 ${stop:.2f}{dist} · 建议补充目标价"
+        elif target is not None:
+            if close is not None and close >= target:
+                plan_status, plan_tone = "已达目标价", "warning"
+            else:
+                plan_status, plan_tone = "已设目标价", "neutral"
+            dist = f"（{target_dist:+.1f}%）" if target_dist is not None else ""
+            plan_detail = f"目标 ${target:.2f}{dist} · 建议补充失效价"
+        else:
+            plan_status, plan_tone = "未设计划价", "muted"
+            plan_detail = "点击「编辑计划」设置失效价与目标价"
+
+        # Valuation pillar
+        if not val_fresh:
+            val_status = "估值待更新"
+            val_tone = "muted"
+            val_detail = f"最近 PE {pe:.1f}x（超过4天未更新）" if pe is not None else "暂无有效券商估值"
+        elif pe is not None and pe <= 0:
+            val_status, val_tone = "盈利为负", "danger"
+            val_detail = f"PE {pe:.1f}x · 需复核亏损与现金流"
+        elif gap is not None and pe is not None and ey is not None:
+            val_tone = "positive" if gap >= 1.0 else ("warning" if gap < -1.0 else "neutral")
+            val_status = f"利差 {gap:+.2f}pp"
+            val_detail = f"PE {pe:.1f}x · 盈利收益率 {ey:.2f}%"
+        elif pe is not None:
+            val_status, val_tone = f"PE {pe:.1f}x", "neutral"
+            val_detail = "等待完整美债利率以计算股债利差"
+        else:
+            val_status, val_tone = "估值缺失", "muted"
+            val_detail = "等待券商更新滚动市盈率"
+
+        # Technical pillar
+        if not valid or score is None:
+            tech_status, tech_tone = "数据待确认", "muted"
+            tech_detail = risks[0] if risks else "日线预热或收盘尚未确认"
+        else:
+            tech_status = {"strong": "结构偏强", "weak": "结构偏弱", "neutral": "结构中性"}.get(
+                state, "待确认"
+            )
+            tech_tone = (
+                "positive"
+                if state == "strong" and not risks
+                else ("warning" if state == "weak" or risks else "neutral")
+            )
+            risk_note = f"{len(risks)} 项风险" if risks else "无额外风险"
+            tech_detail = f"{score:.1f} 分 · {risk_note}"
+
+        pillars = [
+            {"key": "plan", "label": "计划价位", "status": plan_status, "tone": plan_tone, "detail": plan_detail},
+            {"key": "valuation", "label": "估值利率", "status": val_status, "tone": val_tone, "detail": val_detail},
+            {"key": "technical", "label": "日线结构", "status": tech_status, "tone": tech_tone, "detail": tech_detail},
+        ]
+
+        # Plain-language dimension notes
+        ma200 = indicators.get("ma200")
+        ema20 = indicators.get("ema20")
+        ema50 = indicators.get("ema50")
+        if close is not None and ma200 is not None and ema20 is not None and ema50 is not None:
+            if close >= ma200 and ema20 >= ema50:
+                trend_note = f"收盘高于200日线（${ma200:.2f}），EMA20强于EMA50，长期趋势完整"
+            elif close >= ma200:
+                trend_note = f"收盘高于200日线（${ma200:.2f}），但EMA20弱于EMA50，短期偏整理"
+            elif ema20 >= ema50:
+                trend_note = f"股价仍在200日线（${ma200:.2f}）下方，EMA20上穿呈修复态势"
+            else:
+                trend_note = f"股价位于200日线（${ma200:.2f}）下方且均线空头排列，趋势偏弱"
+        else:
+            trend_note = "日线样本不足200根，暂无法评估200日长期均线"
+
+        rsi = indicators.get("rsi")
+        macd_hist = indicators.get("macd_hist")
+        if rsi is not None and macd_hist is not None:
+            rsi_zone = (
+                "超买警戒区"
+                if rsi >= 70
+                else "偏强区"
+                if rsi >= 55
+                else "超卖弱势区"
+                if rsi <= 30
+                else "偏弱区"
+                if rsi <= 45
+                else "中性区间"
+            )
+            macd_desc = "MACD柱为正，多头动能占优" if macd_hist >= 0 else "MACD柱为负，动能偏弱"
+            momentum_note = f"RSI14 为 {rsi:.1f}（{rsi_zone}），{macd_desc}"
+        else:
+            momentum_note = "动量指标窗口尚未就绪"
+
+        rvol = indicators.get("rvol")
+        ret1 = indicators.get("return_1")
+        if rvol is not None and ret1 is not None:
+            vol_desc = (
+                "显著放量"
+                if rvol >= 1.5
+                else "温和放量"
+                if rvol >= 1.1
+                else "明显缩量"
+                if rvol <= 0.7
+                else "量能平稳"
+            )
+            dir_desc = f"收涨 {ret1:+.2%}" if ret1 >= 0 else f"收跌 {ret1:+.2%}"
+            volume_note = f"成交量为20日均量的 {rvol:.2f} 倍（{vol_desc}），当日{dir_desc}"
+        else:
+            volume_note = "成交量基准窗口尚未就绪"
+
+        dimension_notes = {
+            "trend": trend_note,
+            "momentum": momentum_note,
+            "volume_score": volume_note,
+        }
+
+        pe_text = f"PE {pe:.1f}x" if pe is not None else "估值待补"
+        gap_text = f"股债利差 {gap:+.2f}pp" if gap is not None else ""
+        val_brief = f"{pe_text}，{gap_text}" if gap_text else pe_text
+
+        # Deterministic verdict priority 0..9
+        if in_long and stop is not None and confirmed and close <= stop:
+            action, tone, priority = "复核止损", "danger", 0
+            headline = f"收盘价 ${close:.2f} 已跌破计划失效价 ${stop:.2f}（{stop_dist:+.1f}%），需立即复核持有逻辑。"
+            next_step = f"核对基本面是否恶化；若后续收盘仍未能收回 ${stop:.2f} 上方，按长期计划评估止损或减仓。"
+        elif in_long and target is not None and confirmed and close >= target:
+            action, tone, priority = "复核止盈", "warning", 1
+            headline = f"收盘价 ${close:.2f} 已达到计划目标价 ${target:.2f}（{target_dist:+.1f}%），当前估值 {val_brief}。"
+            next_step = "评估是否分批兑现收益；若继续看好长期成长，可在「编辑计划」上移目标价与保护线。"
+        elif not allocation.reconciled:
+            action, tone, priority = "核对持仓", "warning", 2
+            headline = f"券商持仓 {allocation.broker_quantity:g} 股与本地长期/其他分配合计不一致，暂不出具仓位判断。"
+            next_step = "点击「编辑计划」调整长期底仓股数，使合计等于券商持仓。"
+        elif not in_long:
+            action, tone, priority = "未入长期", "muted", 9
+            headline = "该持仓未划入长期底仓计划，仅保留数量核对。"
+            next_step = "如需纳入长期跟踪，请在「编辑计划」中为其分配长期数量。"
+        elif val_fresh and pe is not None and pe <= 0:
+            action, tone, priority = "复核盈利", "danger", 3
+            headline = f"滚动市盈率为负（PE {pe:.1f}x），公司当前盈利承压，长期安全边际需重新确认。"
+            next_step = "复核最新财报与现金流状况，并确认当前失效价保护是否充足。"
+        elif not confirmed or not valid or score is None:
+            action, tone, priority = "等待行情", "muted", 9
+            reason = risks[0] if risks else "等待日线历史补齐或常规收盘确认"
+            headline = f"有效日线或指标窗口尚未完成（{reason}），暂不给出强弱结论。"
+            next_step = "待交易日收盘确认且指标预热完成后，系统将自动刷新技术结构与计划价距离。"
+        elif held and (state == "weak" or len(risks) >= 2):
+            action, tone, priority = "谨慎持有", "warning", 4
+            risk_brief = "；".join(risks[:2]) if risks else f"日线评分 {score:.1f} 分偏弱"
+            headline = f"日线评分 {score:.1f} 分，需关注：{risk_brief}（{val_brief}）。"
+            next_step = (
+                f"重点盯住失效价 ${stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。"
+                if stop is not None and stop_dist is not None
+                else "建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。"
+            )
+        elif watch_only and state == "strong" and not risks:
+            action, tone, priority = "重点观察", "positive", 5
+            headline = f"日线评分 {score:.1f} 分（结构偏强），无额外技术风险，当前 {val_brief}。"
+            next_step = (
+                f"结合基本面与资金节奏，对照预设观察价（目标 ${target:.2f}）评估是否建仓。"
+                if target is not None
+                else "可结合估值水平设定目标入场或观察价位，或点击生成 Codex 总结作进一步复核。"
+            )
+        elif held and state == "strong" and not risks:
+            action, tone, priority = "偏强持有", "positive", 6
+            headline = f"日线评分 {score:.1f} 分（结构偏强），趋势与动能健康，当前 {val_brief}。"
+            next_step = (
+                f"继续按长期计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。"
+                if target is not None and target_dist is not None
+                else "趋势结构良好，可继续持有并定期检查估值与国债利率变化。"
+            )
+        elif held:
+            action, tone, priority = "正常持有", "neutral", 7
+            extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
+            headline = f"日线评分 {score:.1f} 分，{extra}，当前 {val_brief}。"
+            next_step = (
+                f"维持计划跟踪：失效价 ${stop:.2f} / 目标价 ${target:.2f}。"
+                if stop is not None and target is not None
+                else "建议补齐计划失效价与目标价，后续收盘按计划复核即可。"
+            )
+        else:
+            if state == "weak":
+                action, tone, priority = "暂缓观察", "warning", 8
+                headline = f"观察标的日线评分 {score:.1f} 分偏弱，暂不急于介入（{val_brief}）。"
+                next_step = "等待日线重新站稳均线且评分回升至中性以上后再跟踪。"
+            else:
+                action, tone, priority = "继续观察", "neutral", 8
+                headline = f"观察标的日线评分 {score:.1f} 分，整体平稳（{val_brief}）。"
+                next_step = "持续跟踪后续收盘评分变化及估值性价比；需要时可手动触发 Codex 总结。"
+
+        return {
+            "action": action,
+            "tone": tone,
+            "priority": priority,
+            "headline": headline,
+            "next_step": next_step,
+            "pillars": pillars,
+            "dimension_notes": dimension_notes,
+        }
+
     def stocks(self) -> list[dict]:
         return [self.stock(a) for a in self.portfolio()]
 
     async def snapshot(self) -> dict:
         stocks = self.stocks()
         scores = [s["primary"]["score"] for s in stocks if s["primary"].get("valid")]
-        weights = {
-            sleeve: sum(s.get("weight_percent", 0) or 0 for s in stocks if sleeve in s["sleeves"])
-            for sleeve in ["long", "short"]
-        }
         # Split a dual-sleeve position proportionally, never count it twice.
         weights = {
             sleeve: sum(
@@ -252,15 +595,38 @@ class Monitor:
         }
         return {
             "rules": self.settings.rules.model_dump(),
+            "curve": research_context(
+                {},
+                self.demo_curve if self.settings.mode == "demo" else self.curve,
+                utcnow(),
+                self.settings.mode == "demo",
+            )["curve"],
             "mode": self.settings.mode,
             "status": self.status,
             "detail": self.detail,
             "now": utcnow().isoformat(),
             "market": session_for(utcnow()),
-            "last_sync": self.last_sync,
+            "last_sync": self.last_sync if self.settings.mode == "live" else None,
             "stocks": stocks,
-            "events": self.store.events(self.settings.mode, 70),
-            "analyses": [{k: v for k, v in a.items() if k != "snapshot"} for a in self.store.analyses()],
+            "watchlist_groups": (
+                demo.watchlist_groups() if self.settings.mode == "demo" else self.watchlist_groups
+            ),
+            "watchlist_sync": {
+                "enabled": self.settings.sync_watchlist,
+                "last_sync": self.last_watchlist_sync if self.settings.mode == "live" else None,
+                "error": self.watchlist_sync_error if self.settings.mode == "live" else "",
+                "unsupported_count": (
+                    len(self.watchlist_unsupported) if self.settings.mode == "live" else 0
+                ),
+                "unsupported": (
+                    self.watchlist_unsupported[:20] if self.settings.mode == "live" else []
+                ),
+            },
+            "events": self.store.events(self.settings.mode, 70, sleeve="long"),
+            "analyses": [
+                {k: v for k, v in a.items() if k != "snapshot"}
+                for a in self.store.analyses(source=self.settings.mode)
+            ],
             "channels": {
                 "qq": await self.notifications.qq.health(),
                 "desktop": await self.notifications.desktop.health(),
@@ -274,20 +640,39 @@ class Monitor:
                 "risk_count": sum(bool(s["primary"].get("risks")) or not s["reconciled"] for s in stocks),
                 "sleeve_weights": weights,
             },
-            "unsupported": self.unsupported,
+            "unsupported": self.unsupported if self.settings.mode == "live" else [],
         }
 
     def detail_for(self, symbol: str, timeframe: str, session: str):
         allocation = next((a for a in self.portfolio() if a.symbol == symbol), None)
         if allocation is None:
             raise ValueError("股票不在本机监控列表")
-        frame = self.frames.get((self.settings.mode, symbol, timeframe))
-        rows = chart_rows(frame, session) if frame is not None else []
-        stock = self.stock(allocation)
+        with self.frame_lock:
+            frame = self.frames.get((self.settings.mode, symbol, timeframe))
+            stock = self.stock(allocation)
+        # Older clients can still open intraday history explicitly; it drives no long-term decisions.
+        if timeframe == "15m" and frame is None:
+            bars = self.store.bars(self.settings.mode, symbol, timeframe)
+            if not bars and self.settings.mode == "demo" and symbol in {d[0] for d in demo.DEMO_NAMES}:
+                bars = demo.make_bars(symbol, timeframe, utcnow())
+            frame = enrich(bars, timeframe, utcnow(), self.settings.rules)
+        rows = chart_rows(frame, session, count=1000) if frame is not None else []
+        summary = stock["summaries"].get(f"{timeframe}:{session}")
+        if summary is None and timeframe == "15m":
+            summary = summarize(
+                frame,
+                timeframe,
+                session,
+                utcnow(),
+                self.settings.rules,
+                stock["quote"],
+                demo=self.settings.mode == "demo",
+            )
         return {
             "stock": stock,
+            "mode": self.settings.mode,
             "rows": rows,
-            "summary": stock["summaries"].get(f"{timeframe}:{session}"),
+            "summary": summary,
             "timeframe": timeframe,
             "session": session,
         }
@@ -307,7 +692,7 @@ class Monitor:
         if self.settings.mode != "live":
             return
         for event in events:
-            if event["historical"] or event["source"] != "live":
+            if event["historical"] or event["source"] != "live" or event["sleeve"] != "long":
                 continue
             if event["sleeve"] == "long" and event["severity"] == "info":
                 continue  # Ordinary long-horizon changes go into the closing digest.
@@ -317,13 +702,14 @@ class Monitor:
             if allocation is None or not allocation.reconciled or event.get("sleeve") == "unassigned":
                 continue
             self.notifications.enqueue(event, self.settings.desktop_notifications, self.settings.qq.enabled)
-            if allocation and allocation.reconciled and event.get("sleeve") != "unassigned":
-                try:
-                    await self.codex.request(
-                        self.stock(allocation), "live", automatic=True, event_id=event["id"]
-                    )
-                except ValueError:
-                    pass
+
+    def _ordered_symbols(self, mode: str = "live") -> list[str]:
+        ordered = sorted(
+            self.portfolio(mode),
+            key=lambda item: (item.broker_quantity > 0, item.favorite),
+            reverse=True,
+        )
+        return [item.symbol for item in ordered]
 
     async def _connect(self):
         if not self.vault.configured("longport"):
@@ -333,21 +719,43 @@ class Monitor:
         credentials = self.vault.load("longport")
         self.feed = await asyncio.to_thread(LongPortFeed, credentials, self.emit)
         await self._sync_account()
-        symbols = [a.symbol for a in self.portfolio()]
+        symbols = self._ordered_symbols("live")
         self.store.set("broker-calendar", await asyncio.to_thread(self.feed.market_calendar))
         for symbol in symbols:
-            for tf in ["day", "15m"]:
-                bars = await asyncio.to_thread(self.feed.history, symbol, tf, True)
-                self.store.put_bars("live", symbol, tf, bars)
-            await asyncio.to_thread(self.rebuild, symbol, True)
+            try:
+                bars = await asyncio.to_thread(self.feed.history, symbol, "day", True)
+                self.store.put_bars("live", symbol, "day", bars)
+                await asyncio.to_thread(self.rebuild, symbol, True, mode="live")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.history_retry_at[symbol] = time.monotonic() + 3600
+                continue
         await asyncio.to_thread(self.feed.subscribe, symbols)
+        if self.settings.mode != "live":
+            return
         self.status, self.detail = "live", "LongPort只读连接已建立；各股票数据有效性独立检查"
         self.failures = 0
         self.last_probe = 0
 
+    async def refresh_macro(self):
+        retry = 0.0
+        while True:
+            if self.settings.mode == "live" and time.monotonic() >= retry:
+                try:
+                    curve = await fetch_curve(utcnow())
+                except Exception:
+                    self.curve = {**self.curve, "refresh_failed": True}
+                    retry = time.monotonic() + 900
+                else:
+                    self.curve = curve
+                    self.store.set("treasury:live", curve)
+                    retry = time.monotonic() + 21600
+            await asyncio.sleep(15)
+
     async def _sync_account(self):
         account = await asyncio.to_thread(self.feed.account)
-        current = {a.symbol: a.model_dump() for a in self.portfolio()}
+        current = {a.symbol: a.model_dump() for a in self.portfolio("live")}
         seen = set()
         for incoming in account["positions"]:
             old = current.get(incoming["symbol"], Allocation(symbol=incoming["symbol"]).model_dump())
@@ -360,31 +768,225 @@ class Monitor:
         self.store.set("account:live", {key: account[key] for key in ["net_assets", "cash"]})
         self.unsupported = account["unsupported"]
         self.last_sync = utcnow().isoformat()
+        await self._sync_watchlist()
+
+    async def _sync_watchlist(self, force: bool = False):
+        if (
+            (not force and not self.settings.sync_watchlist)
+            or self.feed is None
+            or not hasattr(self.feed, "watchlist")
+        ):
+            return
+        try:
+            payload = await asyncio.to_thread(self.feed.watchlist)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self.watchlist_sync_error = f"自选同步失败（{type(error).__name__}）"
+            return
+        current = {a.symbol: a.model_dump() for a in self.portfolio("live")}
+        seen = set()
+        for sec in payload.get("securities", []):
+            sym = sec["symbol"]
+            seen.add(sym)
+            groups = list(sec.get("groups", []))
+            if sym in current:
+                old = current[sym]
+                current[sym] = {
+                    **old,
+                    "name": old.get("name") or sec.get("name", ""),
+                    "in_watchlist": True,
+                    "watchlist_groups": groups,
+                }
+            else:
+                current[sym] = Allocation(
+                    symbol=sym,
+                    name=sec.get("name", ""),
+                    watch_only=True,
+                    watch_sleeve="long",
+                    in_watchlist=True,
+                    watchlist_groups=groups,
+                    manual_watch=False,
+                ).model_dump()
+        cleaned = {}
+        for sym, item in current.items():
+            if sym not in seen:
+                item["in_watchlist"] = False
+                item["watchlist_groups"] = []
+                if (
+                    item.get("broker_quantity", 0) == 0
+                    and not item.get("manual_watch")
+                    and not item.get("favorite")
+                    and item.get("long_stop_price") is None
+                    and item.get("long_target_price") is None
+                ):
+                    continue
+            cleaned[sym] = item
+        groups = [g for g in payload.get("groups", []) if g.get("symbols")]
+        self.store.set("portfolio:live", list(cleaned.values()))
+        self.watchlist_groups = groups
+        self.watchlist_unsupported = list(payload.get("unsupported", []))
+        self.watchlist_sync_error = ""
+        self.last_watchlist_sync = utcnow().isoformat()
+        self.store.set("watchlist-groups:live", self.watchlist_groups)
+        self.store.set("watchlist-last-sync:live", self.last_watchlist_sync)
+
+    async def sync_watchlist_now(self) -> dict:
+        if self.settings.mode == "demo":
+            groups = demo.watchlist_groups()
+            watchlist_count = sum(1 for a in self.portfolio("demo") if a.in_watchlist)
+            return {
+                "ok": True,
+                "mode": "demo",
+                "groups_count": len(groups),
+                "watchlist_count": watchlist_count,
+                "unsupported_count": 0,
+                "last_sync": None,
+                "message": "演示模式已载入示例自选分组；切换实盘后将自动同步您的 LongPort 账号自选股单",
+            }
+        if self.feed is None:
+            self.reconnect_at = 0
+            self.last_probe = 0
+            return {
+                "ok": False,
+                "mode": "live",
+                "message": "尚未连接到 LongPort，请先在设置中配置凭据并切换为实盘",
+            }
+        await self._sync_account()
+        if not self.settings.sync_watchlist:
+            await self._sync_watchlist(force=True)
+        if self.watchlist_sync_error:
+            return {
+                "ok": False,
+                "mode": "live",
+                "message": self.watchlist_sync_error,
+                "last_sync": self.last_watchlist_sync,
+            }
+        symbols = self._ordered_symbols("live")
+        new_symbols = set(symbols) - self.feed.symbols
+        for symbol in symbols:
+            if symbol not in new_symbols or time.monotonic() < self.history_retry_at.get(symbol, 0):
+                continue
+            try:
+                bars = await asyncio.to_thread(self.feed.history, symbol, "day", True)
+                self.store.put_bars("live", symbol, "day", bars)
+                await asyncio.to_thread(self.rebuild, symbol, True, mode="live")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.history_retry_at[symbol] = time.monotonic() + 3600
+                continue
+        await asyncio.to_thread(self.feed.subscribe, symbols)
+        if symbols:
+            try:
+                for item in await asyncio.to_thread(self.feed.quotes, symbols):
+                    await self._quote(item["symbol"], item["quote"])
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            if new_symbols or time.monotonic() >= self.valuation_retry:
+                try:
+                    valuations = await asyncio.to_thread(self.feed.valuations, symbols)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.valuations = {
+                        s: {**self.valuations.get(s, {}), "refresh_failed": True} for s in symbols
+                    }
+                    self.valuation_retry = time.monotonic() + 900
+                else:
+                    self.valuations = valuations
+                    self.store.set("valuations:live", valuations)
+                    self.valuation_retry = time.monotonic() + 3600
+        watchlist_count = sum(1 for a in self.portfolio("live") if a.in_watchlist)
+        unsupported_count = len(self.watchlist_unsupported)
+        self.last_probe = time.monotonic()
+        msg = f"已同步 {len(self.watchlist_groups)} 个自选分组，共 {watchlist_count} 只美股"
+        if unsupported_count:
+            msg += f"（已忽略 {unsupported_count} 只非美股或无效代码）"
+        return {
+            "ok": True,
+            "mode": "live",
+            "groups_count": len(self.watchlist_groups),
+            "watchlist_count": watchlist_count,
+            "unsupported_count": unsupported_count,
+            "last_sync": self.last_watchlist_sync,
+            "message": msg,
+        }
 
     async def _poll(self):
         await self._sync_account()
-        symbols = [a.symbol for a in self.portfolio()]
+        symbols = self._ordered_symbols("live")
         new_symbols = set(symbols) - self.feed.symbols
-        for symbol in new_symbols:
-            for tf in ["day", "15m"]:
+        for symbol in symbols:
+            if symbol not in new_symbols or time.monotonic() < self.history_retry_at.get(symbol, 0):
+                continue
+            with self.frame_lock:
+                cached_frame = self.frames.get(("live", symbol, "day"))
+            if cached_frame is not None and not cached_frame.empty:
+                continue
+            try:
                 self.store.put_bars(
-                    "live", symbol, tf, await asyncio.to_thread(self.feed.history, symbol, tf, True)
+                    "live", symbol, "day", await asyncio.to_thread(self.feed.history, symbol, "day", True)
                 )
-            await asyncio.to_thread(self.rebuild, symbol, True)
+                await asyncio.to_thread(self.rebuild, symbol, True, mode="live")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.history_retry_at[symbol] = time.monotonic() + 3600
+                continue
         await asyncio.to_thread(self.feed.subscribe, symbols)
+        if symbols and (new_symbols or time.monotonic() >= self.valuation_retry):
+            try:
+                valuations = await asyncio.to_thread(self.feed.valuations, symbols)
+            except Exception:
+                self.valuations = {s: {**self.valuations.get(s, {}), "refresh_failed": True} for s in symbols}
+                self.valuation_retry = time.monotonic() + 900
+            else:
+                self.valuations = valuations
+                self.store.set("valuations:live", valuations)
+                self.valuation_retry = time.monotonic() + 3600
         for item in await asyncio.to_thread(self.feed.quotes, symbols):
             await self._quote(item["symbol"], item["quote"])
-        # Catch missed confirmed bars after transport gaps; catch-up never alerts as a new entry.
         for symbol in symbols:
-            for tf in ["day", "15m"]:
-                bars = await asyncio.to_thread(self.feed.history, symbol, tf)
-                self.store.put_bars("live", symbol, tf, bars)
-            await self.on_events(await asyncio.to_thread(self.rebuild, symbol, False, True))
+            try:
+                await self._poll_daily(symbol)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                continue
+        if self.settings.mode != "live":
+            return
         self.status, self.detail = "live", "数据同步正常；历史补齐不会作为新机会推送"
         self.failures = 0
 
+    async def _poll_daily(self, symbol: str):
+        batch = await asyncio.to_thread(self.feed.history, symbol, "day")
+        confirmed = [b for b in batch if b["confirmed"]]
+        if not confirmed:
+            return
+        # The transport can survive a sleeping PC while its five-bar history window moves on.
+        with self.frame_lock:
+            frame = self.frames.get(("live", symbol, "day"))
+        cached = set()
+        if frame is not None and not frame.empty:
+            cached = set(frame["timestamp"].tail(200).dt.tz_convert(NY).dt.date)
+        observed = cached | {datetime.fromisoformat(b["timestamp"]).astimezone(NY).date() for b in confirmed}
+        expected = calendar().sessions_in_range(min(observed), max(observed))
+        missing = not cached or any(session.date() not in observed for session in expected)
+        if missing and time.monotonic() >= self.history_retry_at.get(symbol, 0):
+            history = await asyncio.to_thread(self.feed.history, symbol, "day", True)
+            confirmed.extend(b for b in history if b["confirmed"])
+            self.history_retry_at[symbol] = time.monotonic() + 3600
+        if self.store.put_bars("live", symbol, "day", confirmed):
+            events = await asyncio.to_thread(self.rebuild, symbol, initial=missing, catchup=True, mode="live")
+            await self.on_events(events)
+
     async def _quote(self, symbol: str, quote: dict):
-        mode = self.settings.mode
+        mode = "live"
+        if self.settings.mode != mode:
+            return
         old = self.quotes.get((mode, symbol), {})
         value = {**old, **quote}
         try:
@@ -396,8 +998,15 @@ class Monitor:
         value["last"] = last
         try:
             stamp = datetime.fromisoformat(quote["timestamp"])
-            if old.get("timestamp") and stamp < datetime.fromisoformat(old["timestamp"]):
-                return  # Late delivery must not rewind price crossing state or the displayed quote.
+            if old.get("timestamp"):
+                previous = datetime.fromisoformat(old["timestamp"])
+                if stamp < previous:
+                    return  # Late delivery must not rewind price crossing state or the displayed quote.
+                if (
+                    "prev_close" not in quote
+                    and stamp.astimezone(NY).date() != previous.astimezone(NY).date()
+                ):
+                    value.pop("prev_close", None)
             fresh = 0 <= (utcnow() - stamp).total_seconds() <= 120
         except (ValueError, TypeError, KeyError):
             fresh = False
@@ -405,17 +1014,14 @@ class Monitor:
         if not fresh or last is None or str(value.get("trade_status", "normal")).lower() != "normal":
             return
         for allocation in self.portfolio():
-            if allocation.symbol != symbol or not allocation.reconciled:
+            if allocation.symbol != symbol or not allocation.reconciled or "long" not in allocation.sleeves():
                 continue
-            for kind in ["stop", "target"]:
-                level = getattr(allocation, f"{kind}_price")
+            for kind, level in zip(("stop", "target"), allocation.long_levels()):
                 if level is None:
                     continue
-                # User-specified price levels belong to the tactical sleeve on dual-sleeve holdings.
-                sleeve = "short" if "short" in allocation.sleeves() else allocation.sleeves()[0]
                 event = self.engine.price(
                     symbol,
-                    sleeve,
+                    "long",
                     value["last"],
                     level,
                     kind,
@@ -443,10 +1049,7 @@ class Monitor:
         longs = [s for s in self.stocks() if "long" in s["sleeves"]]
         if not longs:
             return
-        lines = [
-            f"{s['symbol']} {s['summaries'].get('day:regular', {}).get('score', None) or '待确认'}"
-            for s in longs
-        ]
+        lines = [f"{s['symbol']} {s['long_plan']['status']}" for s in longs]
         event = EventEngine._event(
             "live",
             "PORTFOLIO",
@@ -491,16 +1094,21 @@ class Monitor:
                         item = self.queue.get_nowait()
                         if item["type"] == "quote":
                             await self._quote(item["symbol"], item["quote"])
-                        elif item["type"] == "bar":
-                            self.store.put_bars("live", item["symbol"], item["timeframe"], [item["bar"]])
-                            await self.on_events(await asyncio.to_thread(self.rebuild, item["symbol"]))
                     await self._closing_digest()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 self.failures += 1
                 self.status = "degraded"
-                self.detail = f"券商连接/权限受限（{type(error).__name__}），正在重连；数据缺口保留在看板"
+                code = getattr(error, "code", None)
+                if code == 401004:
+                    self.detail = "Access Token 验证失败（401004），请核对凭据签发网站及同一账户的应用凭据"
+                elif isinstance(code, int):
+                    self.detail = f"长桥请求失败（错误码 {code}），正在重试"
+                elif isinstance(error, (TypeError, AttributeError, ValueError)):
+                    self.detail = f"本机数据处理出错（{type(error).__name__}），正在重试"
+                else:
+                    self.detail = f"数据同步失败（{type(error).__name__}），正在重试"
                 if self.feed:
                     self.feed.close()
                     self.feed = None

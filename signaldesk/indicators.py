@@ -11,10 +11,10 @@ from ta.trend import MACD, EMAIndicator, SMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 from . import operators as op
-from .calendar import NY, bar_end, latest_expected_end
+from .calendar import NY, bar_end, calendar, latest_expected_end
 from .models import RuleSettings
 
-RULE_VERSION = "fusion-1.0.0"
+RULE_VERSION = "fusion-1.1.0"
 FEATURE_COLUMNS = [
     "ma20",
     "ma50",
@@ -54,16 +54,20 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
         return pd.DataFrame()
     frame = pd.DataFrame(bars).copy()
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-    frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
-    frame = frame[
-        frame["confirmed"] & frame["timestamp"].map(lambda t: bar_end(t.to_pydatetime(), timeframe) <= now)
-    ].reset_index(drop=True)
+    frame = (
+        frame[frame["confirmed"]]
+        .sort_values("timestamp", kind="stable")
+        .drop_duplicates("timestamp", keep="last")
+    )
+    frame = frame[frame["timestamp"].map(lambda t: bar_end(t.to_pydatetime(), timeframe) <= now)].reset_index(
+        drop=True
+    )
     if frame.empty:
         return frame
     invalid = (
         ~np.isfinite(frame[["open", "high", "low", "close", "volume"]]).all(axis=1)
         | (frame["close"] <= 0)
-        | (frame["open"] <= 0)
+        | (frame["low"] <= 0)
         | (frame["volume"] < 0)
         | (frame["high"] < frame[["open", "close", "low"]].max(axis=1))
         | (frame["low"] > frame[["open", "close", "high"]].min(axis=1))
@@ -79,11 +83,14 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
         local = session_frame["timestamp"].dt.tz_convert(NY)
         dates = local.map(lambda t: (t.to_pydatetime() + timedelta(hours=4)).date())
         same_day = dates == dates.shift(1)
-        gaps = (
-            same_day & (session_frame["timestamp"].diff().dt.total_seconds() > 900)
-            if timeframe != "day"
-            else pd.Series(False, index=session_frame.index)
-        )
+        if timeframe == "day":
+            sessions = calendar().sessions
+            days = local.dt.tz_localize(None).dt.normalize()
+            ordinals = pd.Series(sessions.get_indexer(days), index=session_frame.index)
+            valid &= ordinals.ge(0)
+            gaps = ordinals.diff().gt(1)
+        else:
+            gaps = same_day & (session_frame["timestamp"].diff().dt.total_seconds() > 900)
         segments = ((~valid) | gaps).cumsum()
         for _, part in session_frame[valid].groupby(segments[valid]):
             if part.empty:
@@ -165,6 +172,7 @@ def summarize(
         "timeframe": timeframe,
         "session": session,
         "valid": False,
+        "confirmed_price_available": False,
         "score": None,
         "dimensions": {},
         "indicators": {},
@@ -229,6 +237,25 @@ def summarize(
     )
     if not valid:
         state = "unavailable"
+    weights = {
+        "trend": rules.trend_weight,
+        "momentum": rules.momentum_weight,
+        "volume_score": rules.volume_weight,
+    }
+    contributions = {k: dimensions[k] * w for k, w in weights.items() if dimensions[k] is not None}
+    changes = {}
+    if valid and len(part) > 1 and finite(part.iloc[-2]["score"]) is not None:
+        changes = {k: (dimensions[k] - float(part.iloc[-2][k])) * w for k, w in weights.items()}
+    evidence = []
+    if score is not None:
+        evidence = [
+            f"收盘 {price:.2f} / 200期均线 {indicators['ma200']:.2f}；EMA20 {indicators['ema20']:.2f} / EMA50 {indicators['ema50']:.2f}",
+            f"RSI14 {rsi:.1f}（中点50）；MACD柱 {indicators['macd_hist']:+.3f}（基准0）",
+            f"成交量为历史基准的 {indicators['rvol']:.2f} 倍，本期收盘涨跌 {indicators['return_1']:+.2%}",
+        ]
+        for i, value in enumerate(dimensions.values()):
+            direction = "支持走强" if value >= 60 else "支持走弱" if value <= 40 else "未达方向确认阈值"
+            evidence[i] += f"（{direction}）"
     return {
         "timeframe": timeframe,
         "session": session,
@@ -240,19 +267,15 @@ def summarize(
         "state": state,
         "as_of": end.isoformat(),
         "rule_version": RULE_VERSION + "+" + hashlib.sha256(rules.model_dump_json().encode()).hexdigest()[:8],
-        "weights": {
-            "trend": rules.trend_weight,
-            "momentum": rules.momentum_weight,
-            "volume_score": rules.volume_weight,
-        },
+        "weights": weights,
+        "contributions": contributions if valid else {},
+        "contribution_changes": changes,
+        "close": price,
+        "confirmed_price_available": price is not None
+        and (demo or not stale)
+        and status in ["normal", "normaltrade", "normal_trade", ""],
         "opportunity_allowed": valid and liquidity_ok,
-        "evidence": [
-            f"趋势 {dimensions.get('trend') or 0:.1f} ×{rules.trend_weight:.0%}",
-            f"动量 {dimensions.get('momentum') or 0:.1f} ×{rules.momentum_weight:.0%}",
-            f"量价 {dimensions.get('volume_score') or 0:.1f} ×{rules.volume_weight:.0%}",
-        ]
-        if score is not None
-        else [],
+        "evidence": evidence,
     }
 
 
@@ -263,7 +286,10 @@ def chart_rows(frame: pd.DataFrame, session: str, count: int = 220) -> list[dict
     return [
         {
             "timestamp": row["timestamp"].isoformat(),
-            **{k: finite(row[k]) for k in ["open", "close", "low", "high", "volume"] + FEATURE_COLUMNS},
+            **{
+                k: finite(row[k])
+                for k in ["open", "close", "low", "high", "volume", "turnover"] + FEATURE_COLUMNS
+            },
         }
         for _, row in part.iterrows()
     ]

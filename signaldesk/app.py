@@ -28,6 +28,14 @@ def local_origin(origin: str | None, host: str | None) -> bool:
     return parsed.scheme in {"http", "https"} and parsed.netloc == host
 
 
+class FavoriteRequest(BaseModel):
+    favorite: bool
+
+
+class StartupRequest(BaseModel):
+    enabled: bool
+
+
 def create_app(directory: Path | None = None, background: bool = True) -> FastAPI:
     monitor = Monitor(Store(directory or data_directory()))
     token = session_token()
@@ -83,7 +91,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         return await monitor.snapshot()
 
     @app.get("/api/stock/{symbol}")
-    async def stock(symbol: str, timeframe: str = "15m", session: str = "regular"):
+    async def stock(symbol: str, timeframe: str = "day", session: str = "regular"):
         if timeframe not in {"15m", "day"} or session not in {"regular", "pre", "post", "overnight"}:
             raise HTTPException(400, "不支持的周期或时段")
         normalized = Allocation(symbol=symbol).symbol
@@ -106,16 +114,29 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         item = next((a for a in stocks if a.symbol == normalized), None)
         if item and item.broker_quantity > 0:
             raise ValueError("券商持仓不能从监控列表删除，可调整分类和提醒规则")
+        if item and item.in_watchlist:
+            raise ValueError("该股票来自账号自选股单，请在长桥 App 移出自选；或取消本地收藏")
         monitor.store.set(
             f"portfolio:{monitor.settings.mode}", [a.model_dump() for a in stocks if a.symbol != normalized]
         )
         return {"removed": normalized}
+
+    @app.put("/api/favorites/{symbol}")
+    async def favorite_stock(symbol: str, value: FavoriteRequest):
+        normalized = Allocation(symbol=symbol).symbol
+        saved = monitor.set_favorite(normalized, value.favorite)
+        return {"symbol": normalized, "favorite": saved.favorite}
+
+    @app.post("/api/watchlist/sync")
+    async def sync_watchlist():
+        return await monitor.sync_watchlist_now()
 
     @app.get("/api/settings")
     async def settings():
         return {
             "settings": monitor.settings.model_dump(),
             "credentials": {service: monitor.vault.configured(service) for service in ["longport", "qq"]},
+            "broker_platform": monitor.vault.load("longport").get("platform", "longport"),
             "startup": startup.state(),
             "operators": [op.metadata() for op in REGISTRY.values()],
         }
@@ -142,11 +163,10 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         if value.service == "qq":
             monitor.notifications.qq.access_token = ""
             monitor.notifications.qq.expires_at = 0
+        elif monitor.settings.mode == "live":
+            monitor.active_mode = None  # Use the saved gateway and credentials on the next connection.
         monitor.reconnect_at = 0
         return {"configured": True, "service": value.service}
-
-    class StartupRequest(BaseModel):
-        enabled: bool
 
     @app.put("/api/startup")
     async def set_startup(value: StartupRequest):

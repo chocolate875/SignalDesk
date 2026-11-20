@@ -59,8 +59,9 @@ class EventEngine:
             timestamp,
             "fusion_weak" if weak else "fusion_strong",
             "warning" if weak else "info",
-            "融合结构转弱" if weak else "融合结构转强",
-            "至少两个维度同向确认；请复核计划" if weak else "趋势与动量/量价形成共振，等待Codex复核",
+            "技术评分转弱" if weak else "技术评分转强",
+            f"评分 {summary['score']:.1f}，{confirmations} 项因子"
+            + ("降至 40 分及以下" if weak else "达到 60 分及以上"),
             summary["score"],
             summary["evidence"],
             historical,

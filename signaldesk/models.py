@@ -30,7 +30,26 @@ class Allocation(StrictModel):
     stop_price: float | None = Field(default=None, gt=0)
     target_price: float | None = Field(default=None, gt=0)
     watch_only: bool = False
-    watch_sleeve: Sleeve = "short"
+    watch_sleeve: Sleeve = "long"
+    long_stop_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    long_target_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    favorite: bool = False
+    in_watchlist: bool = False
+    watchlist_groups: list[str] = Field(default_factory=list)
+    manual_watch: bool = False
+
+    @model_validator(mode="after")
+    def migrate_levels(self):
+        # Old mixed/short plans belonged to the tactical sleeve; never copy those into a long plan.
+        if self.sleeves() == ["long"]:
+            if "long_stop_price" not in self.model_fields_set:
+                self.long_stop_price = self.stop_price
+            if "long_target_price" not in self.model_fields_set:
+                self.long_target_price = self.target_price
+        return self
+
+    def long_levels(self):
+        return self.long_stop_price, self.long_target_price
 
     @field_validator("symbol")
     @classmethod
@@ -85,7 +104,7 @@ class QQSettings(StrictModel):
 
 class CodexSettings(StrictModel):
     enabled: bool = True
-    automatic: bool = True
+    automatic: bool = False
     daily_limit: int = Field(default=24, ge=0, le=500)
     cooldown_minutes: int = Field(default=30, ge=1, le=1440)
     timeout_seconds: int = Field(default=600, ge=15, le=900)
@@ -95,6 +114,7 @@ class Settings(StrictModel):
     mode: Literal["demo", "live"] = "demo"
     desktop_notifications: bool = True
     pause_ordinary: bool = False
+    sync_watchlist: bool = True
     rules: RuleSettings = Field(default_factory=RuleSettings)
     qq: QQSettings = Field(default_factory=QQSettings)
     codex: CodexSettings = Field(default_factory=CodexSettings)
@@ -102,7 +122,7 @@ class Settings(StrictModel):
 
 class AnalysisResult(StrictModel):
     conclusion: str = Field(max_length=1500)
-    action: Literal["observe", "wait", "review_entry", "review_exit"]
+    action: Literal["observe", "wait", "hold", "review_entry", "review_exit", "review_stop", "review_profit"]
     evidence: list[str] = Field(max_length=12)
     risks: list[str] = Field(max_length=12)
     confirmation_conditions: list[str] = Field(max_length=12)
@@ -111,6 +131,7 @@ class AnalysisResult(StrictModel):
 
 class Credentials(StrictModel):
     service: Literal["longport", "qq"]
+    platform: Literal["longport", "longbridge"] | None = None
     app_key: str = ""
     app_secret: str = ""
     access_token: str = ""
