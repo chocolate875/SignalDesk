@@ -140,6 +140,9 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
     forecast = stock.get("forecast", {})
     rating = forecast.get("rating", {})
     levels = forecast.get("levels", {})
+    wt = stock.get("wave_trend", {})
+    wt_trend = wt.get("trend", {})
+    wt_wave = wt.get("wave", {})
     return {
         "source": mode,
         "symbol": stock["symbol"],
@@ -166,6 +169,27 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
             },
         }
         if forecast
+        else {},
+        "wave_trend": {
+            "available": wt.get("available"),
+            "summary": wt.get("summary"),
+            "trend": {
+                k: wt_trend.get(k)
+                for k in (
+                    "direction",
+                    "label",
+                    "structure",
+                    "channel_position_label",
+                    "breakout_level",
+                    "invalidation_level",
+                )
+            },
+            "wave": {
+                k: wt_wave.get(k)
+                for k in ("pattern", "pattern_label", "current_wave", "phase_label", "confidence")
+            },
+        }
+        if wt
         else {},
         "research": {
             "valuation": {

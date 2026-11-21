@@ -19,6 +19,7 @@ from .providers import LongPortFeed
 from .research import fetch_curve, research_context
 from .security import Vault
 from .storage import Store
+from .wave_trend import compute_wave_trend
 
 
 class Monitor:
@@ -323,6 +324,7 @@ class Monitor:
         }
         verdict = self._build_verdict(allocation, summary, research, long_plan)
         forecast = compute_forecast(frame, summary, research, long_plan)
+        wave_trend = compute_wave_trend(frame, summary)
         result = {
             **allocation.model_dump(),
             "sleeves": allocation.sleeves(),
@@ -335,6 +337,7 @@ class Monitor:
             "long_plan": long_plan,
             "verdict": verdict,
             "forecast": forecast,
+            "wave_trend": wave_trend,
             "weight_percent": (qty * last / net * 100) if last and net else None,
             "pnl_percent": ((last / allocation.cost_price - 1) * 100)
             if last and allocation.cost_price
@@ -504,34 +507,41 @@ class Monitor:
         gap_text = f"股债利差 {gap:+.2f}pp" if gap is not None else ""
         val_brief = f"{pe_text}，{gap_text}" if gap_text else pe_text
 
-        # Deterministic verdict priority 0..9
+        # Deterministic verdict priority 0..9 (plain-language labels + meaning tooltips)
         if in_long and stop is not None and confirmed and close <= stop:
-            action, tone, priority = "复核止损", "danger", 0
+            action, tone, priority = "跌破止损", "danger", 0
+            action_meaning = "最新收盘已跌破您设定的长期止损/失效价，建议立即复核是否止损或减仓"
             headline = f"收盘价 ${close:.2f} 已跌破计划失效价 ${stop:.2f}（{stop_dist:+.1f}%），需立即复核持有逻辑。"
             next_step = f"核对基本面是否恶化；若后续收盘仍未能收回 ${stop:.2f} 上方，按长期计划评估止损或减仓。"
         elif in_long and target is not None and confirmed and close >= target:
-            action, tone, priority = "复核止盈", "warning", 1
+            action, tone, priority = "触及目标", "warning", 1
+            action_meaning = "最新收盘已达到或超过您设定的长期目标价，可评估分批止盈或上移目标"
             headline = f"收盘价 ${close:.2f} 已达到计划目标价 ${target:.2f}（{target_dist:+.1f}%），当前估值 {val_brief}。"
             next_step = "评估是否分批兑现收益；若继续看好长期成长，可在「编辑计划」上移目标价与保护线。"
         elif not allocation.reconciled:
-            action, tone, priority = "核对持仓", "warning", 2
+            action, tone, priority = "仓位待核", "warning", 2
+            action_meaning = "券商实际持仓股数与本地分配的长期/其他股数合计不一致"
             headline = f"券商持仓 {allocation.broker_quantity:g} 股与本地长期/其他分配合计不一致，暂不出具仓位判断。"
             next_step = "点击「编辑计划」调整长期底仓股数，使合计等于券商持仓。"
         elif not in_long:
             action, tone, priority = "未入长期", "muted", 9
+            action_meaning = "该持仓尚未划入长期底仓计划，仅保留持仓股数核对"
             headline = "该持仓未划入长期底仓计划，仅保留数量核对。"
             next_step = "如需纳入长期跟踪，请在「编辑计划」中为其分配长期数量。"
         elif val_fresh and pe is not None and pe <= 0:
-            action, tone, priority = "复核盈利", "danger", 3
-            headline = f"滚动市盈率为负（PE {pe:.1f}x），公司当前盈利承压，长期安全边际需重新确认。"
+            action, tone, priority = "亏损警示", "danger", 3
+            action_meaning = "滚动市盈率 PE ≤ 0，说明公司当前处于亏损或估值异常，暂不建议盲目买入"
+            headline = f"滚动市盈率为负（PE {pe:.1f}x），公司当前盈利承压或估值异常，长期安全边际需重新确认。"
             next_step = "复核最新财报与现金流状况，并确认当前失效价保护是否充足。"
         elif not confirmed or not valid or score is None:
-            action, tone, priority = "等待行情", "muted", 9
+            action, tone, priority = "数据不足", "muted", 9
+            action_meaning = "已确认日线样本不足 200 根或最新收盘待确认，暂无法给出强弱判断"
             reason = risks[0] if risks else "等待日线历史补齐或常规收盘确认"
             headline = f"有效日线或指标窗口尚未完成（{reason}），暂不给出强弱结论。"
             next_step = "待交易日收盘确认且指标预热完成后，系统将自动刷新技术结构与计划价距离。"
         elif held and (state == "weak" or len(risks) >= 2):
-            action, tone, priority = "谨慎持有", "warning", 4
+            action, tone, priority = "转弱警惕", "warning", 4
+            action_meaning = "持仓股当前日线结构走弱或技术风险提示较多，需关注回撤防守"
             risk_brief = "；".join(risks[:2]) if risks else f"日线评分 {score:.1f} 分偏弱"
             headline = f"日线评分 {score:.1f} 分，需关注：{risk_brief}（{val_brief}）。"
             next_step = (
@@ -540,7 +550,8 @@ class Monitor:
                 else "建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。"
             )
         elif watch_only and state == "strong" and not risks:
-            action, tone, priority = "重点观察", "positive", 5
+            action, tone, priority = "关注买点", "positive", 5
+            action_meaning = "观察股日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
             headline = f"日线评分 {score:.1f} 分（结构偏强），无额外技术风险，当前 {val_brief}。"
             next_step = (
                 f"结合基本面与资金节奏，对照预设观察价（目标 ${target:.2f}）评估是否建仓。"
@@ -548,7 +559,8 @@ class Monitor:
                 else "可结合估值水平设定目标入场或观察价位，或点击生成 Codex 总结作进一步复核。"
             )
         elif held and state == "strong" and not risks:
-            action, tone, priority = "偏强持有", "positive", 6
+            action, tone, priority = "趋势向好", "positive", 6
+            action_meaning = "持仓股处于上升趋势且无明显技术风险，可顺势持有跟踪"
             headline = f"日线评分 {score:.1f} 分（结构偏强），趋势与动能健康，当前 {val_brief}。"
             next_step = (
                 f"继续按长期计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。"
@@ -556,7 +568,8 @@ class Monitor:
                 else "趋势结构良好，可继续持有并定期检查估值与国债利率变化。"
             )
         elif held:
-            action, tone, priority = "正常持有", "neutral", 7
+            action, tone, priority = "持有观察", "neutral", 7
+            action_meaning = "持仓股日线结构中性平稳，继续按既定计划跟踪即可"
             extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
             headline = f"日线评分 {score:.1f} 分，{extra}，当前 {val_brief}。"
             next_step = (
@@ -566,16 +579,19 @@ class Monitor:
             )
         else:
             if state == "weak":
-                action, tone, priority = "暂缓观察", "warning", 8
+                action, tone, priority = "弱势观望", "warning", 8
+                action_meaning = "观察股当前日线走弱或处于空头区，暂不急于介入"
                 headline = f"观察标的日线评分 {score:.1f} 分偏弱，暂不急于介入（{val_brief}）。"
                 next_step = "等待日线重新站稳均线且评分回升至中性以上后再跟踪。"
             else:
-                action, tone, priority = "继续观察", "neutral", 8
+                action, tone, priority = "震荡观望", "neutral", 8
+                action_meaning = "观察股走势中性震荡，等待趋势方向或回踩买点更清晰"
                 headline = f"观察标的日线评分 {score:.1f} 分，整体平稳（{val_brief}）。"
                 next_step = "持续跟踪后续收盘评分变化及估值性价比；需要时可手动触发 Codex 总结。"
 
         return {
             "action": action,
+            "action_meaning": action_meaning,
             "tone": tone,
             "priority": priority,
             "headline": headline,

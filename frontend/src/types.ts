@@ -25,6 +25,7 @@ export type VerdictPillar = {
 };
 export type Verdict = {
   action: string;
+  action_meaning?: string;
   tone: "danger" | "warning" | "positive" | "neutral" | "muted" | string;
   priority: number;
   headline: string;
@@ -113,7 +114,67 @@ export type Stock = {
   };
   verdict?: Verdict;
   forecast?: StockForecast;
+  wave_trend?: WaveTrend;
   summaries: Record<string, Summary>;
+};
+export type WavePivot = {
+  date: string;
+  price: number;
+  kind: "H" | "L" | string;
+  structure: "HH" | "HL" | "LH" | "LL" | "H" | "L" | string;
+  wave_label: string;
+  confirmed: boolean;
+};
+export type WaveFibTarget = {
+  label: string;
+  price: number;
+  ratio: number;
+};
+export type TrendChannel = {
+  available: boolean;
+  window?: number;
+  start_date?: string;
+  end_date?: string;
+  start_upper?: number;
+  end_upper?: number;
+  start_mid?: number;
+  end_mid?: number;
+  start_lower?: number;
+  end_lower?: number;
+  slope_pct_per_20d?: number;
+  position_pct?: number;
+};
+export type WaveTrend = {
+  available: boolean;
+  reason: string;
+  summary: string;
+  action_guide: string;
+  trend: {
+    direction: "uptrend" | "downtrend" | "sideways" | "unavailable" | string;
+    label: string;
+    tone: "danger" | "warning" | "positive" | "neutral" | "muted" | string;
+    structure: string;
+    structure_code: string;
+    ma_alignment: string;
+    slope_pct_per_20d: number | null;
+    channel_position_pct: number | null;
+    channel_position_label: string;
+    breakout_level: number | null;
+    invalidation_level: number | null;
+    channel: TrendChannel;
+  };
+  wave: {
+    pattern: "impulse_up" | "impulse_down" | "correction_abc" | "consolidating" | "unavailable" | string;
+    pattern_label: string;
+    current_wave: string;
+    phase_label: string;
+    tone: "danger" | "warning" | "positive" | "neutral" | "muted" | string;
+    confidence: string;
+    rules_passed: string[];
+    fib_targets: WaveFibTarget[];
+    pivots: WavePivot[];
+  };
+  disclaimer: string;
 };
 export type RatingFactor = {
   key: string;

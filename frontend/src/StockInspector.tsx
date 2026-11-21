@@ -349,6 +349,135 @@ function ForecastCard({
   );
 }
 
+const STRUCTURE_CN: Record<string, string> = {
+  HH: "高点抬高",
+  HL: "低点抬高",
+  LH: "高点降低",
+  LL: "低点降低",
+};
+
+function WaveTrendCard({ stock }: { stock: Stock }) {
+  const wt = stock.wave_trend;
+  if (!wt) return null;
+  const trend = wt.trend;
+  const wave = wt.wave;
+
+  return (
+    <section className="insp-card wave-trend-card">
+      <div className="insp-card-head">
+        <h3>波浪与趋势结构</h3>
+        <span className={`verdict-chip tone-${trend.tone}`}>
+          {trend.label}
+        </span>
+      </div>
+
+      {!wt.available ? (
+        <div className="forecast-unavail">
+          <p>{wt.reason || wt.summary}</p>
+        </div>
+      ) : (
+        <>
+          <div className="wt-grid">
+            <div className="wt-cell">
+              <small>波浪定位 · 置信度{wave.confidence}</small>
+              <strong className={`tone-text-${wave.tone}`}>
+                {wave.pattern_label}
+              </strong>
+              <span>{wave.current_wave}</span>
+            </div>
+            <div className="wt-cell">
+              <small>趋势通道位置</small>
+              <strong>{trend.channel_position_label}</strong>
+              <span>
+                {trend.channel_position_pct != null
+                  ? `通道分位 ${fmt(trend.channel_position_pct, 0)}%`
+                  : trend.structure}
+                {trend.slope_pct_per_20d != null
+                  ? ` · 20日斜率 ${trend.slope_pct_per_20d >= 0 ? "+" : ""}${fmt(trend.slope_pct_per_20d, 1)}%`
+                  : ""}
+              </span>
+            </div>
+          </div>
+
+          <p className="wt-phase-note">{wave.phase_label}</p>
+
+          <div className="wt-levels-row">
+            <div title="最近已确认摆动高点，放量突破可确认多头延续">
+              <small>突破确认</small>
+              <b>
+                {trend.breakout_level != null
+                  ? `$${fmt(trend.breakout_level, 2)}`
+                  : "—"}
+              </b>
+            </div>
+            <div
+              title={
+                trend.direction === "downtrend"
+                  ? "下降趋势前高阻力，有效站上方可看空头反转"
+                  : "上升/震荡结构前低防守位，跌破需警惕趋势破坏"
+              }
+            >
+              <small>
+                {trend.direction === "downtrend" ? "反转阻力" : "结构防守"}
+              </small>
+              <b
+                className={
+                  trend.direction === "downtrend" ? "accent-val" : "down"
+                }
+              >
+                {trend.invalidation_level != null
+                  ? `$${fmt(trend.invalidation_level, 2)}`
+                  : "—"}
+              </b>
+            </div>
+          </div>
+
+          <div className="wt-meta-lines">
+            <div>
+              <b>道氏结构：</b>
+              <span>
+                {trend.structure}
+                {trend.structure_code && trend.structure_code !== "待确认"
+                  ? `（${trend.structure_code
+                      .split(" → ")
+                      .map((c) => STRUCTURE_CN[c] ?? c)
+                      .join(" → ")}）`
+                  : ""}
+              </span>
+            </div>
+            <div>
+              <b>均线排列：</b>
+              <span>{trend.ma_alignment}</span>
+            </div>
+            {wave.fib_targets.length > 0 && (
+              <div>
+                <b>波浪测算：</b>
+                <span>
+                  {wave.fib_targets
+                    .map((t) => `${t.label} $${fmt(t.price, 2)}`)
+                    .join(" · ")}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="wt-guide">{wt.action_guide}</div>
+
+          {wave.rules_passed.length > 0 && (
+            <div className="wt-rules">
+              {wave.rules_passed.map((r, i) => (
+                <span key={i}>✓ {r}</span>
+              ))}
+            </div>
+          )}
+
+          <p className="forecast-disclaimer">{wt.disclaimer}</p>
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function StockInspector({
   tab,
   onTabChange,
@@ -446,6 +575,8 @@ export default function StockInspector({
               stock={stock}
               onApplyForecastLevels={onApplyForecastLevels}
             />
+
+            <WaveTrendCard stock={stock} />
 
             <PlanRangeBar stock={stock} onEditPlan={onEditPlan} />
 

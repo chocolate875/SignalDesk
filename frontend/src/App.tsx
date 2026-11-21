@@ -714,7 +714,10 @@ export default function App() {
                       )}
                       {(() => {
                         const groups = stock.watchlist_groups ?? [];
-                        const maxGroups = stock.broker_quantity > 0 ? 1 : 2;
+                        const maxGroups =
+                          stock.broker_quantity > 0 || stock.pnl_percent != null
+                            ? 1
+                            : 2;
                         const shown = groups.slice(0, maxGroups);
                         const hiddenCount = groups.length - shown.length;
                         return (
@@ -789,7 +792,10 @@ export default function App() {
                 <div className={`verdict-banner tone-${verdict.tone}`}>
                   <div className="verdict-main">
                     <div className="verdict-badges">
-                      <span className={`verdict-badge tone-${verdict.tone}`}>
+                      <span
+                        className={`verdict-badge tone-${verdict.tone}`}
+                        title={verdict.action_meaning || verdict.headline}
+                      >
                         {verdict.action}
                       </span>
                       {stock.forecast?.rating.available && (

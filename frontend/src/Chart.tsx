@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts/core";
-import { CandlestickChart, LineChart, BarChart } from "echarts/charts";
+import {
+  CandlestickChart,
+  LineChart,
+  BarChart,
+  ScatterChart,
+} from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
@@ -10,13 +15,14 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { Maximize2, Minimize2 } from "lucide-react";
-import type { ChartRow, Detail } from "./types";
+import type { ChartRow, Detail, WavePivot } from "./types";
 import { fmt, ticker, time } from "./types";
 
 echarts.use([
   CandlestickChart,
   LineChart,
   BarChart,
+  ScatterChart,
   GridComponent,
   TooltipComponent,
   DataZoomComponent,
@@ -166,9 +172,10 @@ export default function Chart({
   const hoverSetter = useRef<(idx: number | null) => void>(() => {});
   const [overlay, setOverlay] = useState<OverlayMode>("MA");
   const [showMacd, setShowMacd] = useState(true);
-  const [showRsi, setShowRsi] = useState(true);
+  const [showRsi, setShowRsi] = useState(false);
   const [showCost, setShowCost] = useState(true);
   const [showForecast, setShowForecast] = useState(true);
+  const [showWaveTrend, setShowWaveTrend] = useState(true);
   const [activeRange, setActiveRange] = useState<number>(252);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -307,20 +314,20 @@ export default function Chart({
     const panes: PaneSpec[] =
       showMacd && showRsi
         ? [
-            { kind: "price", top: 24, height: "47%" },
+            { kind: "price", top: 32, height: "45%" },
             { kind: "vol", top: "55%", height: "10%" },
             { kind: "macd", top: "69%", height: "12%" },
             { kind: "rsi", top: "84%", height: "10%" },
           ]
         : showMacd || showRsi
           ? [
-              { kind: "price", top: 24, height: "57%" },
-              { kind: "vol", top: "64%", height: "12%" },
-              { kind: showMacd ? "macd" : "rsi", top: "79%", height: "15%" },
+              { kind: "price", top: 32, height: "58%" },
+              { kind: "vol", top: "68%", height: "11%" },
+              { kind: showMacd ? "macd" : "rsi", top: "82%", height: "14%" },
             ]
           : [
-              { kind: "price", top: 24, height: "72%" },
-              { kind: "vol", top: "79%", height: "15%" },
+              { kind: "price", top: 32, height: "72%" },
+              { kind: "vol", top: "81%", height: "14%" },
             ];
 
     const paneIndex = (kind: PaneSpec["kind"]) =>
@@ -358,7 +365,7 @@ export default function Chart({
         name: `${label} $${fmt(price, 2)}`,
         yAxis: price,
         lineStyle: { color, width: 1.5, type: "dashed" },
-        label: { position: "insideStartTop" },
+        label: { position: "insideMiddleTop" },
       }));
 
     const fl = detail.stock.forecast?.levels;
@@ -368,18 +375,18 @@ export default function Chart({
     const forecastLines =
       showForecast && fl?.available
         ? [
-            { label: "参考买点", price: fl.buy_high, color: forecastBuyColor },
-            { label: "深度买点", price: fl.buy_low, color: forecastBuyColor },
-            { label: "参考卖点", price: fl.sell_low, color: forecastSellColor },
-            { label: "目标卖点", price: fl.sell_high, color: forecastSellColor },
-            { label: "参考止损", price: fl.stop_loss, color: forecastStopColor },
+            { label: "参考买点", price: fl.buy_high, color: forecastBuyColor, showLabel: true },
+            { label: "深度买点", price: fl.buy_low, color: forecastBuyColor, showLabel: false },
+            { label: "参考卖点", price: fl.sell_low, color: forecastSellColor, showLabel: true },
+            { label: "目标卖点", price: fl.sell_high, color: forecastSellColor, showLabel: true },
+            { label: "参考止损", price: fl.stop_loss, color: forecastStopColor, showLabel: true },
           ]
             .filter(({ price }) => price != null)
-            .map(({ label, price, color }) => ({
+            .map(({ label, price, color, showLabel }) => ({
               name: `${label} $${fmt(price, 2)}`,
               yAxis: price,
               lineStyle: { color, width: 1.2, type: "dotted", opacity: 0.85 },
-              label: { position: "insideEndTop" },
+              label: { show: showLabel, position: "insideStartTop" },
             }))
         : [];
 
@@ -438,6 +445,251 @@ export default function Chart({
       },
     ];
 
+    // Elliott Wave & Parallel Trend Channel overlay (strictly causal backend coordinates)
+    const wt = detail.stock.wave_trend;
+    const pivotByIndex = new Map<number, WavePivot>();
+    if (showWaveTrend && wt?.available) {
+      const ch = wt.trend.channel;
+      if (ch?.available && ch.start_date && ch.end_date) {
+        const sIdx = dates.indexOf(ch.start_date);
+        const eIdx = dates.indexOf(ch.end_date);
+        if (
+          sIdx >= 0 &&
+          eIdx > sIdx &&
+          ch.start_upper != null &&
+          ch.end_upper != null &&
+          ch.start_mid != null &&
+          ch.end_mid != null &&
+          ch.start_lower != null &&
+          ch.end_lower != null
+        ) {
+          const span = eIdx - sIdx;
+          const upperArr: (number | null)[] = new Array(rows.length).fill(null);
+          const midArr: (number | null)[] = new Array(rows.length).fill(null);
+          const lowerArr: (number | null)[] = new Array(rows.length).fill(null);
+          for (let i = sIdx; i <= eIdx; i++) {
+            const t = (i - sIdx) / span;
+            upperArr[i] = Number(
+              (ch.start_upper + (ch.end_upper - ch.start_upper) * t).toFixed(2),
+            );
+            midArr[i] = Number(
+              (ch.start_mid + (ch.end_mid - ch.start_mid) * t).toFixed(2),
+            );
+            lowerArr[i] = Number(
+              (ch.start_lower + (ch.end_lower - ch.start_lower) * t).toFixed(2),
+            );
+          }
+          const channelColor =
+            wt.trend.direction === "uptrend"
+              ? dark
+                ? "#34d399"
+                : "#10b981"
+              : wt.trend.direction === "downtrend"
+                ? dark
+                  ? "#ef5f6c"
+                  : "#dc2626"
+                : dark
+                  ? "#60a5fa"
+                  : "#3b82f6";
+          series.push(
+            {
+              id: "trend-channel-upper",
+              name: "通道上轨",
+              type: "line",
+              xAxisIndex: 0,
+              yAxisIndex: 0,
+              data: upperArr,
+              symbol: "none",
+              silent: true,
+              lineStyle: {
+                width: 1.3,
+                type: "dashed",
+                color: channelColor,
+                opacity: 0.72,
+              },
+              animation: false,
+            },
+            {
+              id: "trend-channel-mid",
+              name: "通道中轨",
+              type: "line",
+              xAxisIndex: 0,
+              yAxisIndex: 0,
+              data: midArr,
+              symbol: "none",
+              silent: true,
+              lineStyle: {
+                width: 1,
+                type: "dotted",
+                color: channelColor,
+                opacity: 0.52,
+              },
+              animation: false,
+            },
+            {
+              id: "trend-channel-lower",
+              name: "通道下轨",
+              type: "line",
+              xAxisIndex: 0,
+              yAxisIndex: 0,
+              data: lowerArr,
+              symbol: "none",
+              silent: true,
+              lineStyle: {
+                width: 1.3,
+                type: "dashed",
+                color: channelColor,
+                opacity: 0.72,
+              },
+              animation: false,
+            },
+          );
+        }
+      }
+
+      const mappedPivots = (wt.wave.pivots ?? [])
+        .map((p) => ({ idx: dates.indexOf(p.date), pivot: p }))
+        .filter((item) => item.idx >= 0);
+
+      for (const item of mappedPivots) {
+        pivotByIndex.set(item.idx, item.pivot);
+      }
+
+      if (mappedPivots.length >= 2) {
+        const waveColor = dark ? "#60a5fa" : "#1e40af";
+        const confirmedArr: (number | null)[] = new Array(rows.length).fill(null);
+        const confirmedPoints = mappedPivots.filter((m) => m.pivot.confirmed);
+        for (const m of confirmedPoints) {
+          confirmedArr[m.idx] = m.pivot.price;
+        }
+        if (confirmedPoints.length >= 2) {
+          series.push({
+            id: "wave-confirmed",
+            name: "已确认波浪",
+            type: "line",
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            data: confirmedArr,
+            symbol: "none",
+            connectNulls: true,
+            silent: true,
+            z: 4,
+            lineStyle: { width: 1.9, color: waveColor, opacity: 0.82 },
+            animation: false,
+          });
+        }
+
+        const lastM = mappedPivots[mappedPivots.length - 1];
+        const prevM = mappedPivots[mappedPivots.length - 2];
+        if (!lastM.pivot.confirmed && prevM) {
+          const formingArr: (number | null)[] = new Array(rows.length).fill(null);
+          formingArr[prevM.idx] = prevM.pivot.price;
+          formingArr[lastM.idx] = lastM.pivot.price;
+          series.push({
+            id: "wave-forming",
+            name: "进行中波段",
+            type: "line",
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            data: formingArr,
+            symbol: "none",
+            connectNulls: true,
+            silent: true,
+            z: 4,
+            lineStyle: {
+              width: 1.7,
+              type: "dashed",
+              color: waveColor,
+              opacity: 0.72,
+            },
+            animation: false,
+          });
+        }
+
+        const shortStruct: Record<string, string> = {
+          HH: "高抬",
+          HL: "低抬",
+          LH: "高低",
+          LL: "低低",
+          H: "高",
+          L: "低",
+        };
+        const formatPivotBadge = (p: WavePivot) => {
+          const suffix = p.confirmed ? "" : "*";
+          if (p.wave_label) {
+            if (p.wave_label === "0") return "起";
+            return `${p.wave_label}浪${suffix}`;
+          }
+          return `${shortStruct[p.structure] ?? p.structure}${suffix}`;
+        };
+
+        const hasAnyWave = mappedPivots.some((m) => Boolean(m.pivot.wave_label));
+        const structCutoff = Math.max(0, mappedPivots.length - (hasAnyWave ? 3 : 5));
+        const scatterData = mappedPivots.map(({ idx, pivot }, mIdx) => {
+          const hasWave = Boolean(pivot.wave_label);
+          const showLabel = hasWave || mIdx >= structCutoff;
+          const isHigh = pivot.kind === "H";
+          const accent = hasWave
+            ? wt.wave.pattern === "impulse_down"
+              ? dark
+                ? "#ef5f6c"
+                : "#dc2626"
+              : wt.wave.pattern === "correction_abc"
+                ? dark
+                  ? "#fbbf24"
+                  : "#d97706"
+                : dark
+                  ? "#60a5fa"
+                  : "#1e40af"
+            : dark
+              ? "#94a3b8"
+              : "#64748b";
+          return {
+            value: [idx, pivot.price],
+            symbolSize: hasWave ? 7 : 4,
+            itemStyle: {
+              color: hasWave ? accent : dark ? "#1e293b" : "#ffffff",
+              borderColor: accent,
+              borderWidth: hasWave ? 1.5 : 1.2,
+            },
+            label: {
+              show: showLabel,
+              position: isHigh ? "top" : "bottom",
+              distance: 5,
+              formatter: formatPivotBadge(pivot),
+              fontSize: 12,
+              fontWeight: hasWave ? 700 : 500,
+              color: hasWave ? accent : dark ? "#cbd5e1" : "#475569",
+              backgroundColor: dark
+                ? hasWave
+                  ? "#111720ee"
+                  : "#111720cc"
+                : hasWave
+                  ? "#fffffff2"
+                  : "#f8fafce6",
+              borderColor: hasWave ? accent : gridColor,
+              borderWidth: 1,
+              borderRadius: 999,
+              padding: [1, 6],
+            },
+          };
+        });
+
+        series.push({
+          id: "wave-pivots",
+          name: "波浪拐点",
+          type: "scatter",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          z: 6,
+          data: scatterData,
+          labelLayout: { hideOverlap: true },
+          silent: true,
+          animation: false,
+        });
+      }
+    }
+
     if (macdIdx >= 0) {
       series.push(
         {
@@ -469,6 +721,15 @@ export default function Chart({
       });
     }
 
+    const structFull: Record<string, string> = {
+      HH: "高点抬高 HH",
+      HL: "低点抬高 HL",
+      LH: "高点降低 LH",
+      LL: "低点降低 LL",
+      H: "阶段高点",
+      L: "阶段低点",
+    };
+
     const option: any = {
       animation: false,
       backgroundColor: "transparent",
@@ -488,12 +749,25 @@ export default function Chart({
           if (!row) return "";
           const value = (field: string, digits = 2) =>
             fmt(row[field] == null ? null : Number(row[field]), digits);
-          return [
+          const lines = [
             `<b>${dates[i]}</b> · 纽约收盘`,
             `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · 收 ${value("close")}`,
             `成交量 ${formatVolume(row.volume as number)} · 成交额 $${formatVolume(row.turnover as number)}`,
             `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
-          ].join("<br>");
+          ];
+          const pv = pivotByIndex.get(i);
+          if (pv) {
+            const wText = pv.wave_label
+              ? pv.wave_label === "0"
+                ? "波浪起点"
+                : `第 ${pv.wave_label} 浪`
+              : "波段拐点";
+            const stateText = pv.confirmed ? "已确认" : "进行中";
+            lines.push(
+              `<b>${wText}</b> · ${structFull[pv.structure] ?? pv.structure} · $${fmt(pv.price, 2)}（${stateText}）`,
+            );
+          }
+          return lines.join("<br>");
         },
         backgroundColor: dark ? "#16212f" : "#ffffff",
         borderColor: gridColor,
@@ -534,6 +808,7 @@ export default function Chart({
         gridIndex: i,
         position: "right",
         splitNumber: p.kind === "price" ? 5 : 2,
+        boundaryGap: p.kind === "price" ? ["10%", "12%"] : undefined,
         min: p.kind === "rsi" ? 0 : undefined,
         max: p.kind === "rsi" ? 100 : undefined,
         splitLine: {
@@ -564,32 +839,46 @@ export default function Chart({
       series,
     };
     instance.setOption(option, { notMerge: true });
-  }, [detail, dates, overlay, showMacd, showRsi, showCost, showForecast, theme, reverse]);
+  }, [
+    detail,
+    dates,
+    overlay,
+    showMacd,
+    showRsi,
+    showCost,
+    showForecast,
+    showWaveTrend,
+    theme,
+    reverse,
+  ]);
 
   const paneTitles = useMemo(() => {
     if (showMacd && showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "4px" },
-        { label: "成交量 / 股", top: "51.5%" },
-        { label: "MACD (12, 26, 9)", top: "65.5%" },
-        { label: "RSI (14)", top: "80.5%" },
+        { label: "日线价格 / 美元", top: "4px", isPrice: true },
+        { label: "成交量 / 股", top: "51.5%", isPrice: false },
+        { label: "MACD (12, 26, 9)", top: "65.5%", isPrice: false },
+        { label: "RSI (14)", top: "80.5%", isPrice: false },
       ];
     }
     if (showMacd || showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "4px" },
-        { label: "成交量 / 股", top: "60.5%" },
+        { label: "日线价格 / 美元", top: "4px", isPrice: true },
+        { label: "成交量 / 股", top: "64.5%", isPrice: false },
         {
           label: showMacd ? "MACD (12, 26, 9)" : "RSI (14)",
-          top: "75.5%",
+          top: "78.5%",
+          isPrice: false,
         },
       ];
     }
     return [
-      { label: "日线价格 / 美元", top: "4px" },
-      { label: "成交量 / 股", top: "75.5%" },
+      { label: "日线价格 / 美元", top: "4px", isPrice: true },
+      { label: "成交量 / 股", top: "77.5%", isPrice: false },
     ];
   }, [showMacd, showRsi]);
+
+  const activeWaveTrend = detail?.stock.wave_trend;
 
   const zoomTo = (countLimit: number) => {
     const count = detail?.rows.length ?? 0;
@@ -674,7 +963,7 @@ export default function Chart({
             type="button"
             className={showRsi ? "active" : ""}
             onClick={() => setShowRsi(!showRsi)}
-            title="显示或隐藏 RSI 副图"
+            title="显示或隐藏 RSI 副图（默认关闭，留出更大主图视野）"
           >
             RSI
           </button>
@@ -697,6 +986,16 @@ export default function Chart({
               title="显示/隐藏预测买卖点参考线"
             >
               点位
+            </button>
+          )}
+          {activeWaveTrend?.available && (
+            <button
+              type="button"
+              className={showWaveTrend ? "active" : ""}
+              onClick={() => setShowWaveTrend(!showWaveTrend)}
+              title="显示/隐藏波浪标号（1-5 / A-C / 高低结构）与趋势通道"
+            >
+              波浪
             </button>
           )}
         </div>
@@ -726,11 +1025,33 @@ export default function Chart({
 
       <div className="chart-plot">
         <div className="chart-labels">
-          {paneTitles.map((p) => (
-            <span key={p.label} style={{ top: p.top }}>
-              {p.label}
-            </span>
-          ))}
+          {paneTitles.map((p) =>
+            p.isPrice ? (
+              <div
+                key={p.label}
+                className="chart-price-head"
+                style={{ top: p.top }}
+              >
+                <span>{p.label}</span>
+                {showWaveTrend && activeWaveTrend?.available && (
+                  <em
+                    className={`chart-wt-pill tone-${activeWaveTrend.trend.tone}`}
+                  >
+                    {activeWaveTrend.trend.label} ·{" "}
+                    {activeWaveTrend.wave.current_wave} ·{" "}
+                    {activeWaveTrend.trend.channel_position_label}
+                    {activeWaveTrend.trend.invalidation_level != null
+                      ? ` · 防守 $${fmt(activeWaveTrend.trend.invalidation_level, 2)}`
+                      : ""}
+                  </em>
+                )}
+              </div>
+            ) : (
+              <span key={p.label} style={{ top: p.top }}>
+                {p.label}
+              </span>
+            ),
+          )}
         </div>
         <div
           ref={root}

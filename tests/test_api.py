@@ -129,9 +129,14 @@ def test_forecast_levels_rating_and_safe_snapshot_privacy(client):
             < lv["sell_high"]
         )
         assert rt["code"] in {"strong_buy", "buy", "hold", "reduce", "sell"}
+        wt = stock["wave_trend"]
+        assert wt["available"] is True
+        assert wt["trend"]["direction"] in {"uptrend", "downtrend", "sideways"}
+        assert wt["trend"]["channel"]["available"] is True
 
     preview = client.get("/api/analysis/preview/NVDA.US").json()
     assert "forecast" in preview
+    assert "wave_trend" in preview and preview["wave_trend"]["available"] is True
     assert preview["forecast"]["rating"]["code"] in {"strong_buy", "buy", "hold", "reduce", "sell"}
     assert "broker_quantity" not in str(preview)
     assert "cost_price" not in str(preview)

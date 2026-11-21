@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import {
+  HelpCircle,
+  ListFilter,
   Plus,
   RefreshCw,
   Search,
   Star,
-  ListFilter,
+  X,
 } from "lucide-react";
 import {
   fmt,
@@ -17,6 +19,15 @@ import {
 
 type RailTab = "all" | "favorite" | "held" | "watchlist";
 type SortMode = "plan" | "rating" | "favorite" | "change" | "score" | "risk";
+
+const LABEL_LEGEND: { label: string; tone: string; desc: string }[] = [
+  { label: "跌破止损", tone: "danger", desc: "收盘价已低于您设定的止损/失效价" },
+  { label: "亏损警示", tone: "danger", desc: "滚动市盈率 PE ≤ 0（亏损或估值异常）" },
+  { label: "触及目标", tone: "warning", desc: "收盘价已达目标价，可评估分批止盈" },
+  { label: "弱势观望 / 转弱警惕", tone: "warning", desc: "日线结构偏弱或技术风险提示较多" },
+  { label: "关注买点 / 趋势向好", tone: "positive", desc: "日线处于上升偏强结构且风险较少" },
+  { label: "震荡观望 / 持有观察", tone: "neutral", desc: "日线走势中性平稳，继续跟踪方向" },
+];
 
 export default function WatchlistRail({
   allStocks,
@@ -47,6 +58,7 @@ export default function WatchlistRail({
   const [selectedGroup, setSelectedGroup] = useState<string>("__all__");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("plan");
+  const [showLegend, setShowLegend] = useState(false);
 
   const counts = useMemo(
     () => ({
@@ -111,21 +123,6 @@ export default function WatchlistRail({
       return b.broker_quantity - a.broker_quantity;
     });
   }, [allStocks, tab, currentGroup, query, sort]);
-
-  const sourceTag = (s: Stock) => {
-    if (s.broker_quantity > 0) {
-      if (!s.reconciled) return "数量待核对";
-      return s.weight_percent != null
-        ? `持仓 ${fmt(s.weight_percent, 1)}%`
-        : "持仓";
-    }
-    if (s.in_watchlist) {
-      return s.watchlist_groups?.length
-        ? `自选·${s.watchlist_groups[0]}`
-        : "账号自选";
-    }
-    return "本地观察";
-  };
 
   return (
     <aside className="rail-panel" id="holdings" aria-label="行情与自选列表">
@@ -207,7 +204,20 @@ export default function WatchlistRail({
       )}
 
       <div className="rail-subbar">
-        <span className="rail-count">共 {visibleStocks.length} 只</span>
+        <div className="rail-subbar-left">
+          <span className="rail-count">共 {visibleStocks.length} 只</span>
+          <button
+            type="button"
+            className={`legend-help-btn ${showLegend ? "active" : ""}`}
+            onClick={() => setShowLegend((v) => !v)}
+            title="查看状态标签含义"
+            aria-label="查看状态标签含义"
+            aria-expanded={showLegend}
+          >
+            <HelpCircle size={13} />
+            <span>标签说明</span>
+          </button>
+        </div>
         <label className="rail-sort">
           <ListFilter size={14} />
           <select
@@ -224,6 +234,32 @@ export default function WatchlistRail({
           </select>
         </label>
       </div>
+
+      {showLegend && (
+        <div className="rail-legend-card" role="region" aria-label="状态标签含义说明">
+          <div className="rail-legend-head">
+            <b>状态标签含义（鼠标悬停各股可看具体原因）</b>
+            <button
+              type="button"
+              className="legend-close-btn"
+              onClick={() => setShowLegend(false)}
+              aria-label="关闭说明"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <ul className="rail-legend-list">
+            {LABEL_LEGEND.map((item) => (
+              <li key={item.label}>
+                <span className={`verdict-chip tone-${item.tone}`}>
+                  {item.label}
+                </span>
+                <span>{item.desc}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {(watchlistSync?.error ||
         (mode === "live" &&
@@ -253,6 +289,8 @@ export default function WatchlistRail({
           const isSelected = selected === s.symbol;
           const tone = s.verdict?.tone ?? "muted";
           const actionText = s.verdict?.action ?? s.long_plan.status;
+          const actionTip =
+            s.verdict?.action_meaning || s.verdict?.headline || actionText;
           const changeClass =
             s.change_percent == null
               ? "muted"
@@ -296,7 +334,10 @@ export default function WatchlistRail({
                     />
                   </button>
                   <b className="stock-row-ticker">{ticker(s.symbol)}</b>
-                  <span className={`verdict-chip tone-${tone}`}>
+                  <span
+                    className={`verdict-chip tone-${tone}`}
+                    title={`${actionText}：${actionTip}`}
+                  >
                     {actionText}
                   </span>
                 </div>
@@ -307,10 +348,9 @@ export default function WatchlistRail({
 
               <div className="stock-row-line2">
                 <div className="stock-row-sub">
-                  <span className="stock-row-name">
+                  <span className="stock-row-name" title={s.name || "观察股票"}>
                     {s.name || "观察股票"}
                   </span>
-                  <span className="source-pill">{sourceTag(s)}</span>
                 </div>
                 <div className="stock-row-nums">
                   <span className={`stock-row-chg ${changeClass}`}>

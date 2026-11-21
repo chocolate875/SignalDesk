@@ -293,7 +293,8 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
         )
     )
     stop_verdict = monitor.stock(nvda_alloc)["verdict"]
-    assert stop_verdict["action"] == "复核止损" and stop_verdict["tone"] == "danger"
+    assert stop_verdict["action"] == "跌破止损" and stop_verdict["tone"] == "danger"
+    assert stop_verdict["action_meaning"]
     assert stop_verdict["priority"] == 0 and len(stop_verdict["pillars"]) == 3
     assert set(stop_verdict["dimension_notes"]) == {"trend", "momentum", "volume_score"}
 
@@ -307,11 +308,11 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
         )
     )
     target_verdict = monitor.stock(nvda_target)["verdict"]
-    assert target_verdict["action"] == "复核止盈" and target_verdict["tone"] == "warning"
+    assert target_verdict["action"] == "触及目标" and target_verdict["tone"] == "warning"
     assert target_verdict["priority"] == 1
 
     unreconciled = Allocation(symbol="NVDA.US", long_quantity=5, broker_quantity=10)
-    assert monitor.stock(unreconciled)["verdict"]["action"] == "核对持仓"
+    assert monitor.stock(unreconciled)["verdict"]["action"] == "仓位待核"
 
     monitor.store.put_bars("live", "TSLA.US", "day", bars)
     monitor.rebuild("TSLA.US", initial=True, mode="live")
