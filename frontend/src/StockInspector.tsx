@@ -402,8 +402,8 @@ function WaveTrendCard({ stock }: { stock: Stock }) {
           <p className="wt-phase-note">{wave.phase_label}</p>
 
           <div className="wt-levels-row">
-            <div title="最近已确认摆动高点，放量突破可确认多头延续">
-              <small>突破确认</small>
+            <div title="最近一个已确认波段高点；放量有效突破可确认多头延续">
+              <small>前高突破位</small>
               <b>
                 {trend.breakout_level != null
                   ? `$${fmt(trend.breakout_level, 2)}`
@@ -413,12 +413,12 @@ function WaveTrendCard({ stock }: { stock: Stock }) {
             <div
               title={
                 trend.direction === "downtrend"
-                  ? "下降趋势前高阻力，有效站上方可看空头反转"
-                  : "上升/震荡结构前低防守位，跌破需警惕趋势破坏"
+                  ? "最近已确认波段前高；有效站上该价位代表空头下降结构被打破（趋势反转）"
+                  : "最近已确认波段前低（如 2 浪底）；收盘跌破该前低代表当前上升/震荡结构失效，区别于左侧按 ATR 波动测算的参考止损"
               }
             >
               <small>
-                {trend.direction === "downtrend" ? "反转阻力" : "结构防守"}
+                {trend.direction === "downtrend" ? "前高反转位" : "前低失效位"}
               </small>
               <b
                 className={

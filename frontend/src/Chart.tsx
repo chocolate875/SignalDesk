@@ -14,9 +14,9 @@ import {
   MarkLineComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { HelpCircle, Maximize2, Minimize2, X } from "lucide-react";
 import { IndicatorGuideMenu } from "./GuidePopover";
-import type { ChartRow, Detail, WavePivot } from "./types";
+import type { ChartRow, Detail, WavePivot, WaveTrend } from "./types";
 import { fmt, ticker, time } from "./types";
 
 echarts.use([
@@ -152,6 +152,172 @@ function OhlcHud({
             下 {fmt(row.bb_lower as number, 2)}
           </span>
         </span>
+      )}
+    </div>
+  );
+}
+
+function WaveTrendSummaryPill({
+  wt,
+  symbol,
+  forecastStop,
+}: {
+  wt: WaveTrend;
+  symbol: string;
+  forecastStop: number | null | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [symbol]);
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePos = () => {
+      const rect = btnRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(440, window.innerWidth - 24);
+      const left = Math.max(
+        12,
+        Math.min(rect.left, window.innerWidth - width - 12),
+      );
+      const top = Math.min(rect.bottom + 6, Math.max(72, window.innerHeight - 310));
+      setPos({ top: Math.round(top), left: Math.round(left) });
+    };
+    updatePos();
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("resize", updatePos);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("resize", updatePos);
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const isDown = wt.trend.direction === "downtrend";
+  const inv = wt.trend.invalidation_level;
+  const invShort =
+    inv != null
+      ? isDown
+        ? ` · 站上前高 $${fmt(inv, 2)} 反转`
+        : ` · 破前低 $${fmt(inv, 2)} 失效`
+      : "";
+
+  // 查找对应这条结构线的已确认波段拐点，标明来源日期与浪号
+  const targetKind = isDown ? "H" : "L";
+  const confirmedMatches = (wt.wave.pivots ?? []).filter(
+    (p) => p.confirmed && p.kind === targetKind,
+  );
+  const sourcePivot = confirmedMatches.length
+    ? confirmedMatches[confirmedMatches.length - 1]
+    : null;
+  const pivotLabelText = sourcePivot?.wave_label
+    ? sourcePivot.wave_label === "0"
+      ? "波浪起点"
+      : `第 ${sourcePivot.wave_label} 浪`
+    : isDown
+      ? "最近已确认波段前高"
+      : "最近已确认波段前低";
+
+  const quickTip =
+    inv != null
+      ? isDown
+        ? `点击查看说明：$${fmt(inv, 2)} 是最近已确认波段前高，有效站上才代表空头下降结构反转`
+        : `点击查看说明：$${fmt(inv, 2)} 是最近已确认波段前低（如前回调低点），收盘跌破代表当前趋势结构失效`
+      : "点击查看当前波浪与趋势结构说明";
+
+  return (
+    <div ref={wrapRef} style={{ display: "inline-flex", minWidth: 0 }}>
+      <button
+        ref={btnRef}
+        type="button"
+        className={`chart-wt-pill tone-${wt.trend.tone}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={quickTip}
+      >
+        <span>
+          {wt.trend.label} · {wt.wave.current_wave} ·{" "}
+          {wt.trend.channel_position_label}
+          {invShort}
+        </span>
+        <HelpCircle size={12} />
+      </button>
+
+      {open && pos && (
+        <div
+          className="guide-popover wt-explain-popover"
+          style={{ top: pos.top, left: pos.left }}
+          role="region"
+          aria-label="趋势结构位含义说明"
+        >
+          <div className="guide-pop-head">
+            <div>
+              <b>
+                {inv != null
+                  ? isDown
+                    ? `「站上前高 $${fmt(inv, 2)} 反转」是什么意思？`
+                    : `「破前低 $${fmt(inv, 2)} 失效」是什么意思？`
+                  : "当前波浪与趋势结构说明"}
+              </b>
+              <small>
+                {wt.trend.label} · {wt.wave.pattern_label}（{wt.wave.current_wave}）
+              </small>
+            </div>
+            <button
+              type="button"
+              className="legend-close-btn"
+              onClick={() => setOpen(false)}
+              aria-label="关闭说明"
+            >
+              <X size={15} />
+            </button>
+          </div>
+
+          <div className="wt-explain-list">
+            {inv != null && (
+              <>
+                <div className="wt-explain-row">
+                  <b>1. 这个价格从哪来的？</b>
+                  <p>
+                    {sourcePivot
+                      ? `取自 ${sourcePivot.date} 已确认的${pivotLabelText}（$${fmt(sourcePivot.price, 2)}），由严格因果拐点算法从历史日线中自动识别。`
+                      : `取自近期已确认波段${isDown ? "高点" : "低点"}（$${fmt(inv, 2)}），由严格因果拐点算法自动识别。`}
+                  </p>
+                </div>
+                <div className="wt-explain-row">
+                  <b>2. 它在看盘时代表什么？</b>
+                  <p>
+                    {isDown
+                      ? `这是空头「高点降低」结构的压制位。只有日线有效站上 $${fmt(inv, 2)} 上方，才说明空头下降结构被打破、出现趋势反转信号。`
+                      : `这是道氏「低点抬高」多头结构的最后底线。只要不破 $${fmt(inv, 2)}，上升/震荡波段结构仍成立；若收盘有效跌破该前低，说明当前上涨趋势结构已失效。`}
+                  </p>
+                </div>
+                <div className="wt-explain-row">
+                  <b>3. 和图上左侧「参考止损」有什么区别？</b>
+                  <p>
+                    {forecastStop != null
+                      ? `图上左侧「参考止损 $${fmt(forecastStop, 2)}」是按近期日均波幅（ATR14）测算的单笔交易风控止损线；而这里的 $${fmt(inv, 2)} 是按波段高低拐点划出的大趋势结构线。前者偏仓位止损，后者看大趋势是否破坏，因此两者数值可能不同。`
+                      : "图上左侧「参考止损」是按近期日均波幅（ATR14）测算的单笔风控止损线；而本价位是按波段高低拐点划出的趋势结构分水岭，两者衡量维度不同。"}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1104,16 +1270,11 @@ function Chart({
               >
                 <span>{p.label}</span>
                 {showWaveTrend && activeWaveTrend?.available && (
-                  <em
-                    className={`chart-wt-pill tone-${activeWaveTrend.trend.tone}`}
-                  >
-                    {activeWaveTrend.trend.label} ·{" "}
-                    {activeWaveTrend.wave.current_wave} ·{" "}
-                    {activeWaveTrend.trend.channel_position_label}
-                    {activeWaveTrend.trend.invalidation_level != null
-                      ? ` · 防守 $${fmt(activeWaveTrend.trend.invalidation_level, 2)}`
-                      : ""}
-                  </em>
+                  <WaveTrendSummaryPill
+                    wt={activeWaveTrend}
+                    symbol={detail?.stock?.symbol ?? ""}
+                    forecastStop={detail?.stock?.forecast?.levels?.stop_loss}
+                  />
                 )}
               </div>
             ) : (

@@ -1638,10 +1638,11 @@ p {
 
 .chart-wt-pill {
   font-style: normal;
+  font-family: inherit;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 1px 9px;
+  padding: 2px 9px;
   border-radius: var(--radius-badges);
   border: 1px solid var(--line);
   font-size: 12px;
@@ -1651,6 +1652,65 @@ p {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+.chart-wt-pill:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.chart-wt-pill:active {
+  transform: scale(0.98);
+}
+
+.chart-wt-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chart-wt-pill svg {
+  flex-shrink: 0;
+  opacity: 0.72;
+}
+
+.wt-explain-popover {
+  width: min(440px, calc(100vw - 24px));
+  pointer-events: auto;
+}
+
+.wt-explain-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.wt-explain-row {
+  padding: 8px 10px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+}
+
+.wt-explain-row b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.wt-explain-row p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--sub);
 }
 
 .chart-wt-pill::before {

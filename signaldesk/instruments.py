@@ -110,14 +110,27 @@ KNOWN_FUNDS: dict[str, tuple[str, str, str, float | None, bool]] = {
     "DXYZ.US": ("fund", "封闭式基金", "持有一篮子未上市科技独角兽股权（关注二级市场折溢价）", None, False),
 }
 
-_LEVERAGE_RE = re.compile(r"\b([123](?:\.5)?)\s*X\b|ULTRAPRO|\bULTRA\b", re.IGNORECASE)
-_INVERSE_RE = re.compile(r"\b(SHORT|BEAR|INVERSE)\b", re.IGNORECASE)
-_ETF_ISSUER_RE = re.compile(
-    r"\b(ISHARES|ISHRS|SPDR|INVESCO|VANGUARD|PROSHARES|DIREXION|GLOBAL\s*X|VANECK|ROUNDHILL|GRANITESHARES|WISDOMTREE|KRANESHARES|FIRST\s*TRUST|DEFIANCE|T-REX)\b",
+_LEVERAGE_RE = re.compile(
+    r"\b([123](?:\.5)?)\s*X\b|ULTRAPRO|\bULTRA\b|两倍|三倍|2倍|3倍|杠杆",
     re.IGNORECASE,
 )
-_ETF_KEYWORD_RE = re.compile(r"\b(ETF|ETN|TRGTETF|TRUST|FUND\s+LP|SHARES\s+TR|SILVER\s+TR|GOLD\s+SHARES)\b", re.IGNORECASE)
-_COMMODITY_RE = re.compile(r"\b(GOLD|SILVER|OIL|CRUDE|NATURAL\s+GAS|TREASURY|BOND|BITCOIN|ETHEREUM|VIX)\b", re.IGNORECASE)
+_INVERSE_RE = re.compile(r"\b(SHORT|BEAR|INVERSE)\b|反向|做空", re.IGNORECASE)
+_ETF_ISSUER_RE = re.compile(
+    r"\b(ISHARES|ISHRS|SPDR|INVESCO|VANGUARD|PROSHARES|DIREXION|GLOBAL\s*X|VANECK|ROUNDHILL|GRANITESHARES|WISDOMTREE|KRANESHARES|FIRST\s*TRUST|DEFIANCE|T-REX|SCHWAB|PIMCO|YIELDMAX|GRAYSCALE|BITWISE|AMPLIFY|ARK)\b",
+    re.IGNORECASE,
+)
+_ETF_KEYWORD_RE = re.compile(
+    r"\b(ETF|ETN|TRGTETF|TRUST|FUND\s+LP|SHARES\s+TR|SILVER\s+TR|GOLD\s+SHARES|INDEX\s+FUND)\b|指数基金|交易型基金|基金|信托",
+    re.IGNORECASE,
+)
+_BROAD_INDEX_RE = re.compile(
+    r"\b(S&P\s*500|NASDAQ|DOW\s+JONES|DJIA|RUSSELL|MSCI|FTSE|TOTAL\s+STOCK|TOTAL\s+MARKET|ALL\s*WORLD|ALL\s*WEATHER)\b|宽基|标普|纳斯达克|纳指|道琼斯|罗素",
+    re.IGNORECASE,
+)
+_COMMODITY_RE = re.compile(
+    r"\b(GOLD|SILVER|OIL|CRUDE|NATURAL\s+GAS|TREASURY|BOND|FIXED\s+INCOME|BITCOIN|ETHEREUM|CRYPTO|VIX)\b|黄金|白银|原油|国债|美债|债券|比特币|以太坊",
+    re.IGNORECASE,
+)
 _CONCEPT_SYMBOL_RE = re.compile(r"^CP\d+\.US$")
 
 
@@ -189,9 +202,9 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
             if lev_match:
                 if lev_match.group(1):
                     mult = float(lev_match.group(1))
-                elif "ULTRAPRO" in upper_name:
+                elif "ULTRAPRO" in upper_name or "三倍" in clean_name or "3倍" in clean_name:
                     mult = 3.0
-                elif "ULTRA" in upper_name:
+                elif "ULTRA" in upper_name or "两倍" in clean_name or "2倍" in clean_name:
                     mult = 2.0
             is_inv = bool(inv_match)
             if is_inv and mult is not None:
@@ -222,6 +235,18 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
                 "leverage": None,
                 "company_valuation_applicable": False,
                 "risk_notice": _risk_notice("commodity_etf", None, False),
+            }
+        if _BROAD_INDEX_RE.search(upper_name):
+            return {
+                "asset_type": "broad_etf",
+                "type_label": "宽基指数 ETF",
+                "benchmark": f"宽基/区域指数基金（{clean_name}）",
+                "is_fund": True,
+                "is_leveraged": False,
+                "is_inverse": False,
+                "leverage": None,
+                "company_valuation_applicable": False,
+                "risk_notice": _risk_notice("broad_etf", None, False),
             }
         return {
             "asset_type": "sector_etf",

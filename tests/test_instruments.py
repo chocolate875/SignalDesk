@@ -84,10 +84,24 @@ def test_instrument_classification_distinguishes_etfs_and_stocks():
     assert tqqq["is_inverse"] is False
     assert tqqq["leverage"] == 3.0
 
-    # 未知代码通过名称规则识别 ETF
+    # 未知代码通过名称规则自动分类（无需硬编码代码表）
     unknown_etf = classify_instrument("XYZF.US", "Vanguard Robotics 2X Long ETF")
     assert unknown_etf["is_fund"] is True
     assert unknown_etf["is_leveraged"] is True
+
+    unknown_broad = classify_instrument("NEWB.US", "Schwab US S&P 500 Index ETF")
+    assert unknown_broad["is_fund"] is True
+    assert unknown_broad["asset_type"] == "broad_etf"
+
+    unknown_cn_fund = classify_instrument("CNGD.US", "黄金现货指数基金")
+    assert unknown_cn_fund["is_fund"] is True
+    assert unknown_cn_fund["asset_type"] == "commodity_etf"
+
+    unknown_cn_inv = classify_instrument("CNSH.US", "三倍做空纳指ETF")
+    assert unknown_cn_inv["is_fund"] is True
+    assert unknown_cn_inv["is_leveraged"] is True
+    assert unknown_cn_inv["is_inverse"] is True
+    assert unknown_cn_inv["leverage"] == -3.0
 
     # 概念组合代码识别
     concept = classify_instrument("CP00084.US", "Duan Yongping Stocks")
