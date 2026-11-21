@@ -625,7 +625,7 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
     if direction == "uptrend":
         if pos_pct is not None and pos_pct <= 30:
             action_guide = (
-                f"顺势回踩通道下轨支撑，适合关注低吸节奏；若跌破前低结构防守位 ${invalidation_level:.2f} 则退出观察。"
+                f"顺势回踩通道下轨支撑，适合关注低吸节奏；若跌破前低失效位 ${invalidation_level:.2f} 则退出观察。"
                 if invalidation_level is not None
                 else "顺势回踩通道下轨支撑，适合结合量能关注低吸节奏。"
             )
@@ -633,7 +633,7 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
             action_guide = "处于上升通道上沿偏热区，不宜追高，耐心等回踩中轨/下轨或借压力位分批减仓。"
         else:
             action_guide = (
-                f"顺势持仓为主，上方关注突破前高 ${breakout_level:.2f}，下方以 ${invalidation_level:.2f} 作趋势防守。"
+                f"顺势持仓为主，上方关注突破前高 ${breakout_level:.2f}，下方以破前低 ${invalidation_level:.2f} 失效为趋势底线。"
                 if breakout_level is not None and invalidation_level is not None
                 else "价格位于上升通道中段，顺势跟踪均线支撑与成交量配合。"
             )

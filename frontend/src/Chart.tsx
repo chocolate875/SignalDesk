@@ -836,18 +836,19 @@ function Chart({
         };
         const formatPivotBadge = (p: WavePivot) => {
           const suffix = p.confirmed ? "" : "*";
+          const priceStr = `$${fmt(p.price, 2)}`;
           if (p.wave_label) {
-            if (p.wave_label === "0") return "起";
-            return `${p.wave_label}浪${suffix}`;
+            if (p.wave_label === "0") return `起 ${priceStr}`;
+            return `${p.wave_label}浪${suffix} ${priceStr}`;
           }
-          return `${shortStruct[p.structure] ?? p.structure}${suffix}`;
+          return `${shortStruct[p.structure] ?? p.structure}${suffix} ${priceStr}`;
         };
 
         const hasAnyWave = mappedPivots.some((m) => Boolean(m.pivot.wave_label));
-        const structCutoff = Math.max(0, mappedPivots.length - (hasAnyWave ? 3 : 5));
+        const structCutoff = Math.max(0, mappedPivots.length - (hasAnyWave ? 0 : 4));
         const scatterData = mappedPivots.map(({ idx, pivot }, mIdx) => {
           const hasWave = Boolean(pivot.wave_label);
-          const showLabel = hasWave || mIdx >= structCutoff;
+          const showLabel = hasWave || (!hasAnyWave && mIdx >= structCutoff);
           const isHigh = pivot.kind === "H";
           const accent = hasWave
             ? wt.wave.pattern === "impulse_down"
