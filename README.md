@@ -30,9 +30,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 
 ## 接入顺序
 
-### 1. LongPort行情与持仓
+### 1. 长桥行情与持仓
 
-在“规则与接入 → LongPort数据”选择生成凭据的网站（长桥 `open.longbridge.com` 或 LongPort `open.longportapp.com`），填写该账户的 App Key、App Secret 和 Access Token。保存后在“运行方式”切换为实盘。若出现 401004，先核对签发网站。只修改网站时，三个密钥框可以留空以沿用已保存的凭据。
+在「设置 → 长桥数据」选择默认的 **OAuth 2.0（推荐）**，点击「登录长桥」。SignalDesk 首次使用时向长桥注册本机客户端，在新标签页打开官网。确认账户读取与自选股权限后，回到看板，看到「已保存长桥 OAuth 授权」即可在「运行方式」选择「实盘」并保存。若浏览器拦截新标签页，点击「打开本次授权页」。[长桥官方认证说明](https://open.longbridge.com/zh-CN/docs/getting-started#认证方式)
+
+账户读取使用 `account.read`。长桥将自选股读写合并在 `watchlist` 权限内，SignalDesk 仅调用其中的读取接口。程序使用本机看板地址接收回调，访问令牌与刷新令牌写入加密凭据库，实盘运行时自动续期。若长桥提示授权失效，点击「重新登录长桥」。
+
+已有 API Key 会继续使用，直到 OAuth 授权成功。需要手动配置时，选择「API Key（兼容）」和原凭据签发网站，再填写 App Key、App Secret 和 Access Token。旧版升级后运行 `uv sync --frozen`、重新构建前端并重启 SignalDesk，或运行上方安装脚本后重启。
 
 程序使用官方 SDK 读取持仓、资金、自选分组（可在设置中开关只读同步，并在看板一键手动同步）、交易日历、常规时段报价、不复权日线和估值。首次连接取最近最多 1,000 根日线，随后每次轮询核对最近 5 根。如果最近 200 根日线覆盖的交易日出现断档，程序会重新请求历史数据。同一股票的历史补数请求至少间隔一小时，期间继续接收最新日线。OpenAPI 的行情权限由券商单独配置。
 
