@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import socket
 import sys
-import threading
 import time
-import urllib.request
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 
 import uvicorn
 
-from .app import create_app
+from .launcher import PORT_UNAVAILABLE, claim_instance, wait_for_desktop
 from .security import data_directory
 
 
@@ -32,14 +31,6 @@ def server_config(app, port: int):
     return uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False, **options)
 
 
-def already_running(port: int) -> bool:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as response:
-            return json.load(response).get("app") == "SignalDesk"
-    except Exception:
-        return False
-
-
 def icon_image(color="#6de0bc"):
     from PIL import Image, ImageDraw
 
@@ -50,52 +41,63 @@ def icon_image(color="#6de0bc"):
     return image
 
 
+class DesktopServer(uvicorn.Server):
+    def __init__(self, config, mark_ready, stop_request):
+        super().__init__(config)
+        self.mark_ready = mark_ready
+        self.stop_request = stop_request
+
+    async def main_loop(self):
+        self.mark_ready()
+        await super().main_loop()
+
+    async def on_tick(self, counter):
+        if counter % 5 == 0 and self.stop_request.exists():
+            self.should_exit = True
+        return await super().on_tick(counter)
+
+
 def main():
     parser = argparse.ArgumentParser(description="SignalDesk本机技术信号看板")
     parser.add_argument("--headless", action="store_true", help="无托盘模式，适用于Linux/本地服务")
     parser.add_argument("--background", action="store_true", help="后台启动，只显示托盘")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    url = f"http://127.0.0.1:{args.port}"
-    if already_running(args.port):
-        if not args.background:
-            webbrowser.open(url)
-        return
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
     directory = data_directory()
-    directory.mkdir(parents=True, exist_ok=True)
-    # A second launch must not initialise the same SQLite queue before the first owns the service.
-    lock_file = (directory / "instance.lock").open("a+b")
-    try:
-        if os.name == "nt":
-            import msvcrt
+    with claim_instance(directory, args.port) as owner:
+        if owner is None:
+            if not args.background and not args.headless:
+                wait_for_desktop(directory, args.port, False)
+            return
+        instance, mark_ready = owner
+        # Reserve the port before initialising the monitor or displaying a tray icon.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            option = socket.SO_EXCLUSIVEADDRUSE if os.name == "nt" else socket.SO_REUSEADDR
+            listener.setsockopt(socket.SOL_SOCKET, option, 1)
+            try:
+                listener.bind(("127.0.0.1", args.port))
+                listener.listen()
+            except OSError as exc:
+                if sys.stderr is not None:
+                    print(f"Cannot bind to 127.0.0.1:{args.port}: {exc}", file=sys.stderr)
+                raise SystemExit(PORT_UNAVAILABLE) from exc
+            from .app import create_app
 
-            if lock_file.tell() == 0:
-                lock_file.write(b"0")
-                lock_file.flush()
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
+            app = create_app(directory)
+            server = DesktopServer(server_config(app, args.port), mark_ready, instance.stop_request(directory))
+            if args.headless or os.name != "nt":
+                server.run(sockets=[listener])
+            else:
+                run_tray(app, server, listener, args.background)
 
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        lock_file.close()
-        if not args.background:
-            webbrowser.open(url)
-        return
-    app = create_app(directory)
-    config = server_config(app, args.port)
-    server = uvicorn.Server(config)
-    if args.headless or os.name != "nt":
-        try:
-            server.run()
-        finally:
-            lock_file.close()
-        return
+
+def run_tray(app, server, listener, background):
     import pystray
 
     def open_panel(icon=None, item=None):
-        webbrowser.open(url)
+        webbrowser.open(f"http://127.0.0.1:{server.config.port}")
 
     def pause(icon, item):
         monitor = app.state.monitor
@@ -106,7 +108,6 @@ def main():
 
     def quit_app(icon, item):
         server.should_exit = True
-        icon.stop()
 
     icon = pystray.Icon(
         "SignalDesk",
@@ -124,33 +125,31 @@ def main():
             pystray.MenuItem("退出并停止监控", quit_app),
         ),
     )
-    worker = threading.Thread(target=server.run, daemon=True, name="signaldesk-service")
-    worker.start()
 
     def setup(tray):
         tray.visible = True
         app.state.monitor.notifications.desktop.sender = lambda message, title: tray.notify(message, title)
-        if not args.background:
-            for _ in range(90):
-                if server.started:
-                    webbrowser.open(url)
-                    break
-                time.sleep(0.2)
+        open_when_ready = not background
         previous = None
-        while not server.should_exit:
+        while not worker.done() and not server.should_exit:
+            if server.started and open_when_ready:
+                open_panel()
+                open_when_ready = False
             status = app.state.monitor.status
-            tray.title = f"SignalDesk · {status} · 后台监控"
-            if status != previous:
+            if server.started and status != previous:
+                tray.title = f"SignalDesk · {status} · 后台监控"
                 tray.icon = icon_image("#6de0bc" if status in {"live", "demo"} else "#efb86b")
                 previous = status
-            time.sleep(2)
+            time.sleep(0.2)
+        tray.stop()
 
-    try:
-        icon.run(setup)
-    finally:
-        server.should_exit = True
-        worker.join(timeout=8)
-        lock_file.close()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="signaldesk-service") as executor:
+        worker = executor.submit(server.run, sockets=[listener])
+        try:
+            icon.run(setup)
+        finally:
+            server.should_exit = True
+        worker.result()
 
 
 if __name__ == "__main__":
