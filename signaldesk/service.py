@@ -13,6 +13,7 @@ from .codex_bridge import CodexBridge
 from .events import EventEngine
 from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
+from .instruments import classify_instrument, compute_fund_metrics
 from .models import Allocation, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed
@@ -35,6 +36,9 @@ class Monitor:
         self.codex = CodexBridge(store, self.settings.codex)
         self.frames = {}
         self.summaries = {}
+        self.wave_trends = {}
+        self.fund_metrics = {}
+        self.forecast_cache = {}
         self.frame_lock = RLock()
         self.quotes = {}
         self.feed = None
@@ -192,9 +196,15 @@ class Monitor:
         bars = self.store.bars(mode, symbol, "day")
         frame = enrich(bars, "day", now, settings.rules)
         summary = summarize(frame, "day", "regular", now, settings.rules, demo=mode == "demo")
+        wave_trend = compute_wave_trend(frame, summary)
+        fund_metrics = compute_fund_metrics(frame, summary)
+        frame_sig = (id(frame), summary.get("as_of"), summary.get("rule_version"))
         with self.frame_lock:
             self.frames[(mode, symbol, "day")] = frame
             self.summaries[(mode, symbol, "day", "regular")] = summary
+            self.wave_trends[(mode, symbol)] = (frame_sig, wave_trend)
+            self.fund_metrics[(mode, symbol)] = (frame_sig, fund_metrics)
+            self.forecast_cache.pop((mode, symbol), None)
         allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
         if (
             not allocation
@@ -224,6 +234,9 @@ class Monitor:
                 for (source, symbol, tf, session), summary in self.summaries.items()
                 if source == mode and symbol == allocation.symbol
             }
+            cached_wt = self.wave_trends.get((mode, allocation.symbol))
+            cached_fm = self.fund_metrics.get((mode, allocation.symbol))
+            cached_fc = self.forecast_cache.get((mode, allocation.symbol))
         if str(quote.get("trade_status", "normal")).lower() not in {
             "normal",
             "normaltrade",
@@ -260,7 +273,23 @@ class Monitor:
                     contribution_changes={},
                 )
                 day["risks"] = ["行情过期：最近应完成K线缺失", *day.get("risks", [])]
-        summary = dict(summaries.get(primary, {}))
+        default_summary = {
+            "timeframe": "day",
+            "session": "regular",
+            "valid": False,
+            "confirmed_price_available": False,
+            "score": None,
+            "dimensions": {},
+            "indicators": {},
+            "risks": ["等待有效日线"],
+            "state": "unavailable",
+            "as_of": None,
+            "rule_version": "",
+            "opportunity_allowed": False,
+            "evidence": [],
+        }
+        summary = {**default_summary, **summaries.get(primary, {})}
+        summary["risks"] = list(summary.get("risks") or [])
         quote_stale = False
         if mode == "live":
             try:
@@ -270,17 +299,19 @@ class Monitor:
             except (ValueError, KeyError, TypeError):
                 quote_stale = True
         quote["stale"] = quote_stale
-        if quote_stale:
-            summary["risks"] = ["报价过期或尚未确认"] + summary.get("risks", [])
+        if quote_stale and "报价过期或尚未确认" not in summary["risks"]:
+            summary["risks"] = ["报价过期或尚未确认"] + summary["risks"]
         last = quote.get("last")
         net = self.store.get(f"account:{mode}", {}).get("net_assets")
         if mode == "demo":
             net = 50_000
         qty = allocation.broker_quantity
         stop, target = allocation.long_levels()
+        instrument = classify_instrument(allocation.symbol, allocation.name)
+        is_fund = bool(instrument.get("is_fund"))
         valuation = self.valuations.get(allocation.symbol, {}) if mode == "live" else {}
         curve = self.curve if mode == "live" else self.demo_curve
-        if mode == "demo" and summary.get("as_of"):
+        if mode == "demo" and summary.get("as_of") and not is_fund:
             index = next((i for i, d in enumerate(demo.DEMO_NAMES) if d[0] == allocation.symbol), None)
             if index is not None:
                 valuation = {
@@ -302,12 +333,13 @@ class Monitor:
         elif target is not None and close >= target:
             review = "复核计划目标价"
         elif (
-            research["valuation"]["fresh"]
+            not is_fund
+            and research["valuation"]["fresh"]
             and valuation.get("pe_ttm") is not None
             and valuation["pe_ttm"] <= 0
         ):
             review = "复核盈利情况"
-        elif research["yield_gap_pp"] is None:
+        elif not is_fund and research["yield_gap_pp"] is None:
             review = "补齐估值或利率依据"
         else:
             review = "按计划观察" if allocation.watch_only else "例行持仓复核"
@@ -322,13 +354,71 @@ class Monitor:
             "stop_distance_percent": ((close / stop - 1) * 100) if close and stop else None,
             "target_distance_percent": ((close / target - 1) * 100) if close and target else None,
         }
-        verdict = self._build_verdict(allocation, summary, research, long_plan)
-        forecast = compute_forecast(frame, summary, research, long_plan)
-        wave_trend = compute_wave_trend(frame, summary)
+
+        frame_sig = (id(frame), summary.get("as_of"), summary.get("rule_version"))
+        if cached_wt is not None and cached_wt[0] == frame_sig:
+            wave_trend = cached_wt[1]
+        else:
+            wave_trend = compute_wave_trend(frame, summary)
+            with self.frame_lock:
+                self.wave_trends[(mode, allocation.symbol)] = (frame_sig, wave_trend)
+
+        if cached_fm is not None and cached_fm[0] == frame_sig:
+            fund_metrics = cached_fm[1]
+        else:
+            fund_metrics = compute_fund_metrics(frame, summary)
+            with self.frame_lock:
+                self.fund_metrics[(mode, allocation.symbol)] = (frame_sig, fund_metrics)
+
+        forecast_sig = (
+            frame_sig,
+            summary.get("valid"),
+            summary.get("confirmed_price_available"),
+            summary.get("score"),
+            summary.get("state"),
+            tuple(summary.get("risks") or ()),
+            close,
+            stop,
+            target,
+            instrument.get("asset_type"),
+            instrument.get("is_inverse"),
+            research["valuation"].get("fresh"),
+            research["valuation"].get("pe_ttm"),
+            research["valuation"].get("dividend_yield_pct"),
+            research["curve"].get("fresh"),
+            research["curve"].get("as_of"),
+            research["curve"].get("ten_year"),
+            research["curve"].get("ten_change_bp"),
+            research.get("yield_gap_pp"),
+        )
+        if cached_fc is not None and cached_fc[0] == forecast_sig:
+            forecast = cached_fc[1]
+        else:
+            forecast = compute_forecast(
+                frame,
+                summary,
+                research,
+                long_plan,
+                instrument=instrument,
+                fund_metrics=fund_metrics,
+            )
+            with self.frame_lock:
+                self.forecast_cache[(mode, allocation.symbol)] = (forecast_sig, forecast)
+
+        verdict = self._build_verdict(
+            allocation,
+            summary,
+            research,
+            long_plan,
+            instrument=instrument,
+            fund_metrics=fund_metrics,
+        )
         result = {
             **allocation.model_dump(),
             "sleeves": allocation.sleeves(),
             "reconciled": allocation.reconciled,
+            "instrument": instrument,
+            "fund_metrics": fund_metrics,
             "quote": quote,
             "summaries": summaries,
             "primary_key": primary,
@@ -353,7 +443,12 @@ class Monitor:
 
     @staticmethod
     def _build_verdict(
-        allocation: Allocation, summary: dict, research: dict, long_plan: dict
+        allocation: Allocation,
+        summary: dict,
+        research: dict,
+        long_plan: dict,
+        instrument: dict | None = None,
+        fund_metrics: dict | None = None,
     ) -> dict:
         close = long_plan.get("close")
         stop = long_plan.get("stop")
@@ -374,6 +469,16 @@ class Monitor:
         held = allocation.broker_quantity > 0
         watch_only = allocation.watch_only
         in_long = "long" in allocation.sleeves()
+
+        inst = instrument or classify_instrument(allocation.symbol, allocation.name)
+        is_fund = bool(inst.get("is_fund"))
+        is_leveraged = bool(inst.get("is_leveraged"))
+        is_inverse = bool(inst.get("is_inverse"))
+        type_label = inst.get("type_label", "个股")
+        fm = fund_metrics or {}
+        dd_high = fm.get("drawdown_from_high_pct")
+        pos_52w = fm.get("range_position_pct")
+        hv60 = fm.get("hv60_pct")
 
         # Plan pillar
         if stop is not None and target is not None and close is not None:
@@ -404,24 +509,51 @@ class Monitor:
             plan_status, plan_tone = "未设计划价", "muted"
             plan_detail = "点击「编辑计划」设置失效价与目标价"
 
-        # Valuation pillar
-        if not val_fresh:
-            val_status = "估值待更新"
-            val_tone = "muted"
-            val_detail = f"最近 PE {pe:.1f}x（超过4天未更新）" if pe is not None else "暂无有效券商估值"
-        elif pe is not None and pe <= 0:
-            val_status, val_tone = "盈利为负", "danger"
-            val_detail = f"PE {pe:.1f}x · 需复核亏损与现金流"
-        elif gap is not None and pe is not None and ey is not None:
-            val_tone = "positive" if gap >= 1.0 else ("warning" if gap < -1.0 else "neutral")
-            val_status = f"利差 {gap:+.2f}pp"
-            val_detail = f"PE {pe:.1f}x · 盈利收益率 {ey:.2f}%"
-        elif pe is not None:
-            val_status, val_tone = f"PE {pe:.1f}x", "neutral"
-            val_detail = "等待完整美债利率以计算股债利差"
+        # Second pillar: 个股看估值利率，ETF/基金看回撤分位与波动率
+        if is_fund:
+            second_label = "杠杆波动" if is_leveraged else "回撤波动"
+            if dd_high is not None and pos_52w is not None:
+                if is_inverse:
+                    val_status, val_tone = f"{type_label}", "warning"
+                    vol_part = f"年化波动 {hv60:.1f}%" if hv60 is not None else f"年内分位 {pos_52w:.0f}%"
+                    val_detail = f"短线对冲 · {vol_part} · 日度损耗"
+                elif is_leveraged:
+                    val_status = f"回撤 {dd_high:+.1f}%"
+                    val_tone = "warning" if (hv60 is not None and hv60 >= 55) or dd_high <= -25 else "neutral"
+                    vol_part = f" · 年化波动 {hv60:.1f}%" if hv60 is not None else ""
+                    val_detail = f"{type_label} · 年内分位 {pos_52w:.0f}%{vol_part}"
+                else:
+                    val_status = f"回撤 {dd_high:+.1f}%"
+                    val_tone = (
+                        "positive"
+                        if 25 <= pos_52w <= 75 and dd_high >= -18
+                        else ("warning" if pos_52w >= 92 or dd_high <= -25 else "neutral")
+                    )
+                    vol_part = f" · 年化波动 {hv60:.1f}%" if hv60 is not None else ""
+                    val_detail = f"年内分位 {pos_52w:.0f}%{vol_part}"
+            else:
+                val_status = type_label
+                val_tone = "warning" if is_leveraged else "muted"
+                val_detail = "有效日线不足60日，等待补齐区间回撤与波动率"
         else:
-            val_status, val_tone = "估值缺失", "muted"
-            val_detail = "等待券商更新滚动市盈率"
+            second_label = "估值利率"
+            if not val_fresh:
+                val_status = "估值待更新"
+                val_tone = "muted"
+                val_detail = f"最近 PE {pe:.1f}x（超过4天未更新）" if pe is not None else "暂无有效券商估值"
+            elif pe is not None and pe <= 0:
+                val_status, val_tone = "盈利为负", "danger"
+                val_detail = f"PE {pe:.1f}x · 需复核亏损与现金流"
+            elif gap is not None and pe is not None and ey is not None:
+                val_tone = "positive" if gap >= 1.0 else ("warning" if gap < -1.0 else "neutral")
+                val_status = f"利差 {gap:+.2f}pp"
+                val_detail = f"PE {pe:.1f}x · 盈利收益率 {ey:.2f}%"
+            elif pe is not None:
+                val_status, val_tone = f"PE {pe:.1f}x", "neutral"
+                val_detail = "等待完整美债利率以计算股债利差"
+            else:
+                val_status, val_tone = "估值缺失", "muted"
+                val_detail = "等待券商更新滚动市盈率"
 
         # Technical pillar
         if not valid or score is None:
@@ -441,7 +573,7 @@ class Monitor:
 
         pillars = [
             {"key": "plan", "label": "计划价位", "status": plan_status, "tone": plan_tone, "detail": plan_detail},
-            {"key": "valuation", "label": "估值利率", "status": val_status, "tone": val_tone, "detail": val_detail},
+            {"key": "valuation", "label": second_label, "status": val_status, "tone": val_tone, "detail": val_detail},
             {"key": "technical", "label": "日线结构", "status": tech_status, "tone": tech_tone, "detail": tech_detail},
         ]
 
@@ -449,15 +581,16 @@ class Monitor:
         ma200 = indicators.get("ma200")
         ema20 = indicators.get("ema20")
         ema50 = indicators.get("ema50")
+        price_noun = "净值/价格" if is_fund else "股价"
         if close is not None and ma200 is not None and ema20 is not None and ema50 is not None:
             if close >= ma200 and ema20 >= ema50:
-                trend_note = f"收盘高于200日线（${ma200:.2f}），EMA20强于EMA50，长期趋势完整"
+                trend_note = f"收盘高于200日线（${ma200:.2f}），EMA20强于EMA50，中长期趋势完整"
             elif close >= ma200:
                 trend_note = f"收盘高于200日线（${ma200:.2f}），但EMA20弱于EMA50，短期偏整理"
             elif ema20 >= ema50:
-                trend_note = f"股价仍在200日线（${ma200:.2f}）下方，EMA20上穿呈修复态势"
+                trend_note = f"{price_noun}仍在200日线（${ma200:.2f}）下方，EMA20上穿呈修复态势"
             else:
-                trend_note = f"股价位于200日线（${ma200:.2f}）下方且均线空头排列，趋势偏弱"
+                trend_note = f"{price_noun}位于200日线（${ma200:.2f}）下方且均线空头排列，趋势偏弱"
         else:
             trend_note = "日线样本不足200根，暂无法评估200日长期均线"
 
@@ -503,21 +636,33 @@ class Monitor:
             "volume_score": volume_note,
         }
 
-        pe_text = f"PE {pe:.1f}x" if pe is not None else "估值待补"
-        gap_text = f"股债利差 {gap:+.2f}pp" if gap is not None else ""
-        val_brief = f"{pe_text}，{gap_text}" if gap_text else pe_text
+        if is_fund:
+            parts = [type_label]
+            if dd_high is not None:
+                parts.append(f"距52周高点 {dd_high:+.1f}%")
+            if hv60 is not None:
+                parts.append(f"年化波动 {hv60:.1f}%")
+            val_brief = "，".join(parts)
+        else:
+            pe_text = f"PE {pe:.1f}x" if pe is not None else "估值待补"
+            gap_text = f"股债利差 {gap:+.2f}pp" if gap is not None else ""
+            val_brief = f"{pe_text}，{gap_text}" if gap_text else pe_text
 
         # Deterministic verdict priority 0..9 (plain-language labels + meaning tooltips)
         if in_long and stop is not None and confirmed and close <= stop:
             action, tone, priority = "跌破止损", "danger", 0
-            action_meaning = "最新收盘已跌破您设定的长期止损/失效价，建议立即复核是否止损或减仓"
+            action_meaning = "最新收盘已跌破您设定的止损/失效价，建议立即复核是否止损或减仓"
             headline = f"收盘价 ${close:.2f} 已跌破计划失效价 ${stop:.2f}（{stop_dist:+.1f}%），需立即复核持有逻辑。"
-            next_step = f"核对基本面是否恶化；若后续收盘仍未能收回 ${stop:.2f} 上方，按长期计划评估止损或减仓。"
+            next_step = (
+                f"核对宏观利率与追踪赛道趋势是否走坏；若后续收盘仍未能收回 ${stop:.2f} 上方，按计划评估止损或减仓。"
+                if is_fund
+                else f"核对基本面是否恶化；若后续收盘仍未能收回 ${stop:.2f} 上方，按长期计划评估止损或减仓。"
+            )
         elif in_long and target is not None and confirmed and close >= target:
             action, tone, priority = "触及目标", "warning", 1
-            action_meaning = "最新收盘已达到或超过您设定的长期目标价，可评估分批止盈或上移目标"
-            headline = f"收盘价 ${close:.2f} 已达到计划目标价 ${target:.2f}（{target_dist:+.1f}%），当前估值 {val_brief}。"
-            next_step = "评估是否分批兑现收益；若继续看好长期成长，可在「编辑计划」上移目标价与保护线。"
+            action_meaning = "最新收盘已达到或超过您设定的目标价，可评估分批止盈或上移目标"
+            headline = f"收盘价 ${close:.2f} 已达到计划目标价 ${target:.2f}（{target_dist:+.1f}%），当前 {val_brief}。"
+            next_step = "评估是否分批兑现收益；若继续看好趋势延续，可在「编辑计划」上移目标价与保护线。"
         elif not allocation.reconciled:
             action, tone, priority = "仓位待核", "warning", 2
             action_meaning = "券商实际持仓股数与本地分配的长期/其他股数合计不一致"
@@ -528,7 +673,7 @@ class Monitor:
             action_meaning = "该持仓尚未划入长期底仓计划，仅保留持仓股数核对"
             headline = "该持仓未划入长期底仓计划，仅保留数量核对。"
             next_step = "如需纳入长期跟踪，请在「编辑计划」中为其分配长期数量。"
-        elif val_fresh and pe is not None and pe <= 0:
+        elif not is_fund and val_fresh and pe is not None and pe <= 0:
             action, tone, priority = "亏损警示", "danger", 3
             action_meaning = "滚动市盈率 PE ≤ 0，说明公司当前处于亏损或估值异常，暂不建议盲目买入"
             headline = f"滚动市盈率为负（PE {pe:.1f}x），公司当前盈利承压或估值异常，长期安全边际需重新确认。"
@@ -539,37 +684,54 @@ class Monitor:
             reason = risks[0] if risks else "等待日线历史补齐或常规收盘确认"
             headline = f"有效日线或指标窗口尚未完成（{reason}），暂不给出强弱结论。"
             next_step = "待交易日收盘确认且指标预热完成后，系统将自动刷新技术结构与计划价距离。"
+        elif is_inverse and not held:
+            action, tone, priority = "对冲观察", "warning", 7
+            action_meaning = "反向做空杠杆 ETF 仅适合短期对冲或波段交易，长期持有存在每日再平衡损耗"
+            headline = f"{type_label}日线评分 {score:.1f} 分（{val_brief}），仅适合作为短期做空对冲工具，不按长期多头配置评估。"
+            next_step = "仅在明确看空对应标的指数或对冲组合回撤时短线使用，并严格设定止盈止损位。"
         elif held and (state == "weak" or len(risks) >= 2):
             action, tone, priority = "转弱警惕", "warning", 4
-            action_meaning = "持仓股当前日线结构走弱或技术风险提示较多，需关注回撤防守"
+            action_meaning = "持仓标的当前日线结构走弱或技术风险提示较多，需关注回撤防守"
             risk_brief = "；".join(risks[:2]) if risks else f"日线评分 {score:.1f} 分偏弱"
             headline = f"日线评分 {score:.1f} 分，需关注：{risk_brief}（{val_brief}）。"
             next_step = (
                 f"重点盯住失效价 ${stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。"
                 if stop is not None and stop_dist is not None
-                else "建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。"
+                else (
+                    "高波动基金建议尽快设置止损防守位并控制杠杆仓位。"
+                    if is_leveraged
+                    else "建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。"
+                )
             )
         elif watch_only and state == "strong" and not risks:
             action, tone, priority = "关注买点", "positive", 5
-            action_meaning = "观察股日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
+            action_meaning = "观察标的日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
             headline = f"日线评分 {score:.1f} 分（结构偏强），无额外技术风险，当前 {val_brief}。"
             next_step = (
-                f"结合基本面与资金节奏，对照预设观察价（目标 ${target:.2f}）评估是否建仓。"
+                f"结合趋势通道与资金节奏，对照预设观察价（目标 ${target:.2f}）评估入场或分批定投节奏。"
                 if target is not None
-                else "可结合估值水平设定目标入场或观察价位，或点击生成 Codex 总结作进一步复核。"
+                else (
+                    "可结合回撤分位与美债利率环境分批关注回踩买点；杠杆类产品须严设止损。"
+                    if is_fund
+                    else "可结合估值水平设定目标入场或观察价位，或点击生成 Codex 总结作进一步复核。"
+                )
             )
         elif held and state == "strong" and not risks:
             action, tone, priority = "趋势向好", "positive", 6
-            action_meaning = "持仓股处于上升趋势且无明显技术风险，可顺势持有跟踪"
+            action_meaning = "持仓标的处于上升趋势且无明显技术风险，可顺势持有跟踪"
             headline = f"日线评分 {score:.1f} 分（结构偏强），趋势与动能健康，当前 {val_brief}。"
             next_step = (
-                f"继续按长期计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。"
+                f"继续按计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。"
                 if target is not None and target_dist is not None
-                else "趋势结构良好，可继续持有并定期检查估值与国债利率变化。"
+                else (
+                    "趋势结构良好，留意回撤分位与美债利率变动；杠杆产品建议动态上移移动止损。"
+                    if is_fund
+                    else "趋势结构良好，可继续持有并定期检查估值与国债利率变化。"
+                )
             )
         elif held:
             action, tone, priority = "持有观察", "neutral", 7
-            action_meaning = "持仓股日线结构中性平稳，继续按既定计划跟踪即可"
+            action_meaning = "持仓标的日线结构中性平稳，继续按既定计划跟踪即可"
             extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
             headline = f"日线评分 {score:.1f} 分，{extra}，当前 {val_brief}。"
             next_step = (
@@ -580,14 +742,22 @@ class Monitor:
         else:
             if state == "weak":
                 action, tone, priority = "弱势观望", "warning", 8
-                action_meaning = "观察股当前日线走弱或处于空头区，暂不急于介入"
+                action_meaning = "观察标的当前日线走弱或处于空头区，暂不急于介入"
                 headline = f"观察标的日线评分 {score:.1f} 分偏弱，暂不急于介入（{val_brief}）。"
-                next_step = "等待日线重新站稳均线且评分回升至中性以上后再跟踪。"
+                next_step = (
+                    "等待指数重新站稳均线且回撤企稳后再评估定投或波段介入节奏。"
+                    if is_fund
+                    else "等待日线重新站稳均线且评分回升至中性以上后再跟踪。"
+                )
             else:
                 action, tone, priority = "震荡观望", "neutral", 8
-                action_meaning = "观察股走势中性震荡，等待趋势方向或回踩买点更清晰"
+                action_meaning = "观察标的走势中性震荡，等待趋势方向或回踩买点更清晰"
                 headline = f"观察标的日线评分 {score:.1f} 分，整体平稳（{val_brief}）。"
-                next_step = "持续跟踪后续收盘评分变化及估值性价比；需要时可手动触发 Codex 总结。"
+                next_step = (
+                    "持续跟踪回撤分位、趋势通道与美债利率变化；需要时可手动触发 Codex 总结。"
+                    if is_fund
+                    else "持续跟踪后续收盘评分变化及估值性价比；需要时可手动触发 Codex 总结。"
+                )
 
         return {
             "action": action,

@@ -1,5 +1,19 @@
 # V0.1.0 验收记录
 
+## 2026-11-21 防白屏稳定性加固与 ETF/指数基金专属分析框架
+
+- **白屏排查与稳定性修复。**
+  - 根因定位：前端全局缺少 React `ErrorBoundary`（React 19 在渲染或 `useEffect` 抛异常时会直接卸载整棵树变为纯白屏）；实盘 92 只标的未缓存 `wave_trend`/`forecast`，导致每次 `Monitor.snapshot()` 阻塞主事件循环 `670.9 ms` 并每 2 秒向浏览器无条件推送 `~660 KB` 重复 JSON；`index.html` 缺少 `Cache-Control: no-store` 易在重新构建前端后因缓存旧 HTML 请求已删旧 hash JS 造成白屏；`Chart.tsx` 缺少 `dates` 非法时间、`zoom.start/end` 非有限数、`0×0` 容器 resize 与 `setOption` 异常保护，多处组件缺少深层字段空值防御。
+  - 修复落地：新增 `frontend/src/ErrorBoundary.tsx` 包裹顶层 `<App />` 及左/中（K线）/右三块区域；加固 `Chart.tsx`、`App.tsx`、`WatchlistRail.tsx`、`StockInspector.tsx`、`Settings.tsx` 与 `types.ts`（WebSocket 载荷校验 + 非 JSON 报错兼容）；后端 `Monitor` 在 `rebuild()` 中缓存 `wave_trend`/`fund_metrics` 并按指纹缓存 `forecast`（92 只实盘标的稳态 `stocks()` 耗时由 `670.9 ms` 降至 **`16.5 ms`**，提速 40 倍），`/api/stream` 改为按业务指纹去重推送（静止时 20 秒心跳）并递归清洗非有限浮点（`_sanitize_json` + `allow_nan=False`），`GET /` 返回的 `index.html` 显式增加 `Cache-Control: no-cache, no-store, must-revalidate`。
+- **ETF/指数基金与个股分流分析。**
+  - 实盘核查确认券商 `calc_indexes` 对基金主体返回的 PE/PB 严重失真（如 `QQQ` `-6.88x` 被误判为「亏损警示 / 建议卖出」、`SOXX` `0.79x` 被算出 `126.6%` 假盈利收益率、`GLD`/`SLV`/`USO` 商品信托无公司盈利却被套算股债利差、`SQQQ`/`YANG` 3X 反向做空 ETF 被打出「建议买入」）。
+  - 新增 `signaldesk/instruments.py`（精确代码映射 + 名称/组合规则），实盘 92 只标的自动区分为 **27 只 ETF/基金** 与 **65 只个股**；对 ETF/基金自动停用公司 PE/PB 与「亏损警示」，改用严格因果的 52 周高点回撤、近 1 年价格分位、20/60 日年化波动率、近 1 年最大回撤与 10Y 美债 21 日变动评估；反向做空杠杆 ETF 启用「对冲观察」与评级封顶 `hold` 护栏，正向高倍杠杆 ETF 封顶 `buy` 并附波动复利损耗警示；右侧自动切换为「基金与指数特征」卡片；`safe_snapshot()` 与 Codex prompt 同步隔离失真基金 PE 并切换基金复核口径；顺便排查到 `SOXX` 在 `2026-11-05` 存在一次不复权拆股跳空（`450.41 → 131.90`，`-70.7%`），已记录在说明文档中。
+- **自动化测试与构建。** 全量 pytest **73 项通过**（含新建 `tests/test_instruments.py` 7 项测试，存在 1 条既有 Starlette httpx 兼容弃用提示）；`ruff check signaldesk tests` 全通过；`test_no_private_runtime_files_tracked` 通过；`frontend/src/style.css` 全部 `163` 条 `font-size` 声明最小值为 `12.0px`；前端 `tsc -b && vite build` 通过。
+- **16:9 浏览器实盘核验（`1440×810` 亮色三栏，同步 92 只美股自选）。**
+  - 页面加载、切换 `QQQ`/`SOXX`/`SQQQ`/`NVDA`/`ANT`（2 根极短 K 线）及反复开关 `RSI`/`MACD` 全程无白屏、控制台 **0 errors**、无 `4xx/5xx` 失败请求。
+  - `QQQ` 正常显示「宽基指数 ETF」、第二支柱「回撤波动」与右侧「基金与指数特征」（追踪纳斯达克 100、回撤 `-20.2%`、分位 `26%`、60日波动 `27.4%`、最大回撤 `-19.9%`），不再有「亏损警示」或公司财报话术；`SOXX` 显示「行业主题 ETF」与半导体基金特征，不再出现 `0.79x PE`；`SQQQ` 显示「3X 反向 ETF」、行动标签「对冲观察」、风控护栏封顶「中性观望」与反向波动损耗警示条；`NVDA` 对照个股仍正常显示「估值与美债对照」；并同步过滤 `.stock-hero` 中冗余的 `us` 市场分组胶囊与精简反向 ETF 副标题以消除 `1440×810` 局部截断。
+- **未验证项。** 本轮未执行真实 Codex CLI 手动分析推理；未对照长桥 App 同屏历史逐笔读数；未执行 24 小时持续挂机与断网恢复压测；不复权拆股（如 `SOXX 2026-11-05`）的自动前复权切换留待后续按需评估。
+
 ## 2026-11-21 16:9 界面精简、大白话状态标签与波浪趋势 K 线可视化
 
 - **功能与界面变更。**

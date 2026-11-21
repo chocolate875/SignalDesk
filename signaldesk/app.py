@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import math
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -27,6 +31,30 @@ def local_origin(origin: str | None, host: str | None) -> bool:
         return True
     parsed = urlparse(origin)
     return parsed.scheme in {"http", "https"} and parsed.netloc == host
+
+
+def _sanitize_json(value):
+    """递归清理意外的 NaN / Inf 浮点值，避免浏览器 JSON.parse 异常或渲染崩溃。"""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _sanitize_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json(v) for v in value]
+    return value
+
+
+def _snapshot_fingerprint(payload: dict) -> str:
+    """计算快照业务指纹（忽略每秒跳动的时钟字段），避免静止状态下重复推送大包。"""
+    stable = {k: v for k, v in payload.items() if k not in {"now", "market"}}
+    market = payload.get("market") or {}
+    stable["market_state"] = (
+        market.get("session"),
+        market.get("label"),
+        market.get("early_close"),
+    )
+    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()
 
 
 class FavoriteRequest(BaseModel):
@@ -83,20 +111,22 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
 
     @app.get("/api/bootstrap")
     async def bootstrap():
-        response = JSONResponse(await monitor.snapshot())
+        response = JSONResponse(_sanitize_json(await monitor.snapshot()))
         response.set_cookie("signaldesk_session", token, httponly=True, samesite="strict")
         return response
 
     @app.get("/api/dashboard")
     async def dashboard():
-        return await monitor.snapshot()
+        return _sanitize_json(await monitor.snapshot())
 
     @app.get("/api/stock/{symbol}")
     async def stock(symbol: str, timeframe: str = "day", session: str = "regular"):
         if timeframe not in {"15m", "day"} or session not in {"regular", "pre", "post", "overnight"}:
             raise HTTPException(400, "不支持的周期或时段")
         normalized = Allocation(symbol=symbol).symbol
-        return monitor.detail_for(normalized, timeframe, "regular" if timeframe == "day" else session)
+        return _sanitize_json(
+            monitor.detail_for(normalized, timeframe, "regular" if timeframe == "day" else session)
+        )
 
     @app.put("/api/allocations")
     async def allocation(value: Allocation):
@@ -260,9 +290,19 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             await socket.close(code=1008)
             return
         await socket.accept()
+        last_digest = ""
+        last_sent = 0.0
         try:
             while True:
-                await socket.send_json(await monitor.snapshot())
+                payload = _sanitize_json(await monitor.snapshot())
+                digest = _snapshot_fingerprint(payload)
+                now_mono = time.monotonic()
+                # 仅在业务数据变化或心跳超过20秒时推送，避免休市/静止时每2秒灌入数百KB重复JSON
+                if digest != last_digest or (now_mono - last_sent) >= 20.0:
+                    text = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+                    await socket.send_text(text)
+                    last_digest = digest
+                    last_sent = now_mono
                 await asyncio.sleep(2)
         except (WebSocketDisconnect, RuntimeError):
             return
@@ -277,6 +317,9 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             raise HTTPException(404, "接口不存在")
         if not (frontend / "index.html").exists():
             return JSONResponse({"detail": "请先在frontend运行npm ci和npm run build"}, status_code=503)
-        return FileResponse(frontend / "index.html")
+        return FileResponse(
+            frontend / "index.html",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     return app

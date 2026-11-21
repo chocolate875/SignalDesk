@@ -47,7 +47,7 @@ export default function SettingsPanel({
       .catch((e) => notify(e.message));
   }, []);
   const auth: BrokerAuth = data?.broker_auth ?? {
-    method: data?.credentials.longport ? "apikey" : null,
+    method: data?.credentials?.longport ? "apikey" : null,
     pending: false,
     message: "请重启 SignalDesk 以启用长桥 OAuth 登录。",
   };
@@ -80,10 +80,14 @@ export default function SettingsPanel({
     try {
       const { url } = await api("/broker/oauth/start", { method: "POST" });
       setAuthLink(url);
-      setData((old: any) => ({
-        ...old,
-        broker_auth: { ...old.broker_auth, pending: true, message: "" },
-      }));
+      setData((old: any) =>
+        old
+          ? {
+              ...old,
+              broker_auth: { ...old.broker_auth, pending: true, message: "" },
+            }
+          : old,
+      );
       if (page && !page.closed) page.location.replace(url);
     } catch (error: any) {
       page?.close();
@@ -576,7 +580,7 @@ export default function SettingsPanel({
                       ))}
                     </div>
                     <div className="operator-tags">
-                      {data.operators.map((o: any) => (
+                      {(data.operators ?? []).map((o: any) => (
                         <span title={o.description} key={o.name}>
                           {o.name}
                         </span>

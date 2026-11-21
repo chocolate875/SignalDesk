@@ -65,16 +65,16 @@ function PlanRangeBar({
   stock: Stock;
   onEditPlan: () => void;
 }) {
-  const stop = stock.long_plan.stop;
-  const target = stock.long_plan.target;
-  const close = stock.long_plan.close ?? stock.quote.last ?? null;
+  const stop = stock.long_plan?.stop ?? null;
+  const target = stock.long_plan?.target ?? null;
+  const close = stock.long_plan?.close ?? stock.quote?.last ?? null;
   const cost =
     stock.broker_quantity > 0 && stock.cost_price != null
       ? stock.cost_price
       : null;
 
-  const stopDist = stock.long_plan.stop_distance_percent;
-  const targetDist = stock.long_plan.target_distance_percent;
+  const stopDist = stock.long_plan?.stop_distance_percent;
+  const targetDist = stock.long_plan?.target_distance_percent;
 
   const points = [stop, cost, close, target].filter(
     (v): v is number => v != null && Number.isFinite(v),
@@ -706,63 +706,169 @@ export default function StockInspector({
               </details>
             </section>
 
-            <section className="insp-card">
-              <div className="insp-card-head">
-                <h3>估值与美债对照</h3>
-                <span
-                  className={`fresh-tag ${stock.research.valuation.fresh ? "ok" : "stale"}`}
-                >
-                  {stock.research.valuation.source} ·{" "}
-                  {stock.research.valuation.fresh ? "有效" : "待更新"}
-                </span>
-              </div>
-              <div className="val-grid">
-                <div className="val-cell">
-                  <small>滚动市盈率 PE</small>
-                  <strong>
-                    {fmt(stock.research.valuation.pe_ttm, 1)}
-                    <em>倍</em>
-                  </strong>
+            {stock.instrument?.is_fund ? (
+              <section className="insp-card fund-profile-card">
+                <div className="insp-card-head">
+                  <h3>基金与指数特征</h3>
+                  <span
+                    className={`verdict-chip tone-${
+                      stock.instrument.is_leveraged ? "warning" : "neutral"
+                    }`}
+                  >
+                    {stock.instrument.type_label}
+                  </span>
                 </div>
-                <div className="val-cell">
-                  <small>市净率 PB</small>
-                  <strong>
-                    {fmt(stock.research.valuation.pb, 2)}
-                    <em>倍</em>
-                  </strong>
-                </div>
-                <div className="val-cell">
-                  <small>股息率 TTM</small>
-                  <strong>
-                    {fmt(stock.research.valuation.dividend_yield_pct, 2)}
-                    <em>%</em>
-                  </strong>
-                </div>
-                <div className="val-cell">
-                  <small>盈利收益率 − 10Y美债</small>
-                  <strong
-                    className={
-                      stock.research.yield_gap_pp == null
-                        ? ""
-                        : stock.research.yield_gap_pp >= 0
-                          ? "positive"
-                          : "amber-text"
+                {stock.instrument.benchmark && (
+                  <p className="fund-benchmark">{stock.instrument.benchmark}</p>
+                )}
+                <div className="val-grid">
+                  <div
+                    className="val-cell"
+                    title={
+                      stock.fund_metrics?.high_52w != null &&
+                      stock.fund_metrics?.low_52w != null
+                        ? `近${stock.fund_metrics.window_days}日区间：$${fmt(stock.fund_metrics.low_52w, 2)} – $${fmt(stock.fund_metrics.high_52w, 2)}`
+                        : "最新收盘距近1年（252交易日）高点的回撤幅度"
                     }
                   >
-                    {stock.research.yield_gap_pp != null &&
-                    stock.research.yield_gap_pp >= 0
-                      ? "+"
-                      : ""}
-                    {fmt(stock.research.yield_gap_pp, 2)}
-                    <em>pp</em>
-                  </strong>
+                    <small>距52周高点回撤</small>
+                    <strong
+                      className={
+                        stock.fund_metrics?.drawdown_from_high_pct == null
+                          ? ""
+                          : stock.fund_metrics.drawdown_from_high_pct <= -20
+                            ? "amber-text"
+                            : "positive"
+                      }
+                    >
+                      {fmt(stock.fund_metrics?.drawdown_from_high_pct, 1)}
+                      <em>%</em>
+                    </strong>
+                  </div>
+                  <div
+                    className="val-cell"
+                    title="0% 为近1年最低点，100% 为近1年最高点，衡量当前所处价格分位"
+                  >
+                    <small>近1年价格分位</small>
+                    <strong>
+                      {fmt(stock.fund_metrics?.range_position_pct, 0)}
+                      <em>%</em>
+                    </strong>
+                  </div>
+                  <div
+                    className="val-cell"
+                    title={
+                      stock.fund_metrics?.hv20_pct != null
+                        ? `近20日年化波动率 ${fmt(stock.fund_metrics.hv20_pct, 1)}%`
+                        : "近60个交易日收益率年化波动率，数值越高波动与杠杆损耗越大"
+                    }
+                  >
+                    <small>60日年化波动率</small>
+                    <strong
+                      className={
+                        stock.fund_metrics?.hv60_pct != null &&
+                        stock.fund_metrics.hv60_pct >= 50
+                          ? "amber-text"
+                          : ""
+                      }
+                    >
+                      {fmt(stock.fund_metrics?.hv60_pct, 1)}
+                      <em>%</em>
+                    </strong>
+                  </div>
+                  <div
+                    className="val-cell"
+                    title={
+                      stock.fund_metrics?.return_60d_pct != null
+                        ? `近20日 ${fmt(stock.fund_metrics.return_20d_pct, 1)}% · 近60日 ${fmt(stock.fund_metrics.return_60d_pct, 1)}%`
+                        : "近1年窗口内从阶段高点到低点的最大回撤幅度"
+                    }
+                  >
+                    <small>近1年最大回撤</small>
+                    <strong>
+                      {fmt(stock.fund_metrics?.max_drawdown_pct, 1)}
+                      <em>%</em>
+                    </strong>
+                  </div>
                 </div>
-              </div>
-              <p className="val-footnote">
-                盈利收益率 {fmt(stock.research.earnings_yield_pct, 2)}%（取数{" "}
-                {time(stock.research.valuation.fetched_at)}）。利差仅作收益率水平参照。
-              </p>
-            </section>
+                {stock.instrument.is_leveraged &&
+                  stock.instrument.risk_notice && (
+                    <div className="fund-risk-banner">
+                      <TriangleAlert size={14} />
+                      <span>{stock.instrument.risk_notice}</span>
+                    </div>
+                  )}
+                <p className="val-footnote">
+                  {stock.research?.valuation?.dividend_yield_pct != null
+                    ? `派息率 TTM ${fmt(stock.research.valuation.dividend_yield_pct, 2)}%`
+                    : "派息率暂无"}
+                  {stock.fund_metrics?.ma200_gap_pct != null
+                    ? ` · 相对年线 ${stock.fund_metrics.ma200_gap_pct >= 0 ? "+" : ""}${fmt(stock.fund_metrics.ma200_gap_pct, 1)}%`
+                    : ""}
+                  。{stock.instrument.is_leveraged
+                    ? "杠杆/反向基金派息多含现金利息或结构分配，不按公司盈利评估。"
+                    : "指数/行业/商品基金不采用易失真的基金主体 PE/PB 口径。"}
+                </p>
+              </section>
+            ) : (
+              <section className="insp-card">
+                <div className="insp-card-head">
+                  <h3>估值与美债对照</h3>
+                  <span
+                    className={`fresh-tag ${stock.research?.valuation?.fresh ? "ok" : "stale"}`}
+                  >
+                    {stock.research?.valuation?.source ?? "券商"} ·{" "}
+                    {stock.research?.valuation?.fresh ? "有效" : "待更新"}
+                  </span>
+                </div>
+                <div className="val-grid">
+                  <div className="val-cell">
+                    <small>滚动市盈率 PE</small>
+                    <strong>
+                      {fmt(stock.research?.valuation?.pe_ttm, 1)}
+                      <em>倍</em>
+                    </strong>
+                  </div>
+                  <div className="val-cell">
+                    <small>市净率 PB</small>
+                    <strong>
+                      {fmt(stock.research?.valuation?.pb, 2)}
+                      <em>倍</em>
+                    </strong>
+                  </div>
+                  <div className="val-cell">
+                    <small>股息率 TTM</small>
+                    <strong>
+                      {fmt(stock.research?.valuation?.dividend_yield_pct, 2)}
+                      <em>%</em>
+                    </strong>
+                  </div>
+                  <div className="val-cell">
+                    <small>盈利收益率 − 10Y美债</small>
+                    <strong
+                      className={
+                        stock.research?.yield_gap_pp == null
+                          ? ""
+                          : stock.research.yield_gap_pp >= 0
+                            ? "positive"
+                            : "amber-text"
+                      }
+                    >
+                      {stock.research?.yield_gap_pp != null &&
+                      stock.research.yield_gap_pp >= 0
+                        ? "+"
+                        : ""}
+                      {fmt(stock.research?.yield_gap_pp, 2)}
+                      <em>pp</em>
+                    </strong>
+                  </div>
+                </div>
+                <p className="val-footnote">
+                  盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%（取数{" "}
+                  {time(stock.research?.valuation?.fetched_at)}）。利差仅作收益率水平参照。
+                </p>
+              </section>
+            )}
 
             <section className="insp-card">
               <div className="insp-card-head">
@@ -867,7 +973,7 @@ export default function StockInspector({
                 <div className="codex-block">
                   <h4>核心依据</h4>
                   <ul>
-                    {analysis.result.evidence.map((item, idx) => (
+                    {(analysis.result.evidence ?? []).map((item, idx) => (
                       <li key={idx}>{item}</li>
                     ))}
                   </ul>
@@ -876,7 +982,7 @@ export default function StockInspector({
                 <div className="codex-block">
                   <h4>主要风险与局限</h4>
                   <ul>
-                    {analysis.result.risks.map((item, idx) => (
+                    {(analysis.result.risks ?? []).map((item, idx) => (
                       <li key={idx}>{item}</li>
                     ))}
                   </ul>
@@ -885,7 +991,7 @@ export default function StockInspector({
                 <div className="codex-block">
                   <h4>改变计划的条件</h4>
                   <ul>
-                    {analysis.result.confirmation_conditions.map(
+                    {(analysis.result.confirmation_conditions ?? []).map(
                       (item, idx) => (
                         <li key={idx}>{item}</li>
                       ),

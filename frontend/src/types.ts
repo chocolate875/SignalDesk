@@ -45,10 +45,45 @@ export type WatchlistSync = {
   unsupported_count: number;
   unsupported: string[];
 };
+export type InstrumentInfo = {
+  asset_type:
+    | "stock"
+    | "broad_etf"
+    | "sector_etf"
+    | "commodity_etf"
+    | "leveraged_etf"
+    | "fund"
+    | string;
+  type_label: string;
+  benchmark: string;
+  is_fund: boolean;
+  is_leveraged: boolean;
+  is_inverse: boolean;
+  leverage: number | null;
+  company_valuation_applicable: boolean;
+  risk_notice: string;
+};
+export type FundMetrics = {
+  available: boolean;
+  window_days: number;
+  high_52w: number | null;
+  low_52w: number | null;
+  drawdown_from_high_pct: number | null;
+  range_position_pct: number | null;
+  max_drawdown_pct: number | null;
+  hv20_pct: number | null;
+  hv60_pct: number | null;
+  ma200_gap_pct: number | null;
+  return_20d_pct: number | null;
+  return_60d_pct: number | null;
+  return_252d_pct: number | null;
+};
 export type Stock = {
   symbol: string;
   name: string;
   sleeves: string[];
+  instrument?: InstrumentInfo;
+  fund_metrics?: FundMetrics;
   long_quantity: number;
   short_quantity: number;
   broker_quantity: number;
@@ -298,6 +333,15 @@ export type Detail = {
   timeframe: string;
   session: string;
 };
+export function isValidDashboard(value: unknown): value is Dashboard {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    Array.isArray(obj.stocks) &&
+    typeof obj.mode === "string" &&
+    Boolean(obj.market && typeof obj.market === "object")
+  );
+}
 export async function api<T = any>(
   path: string,
   options: RequestInit = {},
@@ -307,12 +351,23 @@ export async function api<T = any>(
     ...options,
     headers: { "Content-Type": "application/json", ...options.headers },
   });
-  const data = await response.json();
+  const text = await response.text();
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      if (!response.ok) {
+        throw new Error(`本地服务暂时不可用（HTTP ${response.status}）`);
+      }
+      throw new Error("本地服务返回了无法解析的响应格式");
+    }
+  }
   if (!response.ok)
     throw new Error(
-      typeof data.detail === "string"
+      typeof data?.detail === "string"
         ? data.detail
-        : JSON.stringify(data.detail || "请求失败"),
+        : JSON.stringify(data?.detail || `请求失败（HTTP ${response.status}）`),
     );
   return data;
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { ErrorBoundary } from "./ErrorBoundary";
 import "./style.css";
 const brokerResult = new URLSearchParams(location.search).get("broker-result");
 const resultMessages: Record<string, string> = {
@@ -28,7 +29,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         </a>
       </main>
     ) : (
-      <App />
+      <ErrorBoundary title="SignalDesk 看板遇到渲染异常">
+        <App />
+      </ErrorBoundary>
     )}
   </React.StrictMode>,
 );

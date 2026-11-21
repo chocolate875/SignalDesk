@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts/core";
 import {
   CandlestickChart,
@@ -157,7 +157,7 @@ function OhlcHud({
   );
 }
 
-export default function Chart({
+function Chart({
   detail,
   theme,
   reverse,
@@ -179,6 +179,8 @@ export default function Chart({
   const [showWaveTrend, setShowWaveTrend] = useState(true);
   const [activeRange, setActiveRange] = useState<number>(252);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [chartError, setChartError] = useState("");
+  const [retrySeq, setRetrySeq] = useState(0);
 
   const registerHover = useMemo(
     () => (setter: (idx: number | null) => void) => {
@@ -188,19 +190,23 @@ export default function Chart({
   );
 
   const dates = useMemo(() => {
-    if (!detail?.rows.length) return [];
+    if (!detail?.rows?.length) return [];
     const dateFormat = new Intl.DateTimeFormat("sv-SE", {
       timeZone: "America/New_York",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     });
-    return detail.rows.map((r) => dateFormat.format(new Date(r.timestamp)));
+    return detail.rows.map((r) => {
+      const ms = r?.timestamp ? Date.parse(r.timestamp) : Number.NaN;
+      return Number.isFinite(ms) ? dateFormat.format(new Date(ms)) : "";
+    });
   }, [detail?.rows]);
 
   useEffect(() => {
     hoverSetter.current(null);
-  }, [detail?.stock.symbol, detail?.mode]);
+    setChartError("");
+  }, [detail?.stock?.symbol, detail?.mode]);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -210,7 +216,8 @@ export default function Chart({
 
   useEffect(() => {
     if (!root.current) return;
-    const instance = echarts.init(root.current, undefined, {
+    const el = root.current;
+    const instance = echarts.init(el, undefined, {
       renderer: "canvas",
     });
     chart.current = instance;
@@ -221,20 +228,41 @@ export default function Chart({
     instance.on("globalout", () => {
       hoverSetter.current(null);
     });
-    const resize = new ResizeObserver(() => instance.resize());
-    resize.observe(root.current);
+    let rafId: number | null = null;
+    const resize = new ResizeObserver(() => {
+      if (rafId != null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (
+          !instance.isDisposed() &&
+          el.clientWidth > 0 &&
+          el.clientHeight > 0
+        ) {
+          try {
+            instance.resize();
+          } catch {
+            // 忽略窗口折叠或瞬时 0 尺寸引起的 ECharts resize 异常
+          }
+        }
+      });
+    });
+    resize.observe(el);
     return () => {
+      if (rafId != null) cancelAnimationFrame(rafId);
       resize.disconnect();
-      instance.dispose();
+      if (!instance.isDisposed()) instance.dispose();
       chart.current = null;
     };
-  }, []);
+  }, [retrySeq]);
 
   useEffect(() => {
     const instance = chart.current;
-    if (!instance) return;
-    if (!detail?.rows.length) {
-      instance.clear();
+    if (!instance || instance.isDisposed()) return;
+    if (!detail?.rows?.length) {
+      try {
+        instance.clear();
+      } catch {
+        // 忽略清理异常
+      }
       previousKey.current = "";
       return;
     }
@@ -261,24 +289,47 @@ export default function Chart({
     const ma200Color = dark ? "#5cb8e6" : "#64748b";
     const bollBandColor = dark ? "#858ee7" : "#1e40af";
     const key = [
-      detail.stock.symbol,
-      detail.mode,
-      detail.timeframe,
-      detail.session,
+      detail.stock?.symbol ?? "",
+      detail.mode ?? "",
+      detail.timeframe ?? "",
+      detail.session ?? "",
     ].join("/");
-    const old = instance.getOption() as any;
+    let old: any = null;
+    try {
+      old = instance.getOption();
+    } catch {
+      old = null;
+    }
     const zoom =
-      key === previousKey.current && old?.xAxis?.[0]?.data?.length
+      key === previousKey.current && old?.xAxis?.[0]?.data?.length >= 2
         ? old?.dataZoom?.[0]
         : null;
     previousKey.current = key;
 
     let left = Math.max(0, rows.length - 252);
     let right = rows.length - 1;
-    if (zoom) {
+    if (
+      zoom &&
+      typeof zoom.start === "number" &&
+      typeof zoom.end === "number" &&
+      Number.isFinite(zoom.start) &&
+      Number.isFinite(zoom.end)
+    ) {
       const oldDates: string[] = old.xAxis[0].data;
-      const oldLeft = Math.round(((oldDates.length - 1) * zoom.start) / 100);
-      const oldRight = Math.round(((oldDates.length - 1) * zoom.end) / 100);
+      const oldLeft = Math.max(
+        0,
+        Math.min(
+          oldDates.length - 1,
+          Math.round(((oldDates.length - 1) * zoom.start) / 100),
+        ),
+      );
+      const oldRight = Math.max(
+        oldLeft,
+        Math.min(
+          oldDates.length - 1,
+          Math.round(((oldDates.length - 1) * zoom.end) / 100),
+        ),
+      );
       if (oldRight >= oldDates.length - 1) {
         left = Math.max(0, right - (oldRight - oldLeft));
       } else {
@@ -288,6 +339,8 @@ export default function Chart({
         if (mappedRight >= 0) right = Math.max(left, mappedRight);
       }
     }
+    left = Math.max(0, Math.min(left, rows.length - 1));
+    right = Math.max(left, Math.min(right, rows.length - 1));
 
     const val = (field: string) =>
       rows.map((r) => (r[field] == null ? null : Number(r[field])));
@@ -833,13 +886,19 @@ export default function Chart({
         {
           type: "inside",
           xAxisIndex: panes.map((_, i) => i),
-          startValue: dates[left],
-          endValue: dates[right],
+          startValue: dates[left] ?? 0,
+          endValue: dates[right] ?? rows.length - 1,
         },
       ],
       series,
     };
-    instance.setOption(option, { notMerge: true });
+    try {
+      instance.setOption(option, { notMerge: true });
+      setChartError("");
+    } catch (err: any) {
+      console.error("[SignalDesk Chart setOption]", err);
+      setChartError(err?.message || "K 线图渲染遇到异常");
+    }
   }, [
     detail,
     dates,
@@ -851,6 +910,7 @@ export default function Chart({
     showWaveTrend,
     theme,
     reverse,
+    retrySeq,
   ]);
 
   const paneTitles = useMemo(() => {
@@ -879,17 +939,22 @@ export default function Chart({
     ];
   }, [showMacd, showRsi]);
 
-  const activeWaveTrend = detail?.stock.wave_trend;
+  const activeWaveTrend = detail?.stock?.wave_trend;
 
   const zoomTo = (countLimit: number) => {
-    const count = detail?.rows.length ?? 0;
-    if (!count) return;
+    const count = detail?.rows?.length ?? 0;
+    const instance = chart.current;
+    if (!count || !instance || instance.isDisposed()) return;
     setActiveRange(countLimit);
-    chart.current?.dispatchAction({
-      type: "dataZoom",
-      startValue: countLimit ? Math.max(0, count - countLimit) : 0,
-      endValue: count - 1,
-    });
+    try {
+      instance.dispatchAction({
+        type: "dataZoom",
+        startValue: countLimit ? Math.max(0, count - countLimit) : 0,
+        endValue: count - 1,
+      });
+    } catch {
+      // 忽略缩放动作在图表重建期间的瞬态异常
+    }
   };
 
   return (
@@ -922,7 +987,7 @@ export default function Chart({
               key={label}
               type="button"
               className={activeRange === n ? "active" : ""}
-              disabled={!detail?.rows.length}
+              disabled={!detail?.rows?.length}
               onClick={() => zoomTo(n)}
               title={tip}
             >
@@ -968,8 +1033,8 @@ export default function Chart({
           >
             RSI
           </button>
-          {(detail?.stock.broker_quantity ?? 0) > 0 &&
-            detail?.stock.cost_price != null && (
+          {(detail?.stock?.broker_quantity ?? 0) > 0 &&
+            detail?.stock?.cost_price != null && (
               <button
                 type="button"
                 className={showCost ? "active" : ""}
@@ -979,7 +1044,7 @@ export default function Chart({
                 成本
               </button>
             )}
-          {detail?.stock.forecast?.levels.available && (
+          {detail?.stock?.forecast?.levels?.available && (
             <button
               type="button"
               className={showForecast ? "active" : ""}
@@ -1006,11 +1071,12 @@ export default function Chart({
           <button
             type="button"
             className="toolbar-fs-btn"
-            onClick={() =>
-              document.fullscreenElement
+            onClick={() => {
+              const p = document.fullscreenElement
                 ? document.exitFullscreen()
-                : wrapper.current?.requestFullscreen()
-            }
+                : wrapper.current?.requestFullscreen();
+              p?.catch(() => {});
+            }}
             title={isFullscreen ? "退出全屏" : "全屏看图"}
           >
             {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -1063,12 +1129,29 @@ export default function Chart({
           role="img"
           aria-label="价格、成交量、MACD与RSI联动图"
         />
-        {!detail?.rows.length && (
+        {chartError && (
+          <div className="chart-empty chart-error-overlay" role="alert">
+            <span>图表渲染遇到异常：{chartError}</span>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={() => {
+                setChartError("");
+                setRetrySeq((n) => n + 1);
+              }}
+            >
+              重新加载图表
+            </button>
+          </div>
+        )}
+        {!chartError && !detail?.rows?.length && (
           <div className="chart-empty">
-            该股票日线历史尚未就绪，正在等待有效行情
+            该标的日线历史尚未就绪，正在等待有效行情
           </div>
         )}
       </div>
     </div>
   );
 }
+
+export default memo(Chart);

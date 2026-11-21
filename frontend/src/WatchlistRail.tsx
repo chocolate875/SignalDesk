@@ -22,8 +22,9 @@ type SortMode = "rating" | "alert" | "gainers" | "losers";
 
 const LABEL_LEGEND: { label: string; tone: string; desc: string }[] = [
   { label: "跌破止损", tone: "danger", desc: "收盘价已低于您设定的止损/失效价" },
-  { label: "亏损警示", tone: "danger", desc: "滚动市盈率 PE ≤ 0（亏损或估值异常）" },
+  { label: "亏损警示", tone: "danger", desc: "仅上市公司：滚动 PE ≤ 0（ETF/基金不按单股 PE 判定）" },
   { label: "触及目标", tone: "warning", desc: "收盘价已达目标价，可评估分批止盈" },
+  { label: "对冲观察", tone: "warning", desc: "反向做空杠杆 ETF，仅作短期波段或对冲观察" },
   { label: "弱势观望 / 转弱警惕", tone: "warning", desc: "日线结构偏弱或技术风险提示较多" },
   { label: "关注买点 / 趋势向好", tone: "positive", desc: "日线处于上升偏强结构且风险较少" },
   { label: "震荡观望 / 持有观察", tone: "neutral", desc: "日线走势中性平稳，继续跟踪方向" },
@@ -95,14 +96,14 @@ export default function WatchlistRail({
 
     return [...filtered].sort((a, b) => {
       if (sort === "rating") {
-        const scoreA = a.forecast?.rating.available
+        const scoreA = a.forecast?.rating?.available
           ? (a.forecast.rating.score ?? -1)
           : -1;
-        const scoreB = b.forecast?.rating.available
+        const scoreB = b.forecast?.rating?.available
           ? (b.forecast.rating.score ?? -1)
           : -1;
         if (scoreB !== scoreA) return scoreB - scoreA;
-        const techDiff = (b.primary.score ?? -1) - (a.primary.score ?? -1);
+        const techDiff = (b.primary?.score ?? -1) - (a.primary?.score ?? -1);
         if (techDiff !== 0) return techDiff;
         return Number(b.favorite) - Number(a.favorite);
       }
@@ -110,7 +111,9 @@ export default function WatchlistRail({
         const chgA = a.change_percent ?? Number.NEGATIVE_INFINITY;
         const chgB = b.change_percent ?? Number.NEGATIVE_INFINITY;
         if (chgB !== chgA) return chgB - chgA;
-        return (b.forecast?.rating.score ?? -1) - (a.forecast?.rating.score ?? -1);
+        return (
+          (b.forecast?.rating?.score ?? -1) - (a.forecast?.rating?.score ?? -1)
+        );
       }
       if (sort === "losers") {
         const chgA = a.change_percent ?? Number.POSITIVE_INFINITY;
@@ -122,7 +125,7 @@ export default function WatchlistRail({
       const priDiff = (a.verdict?.priority ?? 9) - (b.verdict?.priority ?? 9);
       if (priDiff !== 0) return priDiff;
       const riskDiff =
-        (b.primary.risks?.length ?? 0) - (a.primary.risks?.length ?? 0);
+        (b.primary?.risks?.length ?? 0) - (a.primary?.risks?.length ?? 0);
       if (riskDiff !== 0) return riskDiff;
       const favDiff = Number(b.favorite) - Number(a.favorite);
       if (favDiff !== 0) return favDiff;
@@ -292,7 +295,7 @@ export default function WatchlistRail({
         {visibleStocks.map((s) => {
           const isSelected = selected === s.symbol;
           const tone = s.verdict?.tone ?? "muted";
-          const actionText = s.verdict?.action ?? s.long_plan.status;
+          const actionText = s.verdict?.action ?? s.long_plan?.status ?? "观察";
           const actionTip =
             s.verdict?.action_meaning || s.verdict?.headline || actionText;
           const changeClass =
@@ -346,14 +349,14 @@ export default function WatchlistRail({
                   </span>
                 </div>
                 <strong className="stock-row-price">
-                  {s.quote.last != null ? "$" + fmt(s.quote.last, 2) : "—"}
+                  {s.quote?.last != null ? "$" + fmt(s.quote.last, 2) : "—"}
                 </strong>
               </div>
 
               <div className="stock-row-line2">
                 <div className="stock-row-sub">
-                  <span className="stock-row-name" title={s.name || "观察股票"}>
-                    {s.name || "观察股票"}
+                  <span className="stock-row-name" title={s.name || "观察标的"}>
+                    {s.name || "观察标的"}
                   </span>
                 </div>
                 <div className="stock-row-nums">
@@ -364,7 +367,7 @@ export default function WatchlistRail({
                         "%"
                       : "待更新"}
                   </span>
-                  {s.forecast?.rating.available ? (
+                  {s.forecast?.rating?.available ? (
                     <span
                       className={`rating-mini tone-text-${s.forecast.rating.tone}`}
                       title={s.forecast.rating.summary}
@@ -373,11 +376,13 @@ export default function WatchlistRail({
                     </span>
                   ) : (
                     <span className="stock-row-meta">
-                      {s.primary.score != null
+                      {s.primary?.score != null
                         ? `分 ${fmt(s.primary.score, 0)}`
-                        : s.research.valuation.pe_ttm != null
-                          ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
-                          : "—"}
+                        : s.instrument?.is_fund
+                          ? s.instrument.type_label
+                          : s.research?.valuation?.pe_ttm != null
+                            ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
+                            : "—"}
                     </span>
                   )}
                 </div>

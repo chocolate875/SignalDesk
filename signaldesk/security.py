@@ -137,16 +137,84 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
         long_qty = stock.get("long_quantity")
         weight = weight * long_qty / stock["broker_quantity"] if long_qty is not None else None
     research = stock.get("research", {})
+    instrument = stock.get("instrument") or {}
+    is_fund = bool(instrument.get("is_fund"))
+    fund_metrics = stock.get("fund_metrics") or {}
     forecast = stock.get("forecast", {})
     rating = forecast.get("rating", {})
     levels = forecast.get("levels", {})
     wt = stock.get("wave_trend", {})
     wt_trend = wt.get("trend", {})
     wt_wave = wt.get("wave", {})
+    raw_val = research.get("valuation", {})
+    safe_valuation = (
+        {
+            "source": raw_val.get("source"),
+            "company_valuation_applicable": False,
+            "pe_ttm": None,
+            "pb": None,
+            "dividend_yield_pct": raw_val.get("dividend_yield_pct"),
+            "fetched_at": raw_val.get("fetched_at"),
+            "fresh": raw_val.get("fresh"),
+            "refresh_failed": raw_val.get("refresh_failed"),
+        }
+        if is_fund
+        else {
+            "company_valuation_applicable": True,
+            **{
+                k: raw_val.get(k)
+                for k in (
+                    "source",
+                    "pe_ttm",
+                    "pb",
+                    "dividend_yield_pct",
+                    "fetched_at",
+                    "fresh",
+                    "refresh_failed",
+                )
+            },
+        }
+    )
     return {
         "source": mode,
         "symbol": stock["symbol"],
         "name": stock.get("name", ""),
+        "instrument": {
+            k: instrument.get(k)
+            for k in (
+                "asset_type",
+                "type_label",
+                "benchmark",
+                "is_fund",
+                "is_leveraged",
+                "is_inverse",
+                "leverage",
+                "company_valuation_applicable",
+                "risk_notice",
+            )
+        }
+        if instrument
+        else {},
+        "fund_metrics": {
+            k: fund_metrics.get(k)
+            for k in (
+                "available",
+                "window_days",
+                "high_52w",
+                "low_52w",
+                "drawdown_from_high_pct",
+                "range_position_pct",
+                "max_drawdown_pct",
+                "hv20_pct",
+                "hv60_pct",
+                "ma200_gap_pct",
+                "return_20d_pct",
+                "return_60d_pct",
+                "return_252d_pct",
+            )
+        }
+        if is_fund and fund_metrics
+        else {},
         "investment_horizon": "long",
         "long_position_assigned": "long" in stock.get("sleeves", []) and not stock.get("watch_only"),
         "position_weight_percent": weight if stock.get("reconciled", True) else None,
@@ -192,18 +260,7 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
         if wt
         else {},
         "research": {
-            "valuation": {
-                k: research.get("valuation", {}).get(k)
-                for k in (
-                    "source",
-                    "pe_ttm",
-                    "pb",
-                    "dividend_yield_pct",
-                    "fetched_at",
-                    "fresh",
-                    "refresh_failed",
-                )
-            },
+            "valuation": safe_valuation,
             "curve": {
                 k: research.get("curve", {}).get(k)
                 for k in (
@@ -218,8 +275,8 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
                     "refresh_failed",
                 )
             },
-            "earnings_yield_pct": research.get("earnings_yield_pct"),
-            "yield_gap_pp": research.get("yield_gap_pp"),
+            "earnings_yield_pct": None if is_fund else research.get("earnings_yield_pct"),
+            "yield_gap_pp": None if is_fund else research.get("yield_gap_pp"),
         },
         "market": {
             key: stock.get("quote", {}).get(key)

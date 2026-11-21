@@ -18,6 +18,7 @@ TIER_SPECS = {
 }
 TIER_ORDER = ["sell", "reduce", "hold", "buy", "strong_buy"]
 DISCLAIMER = "基于已确认日线、历史波动率与公开估值/利率测算，仅供复核参考，不构成投资建议。"
+ETF_DISCLAIMER = "基于已确认日线、历史回撤分位、波动率与美债利率测算（不采用失真的基金主体 PE），仅供复核参考，不构成投资建议。"
 
 
 def _unavailable_payload(reason: str = "已确认日线窗口或波动率数据不足，暂不生成点位预测") -> dict:
@@ -86,6 +87,8 @@ def compute_forecast(
     summary: dict,
     research: dict,
     long_plan: dict,
+    instrument: dict | None = None,
+    fund_metrics: dict | None = None,
 ) -> dict:
     """Compute causal support/resistance price levels and a 5-tier rating."""
     tail = _contiguous_regular_tail(frame)
@@ -274,35 +277,26 @@ def compute_forecast(
         "stop_anchor": stop_anchor,
     }
 
-    # 5-tier Rating calculation
+    # 5-tier Rating calculation (个股 vs ETF/指数基金分流评估)
     tech_score = float(summary["score"])
     state_label = {"strong": "结构偏强", "weak": "结构偏弱", "neutral": "结构中性"}.get(
         summary.get("state", "neutral"), "待确认"
     )
 
+    inst = instrument or {}
+    is_fund = bool(inst.get("is_fund"))
+    is_leveraged = bool(inst.get("is_leveraged"))
+    is_inverse = bool(inst.get("is_inverse"))
+    fm = fund_metrics or {}
+
     val = research.get("valuation") or {}
     val_fresh = bool(val.get("fresh"))
-    curve_fresh = bool((research.get("curve") or {}).get("fresh"))
+    curve = research.get("curve") or {}
+    curve_fresh = bool(curve.get("fresh"))
+    ten_change_bp = finite(curve.get("ten_change_bp"))
     pe = finite(val.get("pe_ttm"))
     div = finite(val.get("dividend_yield_pct")) or 0.0
     gap = finite(research.get("yield_gap_pp"))
-
-    if val_fresh:
-        if pe is not None and pe <= 0:
-            val_score: float | None = 18.0
-            val_detail = f"滚动 PE {pe:.1f}x（盈利为负，估值承压）"
-        elif gap is not None and pe is not None:
-            val_score = float(np.clip(58.0 + gap * 10.0 + (4.0 if div >= 2.0 else 0.0), 15.0, 95.0))
-            val_detail = f"PE {pe:.1f}x，股债利差 {gap:+.2f}pp"
-        elif pe is not None and pe > 0:
-            val_score = float(np.clip(90.0 - pe * 1.15 + (4.0 if div >= 2.0 else 0.0), 20.0, 82.0))
-            val_detail = f"PE {pe:.1f}x（缺有效美债利率对照，按市盈率水平估算）"
-        else:
-            val_score = None
-            val_detail = "暂无有效市盈率，权重按其余维度归一化"
-    else:
-        val_score = None
-        val_detail = "估值数据未更新或已过期，权重按其余维度归一化"
 
     rr_score = float(
         np.clip(
@@ -323,15 +317,104 @@ def compute_forecast(
         rc_score -= 15.0 if rsi is not None and rsi >= 70 else 6.0
     if any("过期" in r for r in risks):
         rc_score -= 8.0
-    rc_score = max(10.0, rc_score)
-    rc_detail = f"独立风险提示 {len(risks)} 项" if risks else "无额外技术风险标记"
 
-    raw_factors = [
-        {"key": "technical", "label": "技术结构", "base_weight": 0.40, "score": tech_score, "detail": f"日线评分 {tech_score:.1f}（{state_label}）"},
-        {"key": "valuation", "label": "估值利率", "base_weight": 0.30, "score": val_score, "detail": val_detail},
-        {"key": "risk_reward", "label": "点位赔率", "base_weight": 0.20, "score": rr_score, "detail": rr_detail},
-        {"key": "risk_control", "label": "风险控制", "base_weight": 0.10, "score": rc_score, "detail": rc_detail},
-    ]
+    hv60 = finite(fm.get("hv60_pct"))
+    if is_fund:
+        dd_high = finite(fm.get("drawdown_from_high_pct"))
+        pos_52w = finite(fm.get("range_position_pct"))
+        ma200_gap = finite(fm.get("ma200_gap_pct"))
+        # 基金/指数不使用失真的单股 PE/PB，改用近1年回撤分位、年线偏离与美债长端变动评估
+        if dd_high is not None and pos_52w is not None:
+            if pos_52w >= 90.0:
+                base_pos = 50.0  # 贴近52周高点，防高位追涨
+            elif pos_52w >= 65.0:
+                base_pos = 64.0  # 偏强区中上沿
+            elif pos_52w >= 30.0:
+                base_pos = 72.0  # 合理回调/中段性价比区
+            elif dd_high >= -22.0:
+                base_pos = 62.0  # 较深回撤但仍可控
+            else:
+                base_pos = 44.0  # 深度回撤弱势区，待企稳确认
+
+            macro_adj = 0.0
+            macro_note = ""
+            if curve_fresh and ten_change_bp is not None and not is_inverse:
+                if ten_change_bp <= -10.0:
+                    macro_adj = 5.0
+                    macro_note = f" · 10Y近21日 {ten_change_bp:+.0f}bp"
+                elif ten_change_bp >= 15.0:
+                    macro_adj = -5.0
+                    macro_note = f" · 10Y近21日 {ten_change_bp:+.0f}bp"
+            ma_adj = 3.0 if (ma200_gap is not None and 0 <= ma200_gap <= 15.0) else (
+                -4.0 if (ma200_gap is not None and ma200_gap < -12.0) else 0.0
+            )
+            fund_pos_score: float | None = float(np.clip(base_pos + macro_adj + ma_adj, 18.0, 90.0))
+            fund_pos_detail = (
+                f"距52周高点 {dd_high:+.1f}% · 年内分位 {pos_52w:.0f}%{macro_note}"
+            )
+        else:
+            fund_pos_score = None
+            fund_pos_detail = "历史样本不足60日，权重按其余维度归一化"
+
+        if is_leveraged and hv60 is not None:
+            if hv60 >= 75.0:
+                rc_score -= 18.0
+            elif hv60 >= 55.0:
+                rc_score -= 10.0
+            elif hv60 >= 40.0:
+                rc_score -= 5.0
+        elif hv60 is not None and hv60 >= 45.0:
+            rc_score -= 6.0
+
+        rc_score = max(10.0, rc_score)
+        if is_leveraged:
+            vol_text = f"年化波动 {hv60:.1f}%（存在杠杆损耗）" if hv60 is not None else "日度再平衡杠杆损耗"
+            rc_detail = f"{vol_text} · 风险 {len(risks)} 项" if risks else vol_text
+            raw_factors = [
+                {"key": "technical", "label": "技术结构", "base_weight": 0.45, "score": tech_score, "detail": f"日线评分 {tech_score:.1f}（{state_label}）"},
+                {"key": "fund_position", "label": "波动与回撤", "base_weight": 0.20, "score": fund_pos_score, "detail": fund_pos_detail},
+                {"key": "risk_reward", "label": "点位赔率", "base_weight": 0.20, "score": rr_score, "detail": rr_detail},
+                {"key": "risk_control", "label": "杠杆风控", "base_weight": 0.15, "score": rc_score, "detail": rc_detail},
+            ]
+        else:
+            rc_detail = (
+                f"年化波动 {hv60:.1f}% · 风险 {len(risks)} 项"
+                if hv60 is not None and risks
+                else (f"年化波动 {hv60:.1f}% · 无额外技术风险" if hv60 is not None else (f"独立风险提示 {len(risks)} 项" if risks else "无额外技术风险标记"))
+            )
+            raw_factors = [
+                {"key": "technical", "label": "技术结构", "base_weight": 0.40, "score": tech_score, "detail": f"日线评分 {tech_score:.1f}（{state_label}）"},
+                {"key": "fund_position", "label": "回撤与宏观", "base_weight": 0.25, "score": fund_pos_score, "detail": fund_pos_detail},
+                {"key": "risk_reward", "label": "点位赔率", "base_weight": 0.25, "score": rr_score, "detail": rr_detail},
+                {"key": "risk_control", "label": "风险控制", "base_weight": 0.10, "score": rc_score, "detail": rc_detail},
+            ]
+    else:
+        if val_fresh:
+            if pe is not None and pe <= 0:
+                val_score: float | None = 18.0
+                val_detail = f"滚动 PE {pe:.1f}x（盈利为负，估值承压）"
+            elif gap is not None and pe is not None:
+                val_score = float(np.clip(58.0 + gap * 10.0 + (4.0 if div >= 2.0 else 0.0), 15.0, 95.0))
+                val_detail = f"PE {pe:.1f}x，股债利差 {gap:+.2f}pp"
+            elif pe is not None and pe > 0:
+                val_score = float(np.clip(90.0 - pe * 1.15 + (4.0 if div >= 2.0 else 0.0), 20.0, 82.0))
+                val_detail = f"PE {pe:.1f}x（缺有效美债利率对照，按市盈率水平估算）"
+            else:
+                val_score = None
+                val_detail = "暂无有效市盈率，权重按其余维度归一化"
+        else:
+            val_score = None
+            val_detail = "估值数据未更新或已过期，权重按其余维度归一化"
+
+        rc_score = max(10.0, rc_score)
+        rc_detail = f"独立风险提示 {len(risks)} 项" if risks else "无额外技术风险标记"
+        raw_factors = [
+            {"key": "technical", "label": "技术结构", "base_weight": 0.40, "score": tech_score, "detail": f"日线评分 {tech_score:.1f}（{state_label}）"},
+            {"key": "valuation", "label": "估值利率", "base_weight": 0.30, "score": val_score, "detail": val_detail},
+            {"key": "risk_reward", "label": "点位赔率", "base_weight": 0.20, "score": rr_score, "detail": rr_detail},
+            {"key": "risk_control", "label": "风险控制", "base_weight": 0.10, "score": rc_score, "detail": rc_detail},
+        ]
+
     active_weight = sum(f["base_weight"] for f in raw_factors if f["score"] is not None)
     factors = []
     raw_score = 0.0
@@ -373,7 +456,7 @@ def compute_forecast(
         cap_tier("reduce")
         guardrails.append(f"已跌破个人计划失效价 ${plan_stop:.2f}，风控护栏将评级上限设为谨慎减持")
 
-    if val_fresh and pe is not None and pe <= 0:
+    if not is_fund and val_fresh and pe is not None and pe <= 0:
         cap_tier("hold")
         guardrails.append(f"滚动市盈率为负（PE {pe:.1f}x），风控护栏暂不给出买入评级")
 
@@ -382,13 +465,29 @@ def compute_forecast(
         cap_tier("hold")
         guardrails.append("日线处于空头弱势结构，风控护栏暂停买入提示")
 
+    if is_inverse:
+        cap_tier("hold")
+        guardrails.append("属于反向做空杠杆工具，存在每日再平衡损耗，仅作短线对冲参考，暂不出具买入评级")
+    elif is_leveraged:
+        cap_tier("buy")
+        guardrails.append("属于高倍杠杆交易型基金，存在每日复利波动损耗，仅适合波段跟踪并须严守止损")
+
     stale_risk = any("过期" in r for r in risks)
-    if val_fresh and curve_fresh and not stale_risk and len(risks) < 3:
-        confidence = "高"
-    elif (val_fresh or curve_fresh) and not stale_risk and len(risks) < 3:
-        confidence = "中"
+    if is_fund:
+        fund_ready = bool(fm.get("available") and fm.get("range_position_pct") is not None)
+        if fund_ready and curve_fresh and not stale_risk and len(risks) < 3 and not is_leveraged:
+            confidence = "高"
+        elif (fund_ready or curve_fresh) and not stale_risk and len(risks) < 3:
+            confidence = "中"
+        else:
+            confidence = "低"
     else:
-        confidence = "低"
+        if val_fresh and curve_fresh and not stale_risk and len(risks) < 3:
+            confidence = "高"
+        elif (val_fresh or curve_fresh) and not stale_risk and len(risks) < 3:
+            confidence = "中"
+        else:
+            confidence = "低"
 
     label, tone, stars = TIER_SPECS[code]
     guard_note = f"（已触发风控护栏：{guardrails[0]}）" if guardrails else ""
@@ -411,6 +510,6 @@ def compute_forecast(
             "summary": rating_summary,
             "factors": factors,
             "guardrails": guardrails,
-            "disclaimer": DISCLAIMER,
+            "disclaimer": ETF_DISCLAIMER if is_fund else DISCLAIMER,
         },
     }

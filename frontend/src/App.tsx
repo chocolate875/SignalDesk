@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import Chart from "./Chart";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { MacroStripWithGuide } from "./GuidePopover";
 import SettingsPanel from "./Settings";
 import StockInspector, { type InspectorTab } from "./StockInspector";
@@ -26,8 +27,8 @@ import WatchlistRail from "./WatchlistRail";
 import {
   api,
   fmt,
+  isValidDashboard,
   ticker,
-  time,
   type Dashboard,
   type Detail,
   type Stock,
@@ -54,10 +55,10 @@ function AllocationEditor({
   const [short, setShort] = useState(stock?.short_quantity ?? 0);
   const [watchSleeve, setWatchSleeve] = useState(stock?.watch_sleeve ?? "long");
   const [stop, setStop] = useState(
-    (presetStop ?? stock?.long_plan.stop)?.toString() ?? "",
+    (presetStop ?? stock?.long_plan?.stop)?.toString() ?? "",
   );
   const [target, setTarget] = useState(
-    (presetTarget ?? stock?.long_plan.target)?.toString() ?? "",
+    (presetTarget ?? stock?.long_plan?.target)?.toString() ?? "",
   );
   const [favorite, setFavorite] = useState(stock?.favorite ?? false);
   const [busy, setBusy] = useState(false);
@@ -316,31 +317,62 @@ export default function App() {
     let socket: WebSocket | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
     async function connect() {
+      if (socket) {
+        try {
+          socket.onclose = null;
+          socket.onerror = null;
+          socket.onmessage = null;
+          socket.close();
+        } catch {
+          // 忽略关闭旧连接异常
+        }
+        socket = undefined;
+      }
       try {
         const snapshot = await api<Dashboard>("/bootstrap");
         if (disposed) return;
+        if (!isValidDashboard(snapshot)) {
+          throw new Error("本机看板返回数据不完整，正在重试");
+        }
         setData(snapshot);
         setError("");
         if (!localStorage.getItem("sd-onboarded")) setSettings(true);
-        socket = new WebSocket(
+        const ws = new WebSocket(
           `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/stream`,
         );
-        socket.onopen = () => {
+        socket = ws;
+        ws.onopen = () => {
           if (!disposed) setConnected(true);
         };
-        socket.onmessage = (e) => {
-          if (!disposed) setData(JSON.parse(e.data));
+        ws.onmessage = (e) => {
+          if (disposed) return;
+          try {
+            const parsed = JSON.parse(e.data);
+            if (isValidDashboard(parsed)) {
+              setData(parsed);
+            }
+          } catch {
+            // 忽略异常帧，保留上一次有效快照避免白屏
+          }
         };
-        socket.onclose = () => {
-          if (!disposed) {
+        ws.onclose = () => {
+          if (!disposed && socket === ws) {
             setConnected(false);
+            clearTimeout(retry);
             retry = setTimeout(connect, 3000);
           }
         };
-        socket.onerror = () => socket?.close();
+        ws.onerror = () => {
+          try {
+            ws.close();
+          } catch {
+            // 忽略关闭错误
+          }
+        };
       } catch (e: any) {
         if (!disposed) {
-          setError(e.message);
+          setError(e?.message || "正在重新连接本地服务");
+          clearTimeout(retry);
           retry = setTimeout(connect, 3000);
         }
       }
@@ -349,17 +381,25 @@ export default function App() {
     return () => {
       disposed = true;
       clearTimeout(retry);
-      socket?.close();
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onmessage = null;
+        socket.close();
+      }
     };
   }, []);
 
   useEffect(() => {
-    if (data?.stocks.length && !data.stocks.some((s) => s.symbol === selected)) {
+    if (
+      data?.stocks?.length &&
+      !data.stocks.some((s) => s.symbol === selected)
+    ) {
       setSelected(data.stocks[0].symbol);
     }
   }, [data?.stocks, selected]);
 
-  const stock = data?.stocks.find((s) => s.symbol === selected) ?? null;
+  const stock = data?.stocks?.find((s) => s.symbol === selected) ?? null;
 
   useEffect(() => {
     let disposed = false;
@@ -367,7 +407,9 @@ export default function App() {
       if (!stock) return;
       try {
         const value = await api<Detail>(`/stock/${selected}`);
-        if (!disposed) setDetail(value);
+        if (!disposed && value && Array.isArray(value.rows)) {
+          setDetail(value);
+        }
       } catch {
         if (!disposed) setDetail(null);
       }
@@ -382,22 +424,22 @@ export default function App() {
     selected,
     data?.mode,
     !!stock,
-    stock?.primary.as_of,
-    stock?.primary.score,
-    stock?.primary.rule_version,
-    stock?.primary.state,
-    stock?.long_plan.stop,
-    stock?.long_plan.target,
+    stock?.primary?.as_of,
+    stock?.primary?.score,
+    stock?.primary?.rule_version,
+    stock?.primary?.state,
+    stock?.long_plan?.stop,
+    stock?.long_plan?.target,
   ]);
 
-  const analysis = data?.analyses.find(
+  const analysis = (data?.analyses ?? []).find(
     (a) =>
       a.symbol === selected &&
-      a.source === data.mode &&
+      a.source === data?.mode &&
       a.scope === "long_value",
   );
   const currentDetail =
-    stock && detail?.stock.symbol === selected && detail.mode === data?.mode
+    stock && detail?.stock?.symbol === selected && detail.mode === data?.mode
       ? detail
       : null;
   const summary = currentDetail?.summary ?? null;
@@ -405,9 +447,12 @@ export default function App() {
 
   async function refresh() {
     try {
-      setData(await api("/dashboard"));
+      const next = await api<Dashboard>("/dashboard");
+      if (isValidDashboard(next)) {
+        setData(next);
+      }
     } catch (e: any) {
-      notify(e.message);
+      notify(e?.message || "刷新数据失败");
     }
   }
 
@@ -544,11 +589,11 @@ export default function App() {
           </button>
           <div className="market-status-chip">
             <span
-              className={`session-dot ${data?.market.session === "regular" ? "open" : ""}`}
+              className={`session-dot ${data?.market?.session === "regular" ? "open" : ""}`}
             />
             <span>
-              {data?.market.label ?? "连接中"}
-              {data?.market.early_close ? " · 提前收盘" : ""}
+              {data?.market?.label ?? "连接中"}
+              {data?.market?.early_close ? " · 提前收盘" : ""}
             </span>
           </div>
           <div className="clock-chip" title="北京时间 / 纽约时间">
@@ -627,19 +672,21 @@ export default function App() {
       )}
 
       <main className="terminal-grid">
-        <WatchlistRail
-          allStocks={data?.stocks ?? []}
-          watchlistGroups={data?.watchlist_groups ?? []}
-          watchlistSync={data?.watchlist_sync}
-          selected={selected}
-          onSelect={setSelected}
-          onToggleFavorite={toggleFavorite}
-          onAddWatch={() => setEditor({ stock: null })}
-          onSyncWatchlist={syncWatchlist}
-          syncing={syncingWatchlist}
-          onOpenSettings={() => setSettings(true)}
-          mode={data?.mode ?? "demo"}
-        />
+        <ErrorBoundary compact title="左侧行情列表暂时异常">
+          <WatchlistRail
+            allStocks={data?.stocks ?? []}
+            watchlistGroups={data?.watchlist_groups ?? []}
+            watchlistSync={data?.watchlist_sync}
+            selected={selected}
+            onSelect={setSelected}
+            onToggleFavorite={toggleFavorite}
+            onAddWatch={() => setEditor({ stock: null })}
+            onSyncWatchlist={syncWatchlist}
+            syncing={syncingWatchlist}
+            onOpenSettings={() => setSettings(true)}
+            mode={data?.mode ?? "demo"}
+          />
+        </ErrorBoundary>
 
         <section className="center-stage" aria-label="个股行情与K线主工作区">
           {stock ? (
@@ -663,9 +710,26 @@ export default function App() {
                   <div className="hero-identity">
                     <div className="hero-title-line">
                       <h1>{ticker(stock.symbol)}</h1>
-                      <span className="hero-name">
+                      <span className="hero-name" title={stock.name || "美股标的"}>
                         {stock.name || "美股标的"}
                       </span>
+                      {stock.instrument?.is_fund && (
+                        <span
+                          className={`tag-chip asset-type ${
+                            stock.instrument.is_leveraged ? "leveraged" : "etf"
+                          }`}
+                          title={
+                            [
+                              stock.instrument.benchmark,
+                              stock.instrument.risk_notice,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")
+                          }
+                        >
+                          {stock.instrument.type_label}
+                        </span>
+                      )}
                       {stock.broker_quantity > 0 && (
                         <span className="tag-chip held">
                           持仓 {fmt(stock.broker_quantity, 0)} 股
@@ -685,17 +749,22 @@ export default function App() {
                       {(() => {
                         const hiddenGroups = new Set([
                           "all",
+                          "us",
                           "全部",
                           "全部自选",
                           "all stocks",
+                          "美股",
                         ]);
                         const groups = (stock.watchlist_groups ?? []).filter(
-                          (g) => !hiddenGroups.has(g.trim().toLowerCase()),
+                          (g) =>
+                            typeof g === "string" &&
+                            !hiddenGroups.has(g.trim().toLowerCase()),
                         );
-                        const maxGroups =
-                          stock.broker_quantity > 0 || stock.pnl_percent != null
-                            ? 1
-                            : 2;
+                        const hasExtraBadge =
+                          stock.broker_quantity > 0 ||
+                          stock.pnl_percent != null ||
+                          Boolean(stock.instrument?.is_fund);
+                        const maxGroups = hasExtraBadge ? 1 : 2;
                         const shown = groups.slice(0, maxGroups);
                         const hiddenCount = groups.length - shown.length;
                         return (
@@ -723,7 +792,7 @@ export default function App() {
                 <div className="hero-right">
                   <div className="hero-quote">
                     <strong className="hero-price">
-                      {stock.quote.last != null
+                      {stock.quote?.last != null
                         ? "$" + fmt(stock.quote.last, 2)
                         : "—"}
                     </strong>
@@ -776,7 +845,7 @@ export default function App() {
                       >
                         {verdict.action}
                       </span>
-                      {stock.forecast?.rating.available && (
+                      {stock.forecast?.rating?.available && (
                         <span
                           className={`verdict-badge forecast-rating-badge tone-${stock.forecast.rating.tone}`}
                           title={stock.forecast.rating.summary}
@@ -794,7 +863,7 @@ export default function App() {
                     </div>
                   </div>
                   <div className="verdict-pillars">
-                    {verdict.pillars.map((p) => (
+                    {(verdict.pillars ?? []).map((p) => (
                       <div className="pillar-box" key={p.key}>
                         <div className="pillar-top">
                           <span>{p.label}</span>
@@ -804,7 +873,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {stock.forecast?.levels.available && (
+                  {stock.forecast?.levels?.available && (
                     <div className="forecast-strip">
                       <div className="forecast-strip-item">
                         <span>买点</span>
@@ -855,11 +924,17 @@ export default function App() {
               )}
 
               <div className="chart-panel-card">
-                <Chart
-                  detail={currentDetail}
-                  theme={theme}
-                  reverse={reverse}
-                />
+                <ErrorBoundary
+                  compact
+                  title="K 线图表暂时异常"
+                  resetKey={`${selected}:${data?.mode ?? ""}`}
+                >
+                  <Chart
+                    detail={currentDetail}
+                    theme={theme}
+                    reverse={reverse}
+                  />
+                </ErrorBoundary>
               </div>
             </>
           ) : (
@@ -893,38 +968,44 @@ export default function App() {
           )}
         </section>
 
-        <StockInspector
-          tab={inspectorTab}
-          onTabChange={setInspectorTab}
-          stock={stock}
-          summary={summary}
-          analysis={analysis}
-          events={data?.events ?? []}
-          channels={data?.channels}
-          mode={data?.mode ?? "demo"}
-          status={data?.status ?? "starting"}
-          cooldownMinutes={data?.rules?.cooldown_minutes ?? 30}
-          onEditPlan={() => stock && setEditor({ stock })}
-          onApplyForecastLevels={(stopLoss, sellLow) =>
-            stock &&
-            setEditor({
-              stock,
-              presetStop: stopLoss,
-              presetTarget: sellLow,
-            })
-          }
-          onAnalyze={analyze}
-          onPreview={showPreview}
-          onSelectSymbol={setSelected}
-          onOpenDeliveries={async () => {
-            try {
-              setDeliveries(await api("/deliveries"));
-            } catch (e: any) {
-              notify(e.message);
+        <ErrorBoundary
+          compact
+          title="右侧研判面板暂时异常"
+          resetKey={`${selected}:${inspectorTab}`}
+        >
+          <StockInspector
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
+            stock={stock}
+            summary={summary}
+            analysis={analysis}
+            events={data?.events ?? []}
+            channels={data?.channels}
+            mode={data?.mode ?? "demo"}
+            status={data?.status ?? "starting"}
+            cooldownMinutes={data?.rules?.cooldown_minutes ?? 30}
+            onEditPlan={() => stock && setEditor({ stock })}
+            onApplyForecastLevels={(stopLoss, sellLow) =>
+              stock &&
+              setEditor({
+                stock,
+                presetStop: stopLoss,
+                presetTarget: sellLow,
+              })
             }
-          }}
-          onOpenSettings={() => setSettings(true)}
-        />
+            onAnalyze={analyze}
+            onPreview={showPreview}
+            onSelectSymbol={setSelected}
+            onOpenDeliveries={async () => {
+              try {
+                setDeliveries(await api("/deliveries"));
+              } catch (e: any) {
+                notify(e.message);
+              }
+            }}
+            onOpenSettings={() => setSettings(true)}
+          />
+        </ErrorBoundary>
       </main>
 
       {settings && (
@@ -1028,7 +1109,8 @@ export default function App() {
                     </b>
                     <p>{d.result}</p>
                     <small>
-                      尝试 {d.attempts} 次 · 事件 {d.event_id.slice(0, 8)}
+                      尝试 {d.attempts ?? 0} 次 · 事件{" "}
+                      {String(d.event_id ?? "—").slice(0, 8)}
                     </small>
                   </div>
                 ))

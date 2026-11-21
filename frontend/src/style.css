@@ -3569,6 +3569,123 @@ p {
   }
 }
 
+/* ==================== ETF / Fund Profile & Error Recovery ==================== */
+.tag-chip.asset-type {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tag-chip.asset-type.etf {
+  color: var(--accent);
+  background: var(--soft-blue-bg);
+  border-color: var(--soft-blue-bd);
+}
+
+.tag-chip.asset-type.leveraged {
+  color: var(--amber-text);
+  background: var(--tone-warning-bg);
+  border-color: var(--tone-warning-bd);
+}
+
+.fund-benchmark {
+  margin: -2px 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sub);
+}
+
+.fund-risk-banner {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--tone-warning-bd);
+  background: var(--tone-warning-bg);
+  color: var(--tone-warning-fg);
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.fund-risk-banner svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.error-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: var(--bg);
+}
+
+.error-fallback.full {
+  min-height: 100vh;
+}
+
+.error-fallback.compact {
+  height: 100%;
+  min-height: 180px;
+  background: var(--panel);
+  border-radius: var(--radius-cards);
+}
+
+.error-fallback-card {
+  max-width: 440px;
+  width: 100%;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-cards);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.error-fallback-card h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.error-fallback-card p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--sub);
+}
+
+.error-fallback-code {
+  display: block;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--down-text);
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-buttons);
+  word-break: break-word;
+}
+
+.error-fallback-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.chart-error-overlay {
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  z-index: 6;
+}
+
 /* ==================== Responsive Breakpoints ==================== */
 @media (max-width: 1440px) {
   .clock-chip {
