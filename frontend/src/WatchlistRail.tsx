@@ -18,7 +18,7 @@ import {
 } from "./types";
 
 type RailTab = "all" | "favorite" | "held" | "watchlist";
-type SortMode = "plan" | "rating" | "favorite" | "change" | "score" | "risk";
+type SortMode = "rating" | "alert" | "gainers" | "losers";
 
 const LABEL_LEGEND: { label: string; tone: string; desc: string }[] = [
   { label: "跌破止损", tone: "danger", desc: "收盘价已低于您设定的止损/失效价" },
@@ -57,7 +57,7 @@ export default function WatchlistRail({
   const [tab, setTab] = useState<RailTab>("all");
   const [selectedGroup, setSelectedGroup] = useState<string>("__all__");
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortMode>("plan");
+  const [sort, setSort] = useState<SortMode>("rating");
   const [showLegend, setShowLegend] = useState(false);
 
   const counts = useMemo(
@@ -95,29 +95,35 @@ export default function WatchlistRail({
 
     return [...filtered].sort((a, b) => {
       if (sort === "rating") {
-        const ratingDiff =
-          (b.forecast?.rating.score ?? -1) - (a.forecast?.rating.score ?? -1);
-        if (ratingDiff !== 0) return ratingDiff;
+        const scoreA = a.forecast?.rating.available
+          ? (a.forecast.rating.score ?? -1)
+          : -1;
+        const scoreB = b.forecast?.rating.available
+          ? (b.forecast.rating.score ?? -1)
+          : -1;
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        const techDiff = (b.primary.score ?? -1) - (a.primary.score ?? -1);
+        if (techDiff !== 0) return techDiff;
+        return Number(b.favorite) - Number(a.favorite);
+      }
+      if (sort === "gainers") {
+        const chgA = a.change_percent ?? Number.NEGATIVE_INFINITY;
+        const chgB = b.change_percent ?? Number.NEGATIVE_INFINITY;
+        if (chgB !== chgA) return chgB - chgA;
+        return (b.forecast?.rating.score ?? -1) - (a.forecast?.rating.score ?? -1);
+      }
+      if (sort === "losers") {
+        const chgA = a.change_percent ?? Number.POSITIVE_INFINITY;
+        const chgB = b.change_percent ?? Number.POSITIVE_INFINITY;
+        if (chgA !== chgB) return chgA - chgB;
         return (a.verdict?.priority ?? 9) - (b.verdict?.priority ?? 9);
       }
-      if (sort === "favorite") {
-        const favDiff = Number(b.favorite) - Number(a.favorite);
-        if (favDiff !== 0) return favDiff;
-        return (a.verdict?.priority ?? 9) - (b.verdict?.priority ?? 9);
-      }
-      if (sort === "change") {
-        return (b.change_percent ?? -999) - (a.change_percent ?? -999);
-      }
-      if (sort === "score") {
-        return (b.primary.score ?? -1) - (a.primary.score ?? -1);
-      }
-      if (sort === "risk") {
-        return (
-          (b.primary.risks?.length ?? 0) - (a.primary.risks?.length ?? 0)
-        );
-      }
+      // "alert": 风险预警（止损/目标/仓位待核/亏损警示/风险数量优先）
       const priDiff = (a.verdict?.priority ?? 9) - (b.verdict?.priority ?? 9);
       if (priDiff !== 0) return priDiff;
+      const riskDiff =
+        (b.primary.risks?.length ?? 0) - (a.primary.risks?.length ?? 0);
+      if (riskDiff !== 0) return riskDiff;
       const favDiff = Number(b.favorite) - Number(a.favorite);
       if (favDiff !== 0) return favDiff;
       return b.broker_quantity - a.broker_quantity;
@@ -218,19 +224,17 @@ export default function WatchlistRail({
             <span>标签说明</span>
           </button>
         </div>
-        <label className="rail-sort">
+        <label className="rail-sort" title="切换左侧股票列表排序方式">
           <ListFilter size={14} />
           <select
             aria-label="资产排序"
             value={sort}
             onChange={(e) => setSort(e.target.value as SortMode)}
           >
-            <option value="plan">待复核优先</option>
-            <option value="rating">买卖评级优先</option>
-            <option value="favorite">收藏优先</option>
-            <option value="change">涨跌幅</option>
-            <option value="score">技术评分</option>
-            <option value="risk">风险优先</option>
+            <option value="rating">买卖评级</option>
+            <option value="alert">风险预警</option>
+            <option value="gainers">今日涨幅</option>
+            <option value="losers">今日跌幅</option>
           </select>
         </label>
       </div>
