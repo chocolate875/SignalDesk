@@ -406,10 +406,15 @@ p {
   color: var(--line-strong);
 }
 
+.macro-wrap {
+  position: relative;
+  min-width: 0;
+}
+
 .macro-strip {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   padding: 6px 14px;
   border-radius: var(--radius-badges);
   background: var(--panel-alt);
@@ -418,6 +423,23 @@ p {
   color: var(--sub);
   white-space: nowrap;
   overflow: hidden;
+  max-width: 100%;
+}
+
+.macro-strip:hover,
+.macro-strip.active {
+  border-color: var(--soft-blue-bd);
+  background: var(--soft-blue-bg);
+}
+
+.macro-help-ico {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.macro-strip:hover .macro-help-ico,
+.macro-strip.active .macro-help-ico {
+  color: var(--accent);
 }
 
 .macro-strip b {
@@ -1459,8 +1481,42 @@ p {
   font-weight: 600;
 }
 
-.toolbar-fs-btn {
+.toolbar-right-actions {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.indicator-guide-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.toolbar-help-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sub);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.toolbar-help-btn:hover,
+.toolbar-help-btn.active {
+  border-color: var(--soft-blue-bd);
+  background: var(--soft-blue-bg);
+  color: var(--accent);
+}
+
+.toolbar-fs-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3357,6 +3413,150 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* ==================== Macro & Indicator Guide Popovers ==================== */
+.guide-popover {
+  position: fixed;
+  z-index: 60;
+  width: min(540px, calc(100vw - 24px));
+  max-height: min(520px, calc(100vh - 96px));
+  overflow-y: auto;
+  padding: 14px 16px;
+  border-radius: var(--radius-cards);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+}
+
+.guide-pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.guide-pop-head b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.guide-pop-head small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-live-note {
+  padding: 8px 10px;
+  border-radius: var(--radius-buttons);
+  background: var(--soft-blue-bg);
+  border: 1px solid var(--soft-blue-bd);
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.guide-item,
+.guide-row {
+  padding: 9px 11px;
+  border-radius: var(--radius-buttons);
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.guide-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.guide-item-head b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.guide-item-head em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.guide-item p,
+.guide-row p {
+  font-size: 12px;
+  color: var(--sub);
+  line-height: 1.55;
+}
+
+.guide-item code {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.guide-subtabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.guide-subtabs button {
+  padding: 4px 10px;
+  border-radius: var(--radius-badges);
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.guide-subtabs button:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+.guide-subtabs button.active {
+  background: var(--soft-blue-bg);
+  border-color: var(--soft-blue-bd);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.guide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* ==================== Reduced Motion ==================== */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -3389,10 +3589,18 @@ p {
     padding: 12px 16px;
   }
 
-  .macro-strip {
+  .macro-wrap {
     order: 3;
     width: 100%;
+  }
+
+  .macro-strip {
+    width: 100%;
     overflow-x: auto;
+  }
+
+  .guide-grid {
+    grid-template-columns: 1fr;
   }
 
   .terminal-grid {

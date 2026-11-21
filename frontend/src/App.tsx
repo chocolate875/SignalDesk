@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import Chart from "./Chart";
+import { MacroStripWithGuide } from "./GuidePopover";
 import SettingsPanel from "./Settings";
 import StockInspector, { type InspectorTab } from "./StockInspector";
 import WatchlistRail from "./WatchlistRail";
@@ -558,38 +559,7 @@ export default function App() {
           </div>
         </div>
 
-        <div
-          className="macro-strip"
-          title={`来源：${curve?.source ?? "等待数据"} · 观察日期：${curve?.as_of ?? "暂无"}${curve?.as_of && !curve.fresh ? "（已过期）" : ""}`}
-        >
-          <span>
-            美债2Y <b>{fmt(curve?.two_year, 2)}%</b>
-          </span>
-          <span>
-            10Y <b>{fmt(curve?.ten_year, 2)}%</b>
-          </span>
-          <span>
-            10Y-2Y{" "}
-            <b>
-              {curve?.spread_bp != null && curve.spread_bp >= 0 ? "+" : ""}
-              {fmt(curve?.spread_bp, 0)}bp
-            </b>
-          </span>
-          <span>
-            10Y近21日{" "}
-            <b>
-              {curve?.ten_change_bp != null && curve.ten_change_bp >= 0
-                ? "+"
-                : ""}
-              {fmt(curve?.ten_change_bp, 0)}bp
-            </b>
-          </span>
-          {(curve?.refresh_failed || (curve?.as_of && !curve.fresh)) && (
-            <em className="macro-warn">
-              {curve?.refresh_failed ? "更新失败" : "利率已过期"}
-            </em>
-          )}
-        </div>
+        <MacroStripWithGuide curve={curve} />
 
         <div className="topbar-right">
           <span
@@ -713,7 +683,15 @@ export default function App() {
                         </span>
                       )}
                       {(() => {
-                        const groups = stock.watchlist_groups ?? [];
+                        const hiddenGroups = new Set([
+                          "all",
+                          "全部",
+                          "全部自选",
+                          "all stocks",
+                        ]);
+                        const groups = (stock.watchlist_groups ?? []).filter(
+                          (g) => !hiddenGroups.has(g.trim().toLowerCase()),
+                        );
                         const maxGroups =
                           stock.broker_quantity > 0 || stock.pnl_percent != null
                             ? 1

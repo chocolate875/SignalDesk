@@ -15,6 +15,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { Maximize2, Minimize2 } from "lucide-react";
+import { IndicatorGuideMenu } from "./GuidePopover";
 import type { ChartRow, Detail, WavePivot } from "./types";
 import { fmt, ticker, time } from "./types";
 
@@ -1000,19 +1001,22 @@ export default function Chart({
           )}
         </div>
 
-        <button
-          type="button"
-          className="toolbar-fs-btn"
-          onClick={() =>
-            document.fullscreenElement
-              ? document.exitFullscreen()
-              : wrapper.current?.requestFullscreen()
-          }
-          title={isFullscreen ? "退出全屏" : "全屏看图"}
-        >
-          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          <span>{isFullscreen ? "退出全屏" : "全屏"}</span>
-        </button>
+        <div className="toolbar-right-actions">
+          <IndicatorGuideMenu />
+          <button
+            type="button"
+            className="toolbar-fs-btn"
+            onClick={() =>
+              document.fullscreenElement
+                ? document.exitFullscreen()
+                : wrapper.current?.requestFullscreen()
+            }
+            title={isFullscreen ? "退出全屏" : "全屏看图"}
+          >
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span>{isFullscreen ? "退出全屏" : "全屏"}</span>
+          </button>
+        </div>
       </div>
 
       <OhlcHud
