@@ -26,7 +26,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 node_modules/
-/SignalDesk/frontend/dist/
+/frontend/dist/
 output/
 .playwright-cli/
 test-results/
