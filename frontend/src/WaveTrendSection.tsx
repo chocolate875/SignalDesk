@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { BookOpen, Check, ChevronRight, HelpCircle, X } from "lucide-react";
 import { fmt, ticker, type Stock, type WavePivot, type WaveTrend } from "./types";
 
@@ -17,6 +18,7 @@ type ModalTab = "current" | "waves" | "fib";
 function pivotTitle(p: WavePivot): string {
   if (p.wave_label) {
     if (p.wave_label === "0") return "波浪起点";
+    if (!p.confirmed) return `第${p.wave_label}浪`;
     const kindWord = p.kind === "H" ? "高点" : "低点";
     return `第${p.wave_label}浪${kindWord}`;
   }
@@ -86,7 +88,7 @@ function WaveTrendGuideModal({
       ? `当前约 $${fmt(Math.max(2.2 * atr, 0.045 * close), 2)}（取 2.2×ATR14=$${fmt(2.2 * atr, 2)} 与 4.5%×收盘价=$${fmt(0.045 * close, 2)} 的较大值）`
       : "取 2.2 × ATR14 与 4.5% × 收盘价的较大值";
 
-  return (
+  return createPortal(
     <div
       className="modal-shade"
       onMouseDown={(e) => {
@@ -171,7 +173,7 @@ function WaveTrendGuideModal({
 
                 <div className="wt-param-card">
                   <div className="wt-param-head">
-                    <b>通道上 / 中 / 下轨</b>
+                    <b>通道下 / 中 / 上轨</b>
                     <em>
                       {ch?.available
                         ? `$${fmt(ch.end_lower, 2)} / $${fmt(ch.end_mid, 2)} / $${fmt(ch.end_upper, 2)}`
@@ -368,7 +370,8 @@ function WaveTrendGuideModal({
           </button>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

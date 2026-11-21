@@ -4138,6 +4138,7 @@ p {
   font-size: 13px;
   font-weight: 500;
   font-family: inherit;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     color 150ms ease-out,

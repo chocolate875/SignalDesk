@@ -846,10 +846,29 @@ function Chart({
 
         const hasAnyWave = mappedPivots.some((m) => Boolean(m.pivot.wave_label));
         const structCutoff = Math.max(0, mappedPivots.length - (hasAnyWave ? 0 : 4));
+        const shownSameKindIndices: { H: number[]; L: number[] } = { H: [], L: [] };
         const scatterData = mappedPivots.map(({ idx, pivot }, mIdx) => {
           const hasWave = Boolean(pivot.wave_label);
           const showLabel = hasWave || (!hasAnyWave && mIdx >= structCutoff);
           const isHigh = pivot.kind === "H";
+          const bucket = isHigh ? shownSameKindIndices.H : shownSameKindIndices.L;
+          let labelPos: string = isHigh ? "top" : "bottom";
+          let labelDist = 6;
+          if (showLabel) {
+            const nearCount = bucket.filter((prevIdx) => Math.abs(idx - prevIdx) <= 28).length;
+            if (nearCount > 0) {
+              // 相邻同侧拐点错开左右与距离，防止带价格胶囊重叠
+              labelPos = isHigh
+                ? nearCount % 2 === 1
+                  ? "topRight"
+                  : "topLeft"
+                : nearCount % 2 === 1
+                  ? "bottomRight"
+                  : "bottomLeft";
+              labelDist = 6 + nearCount * 14;
+            }
+            bucket.push(idx);
+          }
           const accent = hasWave
             ? wt.wave.pattern === "impulse_down"
               ? dark
@@ -875,8 +894,8 @@ function Chart({
             },
             label: {
               show: showLabel,
-              position: isHigh ? "top" : "bottom",
-              distance: 5,
+              position: labelPos,
+              distance: labelDist,
               formatter: formatPivotBadge(pivot),
               fontSize: 12,
               fontWeight: hasWave ? 700 : 500,
@@ -904,7 +923,7 @@ function Chart({
           yAxisIndex: 0,
           z: 6,
           data: scatterData,
-          labelLayout: { hideOverlap: true },
+          labelLayout: { moveOverlap: "shiftY" },
           silent: true,
           animation: false,
         });
