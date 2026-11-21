@@ -3,7 +3,7 @@ from inspect import signature
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import longport.openapi as lp
+import longbridge.openapi as lp
 import pandas as pd
 import pytest
 

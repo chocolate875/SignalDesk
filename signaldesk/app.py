@@ -8,12 +8,13 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import startup
+from .broker_oauth import CALLBACK, FLOW_SECONDS
 from .models import Allocation, Credentials, NotificationEnvelope, Settings, utcnow
 from .operators import REGISTRY
 from .security import data_directory, safe_snapshot, session_token
@@ -68,7 +69,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
         )
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") or request.url.path == CALLBACK:
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -137,6 +138,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             "settings": monitor.settings.model_dump(),
             "credentials": {service: monitor.vault.configured(service) for service in ["longport", "qq"]},
             "broker_platform": monitor.vault.load("longport").get("platform", "longport"),
+            "broker_auth": monitor.oauth.status(),
             "startup": startup.state(),
             "operators": [op.metadata() for op in REGISTRY.values()],
         }
@@ -151,15 +153,20 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
 
     @app.post("/api/credentials")
     async def credentials(value: Credentials):
-        old = monitor.vault.load(value.service)
-        updates = {k: v for k, v in value.model_dump().items() if k != "service" and v}
-        merged = {**old, **updates}
-        required = (
-            {"app_key", "app_secret", "access_token"} if value.service == "longport" else {"app_secret"}
-        )
-        if not all(merged.get(k) for k in required):
-            raise ValueError("凭据不完整；内容只需在本机填写，不要粘贴到聊天")
-        monitor.vault.save(value.service, merged)
+        async with monitor.oauth.lock:
+            old = monitor.vault.load(value.service)
+            if old.get("method") == "oauth":
+                old = {}
+            updates = {k: v for k, v in value.model_dump().items() if k != "service" and v}
+            merged = {**old, **updates}
+            required = (
+                {"app_key", "app_secret", "access_token"} if value.service == "longport" else {"app_secret"}
+            )
+            if not all(merged.get(k) for k in required):
+                raise ValueError("凭据不完整，请在本机填写。")
+            monitor.vault.save(value.service, merged)
+            if value.service == "longport":
+                monitor.oauth.pending, monitor.oauth.message = None, ""
         if value.service == "qq":
             monitor.notifications.qq.access_token = ""
             monitor.notifications.qq.expires_at = 0
@@ -167,6 +174,39 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             monitor.active_mode = None  # Use the saved gateway and credentials on the next connection.
         monitor.reconnect_at = 0
         return {"configured": True, "service": value.service}
+
+    @app.post("/api/broker/oauth/start")
+    async def start_oauth(request: Request):
+        if request.url.hostname not in {"localhost", "127.0.0.1"}:
+            raise HTTPException(400, "请从本机地址打开看板后授权。")
+        redirect_uri = str(request.url.replace(path=CALLBACK, query=""))
+        url, browser = await monitor.oauth.start(redirect_uri)
+        response = JSONResponse({"url": url})
+        response.set_cookie(
+            "broker_login", browser, max_age=FLOW_SECONDS, path=CALLBACK, httponly=True, samesite="lax"
+        )
+        return response
+
+    @app.get("/api/broker/oauth/status")
+    async def oauth_status():
+        return monitor.oauth.status()
+
+    @app.get(CALLBACK)
+    async def broker_callback(request: Request):
+        query = request.query_params
+        result = await monitor.oauth.finish(
+            query.get("state", ""),
+            request.cookies.get("broker_login", ""),
+            query.get("code", ""),
+            "error" in query,
+        )
+        if result == "success" and monitor.settings.mode == "live":
+            monitor.active_mode = None
+            monitor.reconnect_at = 0
+        response = RedirectResponse(f"/?broker-result={result}", status_code=303)
+        if result != "invalid":
+            response.delete_cookie("broker_login", path=CALLBACK)
+        return response
 
     @app.put("/api/startup")
     async def set_startup(value: StartupRequest):

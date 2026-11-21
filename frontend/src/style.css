@@ -2617,10 +2617,24 @@ p {
   display: flex;
   gap: 7px;
   align-items: center;
-  color: var(--up-text);
+  color: var(--sub);
   font-size: 13px;
   font-weight: 500;
   padding: 8px 0;
+}
+
+.broker-result {
+  width: min(440px, calc(100% - 32px));
+  margin: 14vh auto;
+  padding: 24px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-cards);
+}
+
+.broker-result h1 {
+  margin: 0;
+  font-size: 20px;
 }
 
 .small-modal-body {

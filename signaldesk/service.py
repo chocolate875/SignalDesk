@@ -7,6 +7,7 @@ from datetime import datetime
 from threading import RLock
 
 from . import demo
+from .broker_oauth import BrokerOAuth, OAuthError
 from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
 from .events import EventEngine
@@ -24,6 +25,7 @@ class Monitor:
     def __init__(self, store: Store):
         self.store = store
         self.vault = Vault(store.directory)
+        self.oauth = BrokerOAuth(self.vault)
         self.settings = Settings.model_validate(store.get("settings", {}))
         self.engine = EventEngine(store)
         self.notifications = NotificationDispatcher(store, self.vault, self.settings.qq)
@@ -732,7 +734,7 @@ class Monitor:
             self.status, self.detail = "unconfigured", "实盘等待本机LongPort凭据；可先手动添加观察股票"
             return
         self.status, self.detail = "connecting", "正在建立券商只读连接与补齐历史行情"
-        credentials = self.vault.load("longport")
+        credentials = await self.oauth.credentials()
         self.feed = await asyncio.to_thread(LongPortFeed, credentials, self.emit)
         await self._sync_account()
         symbols = self._ordered_symbols("live")
@@ -1100,6 +1102,12 @@ class Monitor:
                     if self.settings.mode == "demo":
                         await asyncio.to_thread(self.prepare_demo)
                 if self.settings.mode == "live":
+                    if self.feed and self.feed.renew_at and time.time() >= self.feed.renew_at:
+                        credentials = await self.oauth.credentials()
+                        fresh = await asyncio.to_thread(LongPortFeed, credentials, self.emit)
+                        self.feed.close()
+                        self.feed = fresh
+                        await asyncio.to_thread(fresh.subscribe, self._ordered_symbols("live"))
                     if self.feed is None and time.monotonic() >= self.reconnect_at:
                         self.reconnect_at = time.monotonic() + 30
                         await self._connect()
@@ -1117,8 +1125,12 @@ class Monitor:
                 self.failures += 1
                 self.status = "degraded"
                 code = getattr(error, "code", None)
-                if code == 401004:
-                    self.detail = "Access Token 验证失败（401004），请核对凭据签发网站及同一账户的应用凭据"
+                if isinstance(error, OAuthError):
+                    self.detail = str(error)
+                elif code == 401004:
+                    self.detail = "长桥认证失败（401004），请重新登录或核对 API Key 签发网站"
+                elif code == 403308:
+                    self.detail = "长桥授权缺少所需权限（403308），请核对账户读取及自选股授权"
                 elif isinstance(code, int):
                     self.detail = f"长桥请求失败（错误码 {code}），正在重试"
                 elif isinstance(error, (TypeError, AttributeError, ValueError)):

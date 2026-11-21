@@ -5,7 +5,7 @@
 ## 1. 项目定位与技术栈
 
 - **定位**：本机美股长期持仓复核与桌面看盘工具。先看美债利率与个股估值，再用已确认日线、个人计划价和手动触发的 Codex 总结辅助复核。
-- **后端**：Python 3.12+（`uv` 管理），FastAPI + Uvicorn + WebSocket + SQLite（WAL）+ `longport`（仅只读行情/持仓/自选接口）+ `pandas` / `ta` + `exchange-calendars` + `httpx`。入口为 `signaldesk/desktop.py` 与 `signaldesk/app.py`。
+- **后端**：Python 3.12+（`uv` 管理），FastAPI + Uvicorn + WebSocket + SQLite（WAL）+ `longbridge`（仅只读行情/持仓/自选接口）+ `pandas` / `ta` + `exchange-calendars` + `httpx`。入口为 `signaldesk/desktop.py` 与 `signaldesk/app.py`。
 - **前端**：React 19 + TypeScript + Vite 6 + ECharts 6 + Lucide Icons，位于 `frontend/`。生产构建输出到 `frontend/dist/`，由 Python FastAPI 直接提供静态资源，不依赖外部 CDN。
 
 ## 2. 核心工程与安全红线

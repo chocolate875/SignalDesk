@@ -7,7 +7,7 @@ from .models import Allocation
 
 
 def aware(value: datetime) -> datetime:
-    # longport 4.3.7 converts the wire epoch using datetime.fromtimestamp(epoch, None).
+    # Naive SDK timestamps are local time. Aware timestamps keep their original offset.
     return value.astimezone(timezone.utc)
 
 
@@ -40,16 +40,21 @@ class LongPortFeed:
     """Only read APIs are wrapped. No order, watchlist mutation or cloud alert methods."""
 
     def __init__(self, credentials: dict, emit):
-        import longport.openapi as lp
+        import longbridge.openapi as lp
 
         self.lp, self.emit = lp, emit
         domain = {"longport": "longportapp.com", "longbridge": "longbridge.com"}[
             credentials.get("platform", "longport")
         ]
+        self.renew_at = credentials.get("renew_at")
+        if credentials.get("method") == "oauth":
+            # The SDK's HTTP signer skips HMAC for a Bearer header and empty secret.
+            # Supply the vault-managed token without invoking its plaintext file cache.
+            auth = (credentials["client_id"], "", f"Bearer {credentials['access_token']}")
+        else:
+            auth = tuple(credentials[key].strip() for key in ("app_key", "app_secret", "access_token"))
         config = lp.Config.from_apikey(
-            credentials["app_key"].strip(),
-            credentials["app_secret"].strip(),
-            credentials["access_token"].strip(),
+            *auth,
             http_url=f"https://openapi.{domain}",
             quote_ws_url=f"wss://openapi-quote.{domain}/v2",
             trade_ws_url=f"wss://openapi-trade.{domain}/v2",

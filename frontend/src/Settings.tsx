@@ -8,9 +8,16 @@ import {
   Bot,
   SlidersHorizontal,
   CheckCircle2,
+  ExternalLink,
   LoaderCircle,
 } from "lucide-react";
 import { api } from "./types";
+
+type BrokerAuth = {
+  method: "oauth" | "apikey" | null;
+  pending: boolean;
+  message: string;
+};
 
 export default function SettingsPanel({
   onClose,
@@ -26,6 +33,9 @@ export default function SettingsPanel({
   const [busy, setBusy] = useState(false);
   const [qqSecret, setQQSecret] = useState("");
   const [brokerPlatform, setBrokerPlatform] = useState<string | null>(null);
+  const [method, setMethod] = useState("oauth");
+  const [authorizing, setAuthorizing] = useState(false);
+  const [authLink, setAuthLink] = useState("");
   const [broker, setBroker] = useState({
     app_key: "",
     app_secret: "",
@@ -36,6 +46,52 @@ export default function SettingsPanel({
       .then(setData)
       .catch((e) => notify(e.message));
   }, []);
+  const auth: BrokerAuth = data?.broker_auth ?? {
+    method: data?.credentials.longport ? "apikey" : null,
+    pending: false,
+    message: "请重启 SignalDesk 以启用长桥 OAuth 登录。",
+  };
+  const { pending } = auth;
+  useEffect(() => {
+    if (!pending) return;
+    let disposed = false;
+    async function check() {
+      try {
+        const status = await api<BrokerAuth>("/broker/oauth/status");
+        if (disposed) return;
+        setData((old: any) => ({ ...old, broker_auth: status }));
+        if (!status.pending) setAuthLink("");
+      } catch {
+        // A later poll can recover from a temporary local connection failure.
+      }
+    }
+    const timer = window.setInterval(check, 2000);
+    window.addEventListener("focus", check);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [pending]);
+  async function login() {
+    const page = window.open("about:blank", "_blank");
+    if (page) page.opener = null;
+    setAuthorizing(true);
+    try {
+      const { url } = await api("/broker/oauth/start", { method: "POST" });
+      setAuthLink(url);
+      setData((old: any) => ({
+        ...old,
+        broker_auth: { ...old.broker_auth, pending: true, message: "" },
+      }));
+      if (page && !page.closed) page.location.replace(url);
+    } catch (error: any) {
+      page?.close();
+      notify(error.message);
+    } finally {
+      setAuthorizing(false);
+    }
+  }
   const patch = (section: string | null, field: string, value: any) =>
     setData((old: any) => ({
       ...old,
@@ -57,8 +113,9 @@ export default function SettingsPanel({
         setQQSecret("");
       }
       if (
-        Object.values(broker).some(Boolean) ||
-        (brokerPlatform && brokerPlatform !== data.broker_platform)
+        method === "apikey" &&
+        (Object.values(broker).some(Boolean) ||
+          (brokerPlatform && brokerPlatform !== data.broker_platform))
       ) {
         await api("/credentials", {
           method: "POST",
@@ -95,7 +152,7 @@ export default function SettingsPanel({
   }
   const tabs = [
     ["general", "运行方式", Settings2],
-    ["broker", "LongPort数据", KeyRound],
+    ["broker", "长桥数据", KeyRound],
     ["qq", "QQ官方机器人", Send],
     ["codex", "Codex分析", Bot],
     ["rules", "融合规则", SlidersHorizontal],
@@ -232,46 +289,107 @@ export default function SettingsPanel({
                 )}
                 {tab === "broker" && (
                   <>
-                    <h3>LongPort 只读连接</h3>
+                    <h3>长桥只读连接</h3>
                     <p className="muted">
-                      配置官方 OpenAPI 的凭据，行情权限与长桥 App
-                      独立。这里没有下单接口。
+                      授权 SignalDesk 读取行情、持仓和自选股。OpenAPI
+                      行情权限由长桥单独提供。
                     </p>
-                    <div className="credential-state">
-                      <CheckCircle2 size={15} />
-                      {data.credentials.longport
-                        ? "已保存加密凭据；留空保留现有值"
-                        : "尚未配置，请在本机填写"}
+                    <div className="credential-state" role="status">
+                      {auth.method && !auth.message && !pending ? (
+                        <CheckCircle2 size={15} />
+                      ) : (
+                        <KeyRound size={15} />
+                      )}
+                      {pending
+                        ? "等待浏览器授权"
+                        : auth.message ||
+                          (auth.method === "oauth"
+                            ? "已保存长桥 OAuth 授权"
+                            : auth.method === "apikey"
+                              ? "当前使用 API Key"
+                              : "尚未授权")}
                     </div>
                     <label className="field">
-                      凭据签发网站
+                      认证方式
                       <select
-                        value={brokerPlatform ?? data.broker_platform}
-                        onChange={(e) => setBrokerPlatform(e.target.value)}
+                        value={method}
+                        onChange={(e) => setMethod(e.target.value)}
                       >
-                        <option value="longbridge">
-                          长桥 · open.longbridge.com
-                        </option>
-                        <option value="longport">
-                          LongPort · open.longportapp.com
-                        </option>
+                        <option value="oauth">OAuth 2.0（推荐）</option>
+                        <option value="apikey">API Key（兼容）</option>
                       </select>
                     </label>
-                    {(["app_key", "app_secret", "access_token"] as const).map(
-                      (key) => (
-                        <label className="field" key={key}>
-                          {key}
-                          <input
-                            type="password"
-                            autoComplete="off"
-                            value={broker[key]}
-                            onChange={(e) =>
-                              setBroker({ ...broker, [key]: e.target.value })
-                            }
-                            placeholder="只在本机输入，保存后不回显"
-                          />
+                    {method === "oauth" ? (
+                      <>
+                        <p className="muted">
+                          在长桥官网确认账户读取和自选股权限，完成后回到这里。
+                        </p>
+                        <button
+                          className="button primary"
+                          onClick={login}
+                          disabled={busy || authorizing || !data.broker_auth}
+                        >
+                          {authorizing ? (
+                            <LoaderCircle size={15} className="spin" />
+                          ) : (
+                            <ExternalLink size={15} />
+                          )}
+                          {authorizing
+                            ? "正在连接长桥…"
+                            : pending
+                              ? "重新发起授权"
+                              : auth.method === "oauth"
+                                ? "重新登录长桥"
+                                : "登录长桥"}
+                        </button>
+                        {authLink && pending && (
+                          <a
+                            className="button secondary"
+                            href={authLink}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            打开本次授权页
+                          </a>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <label className="field">
+                          凭据签发网站
+                          <select
+                            value={brokerPlatform ?? data.broker_platform}
+                            onChange={(e) => setBrokerPlatform(e.target.value)}
+                          >
+                            <option value="longbridge">
+                              长桥 · open.longbridge.com
+                            </option>
+                            <option value="longport">
+                              LongPort · open.longportapp.com
+                            </option>
+                          </select>
                         </label>
-                      ),
+                        {(
+                          ["app_key", "app_secret", "access_token"] as const
+                        ).map((key) => (
+                          <label className="field" key={key}>
+                            {key}
+                            <input
+                              type="password"
+                              autoComplete="off"
+                              value={broker[key]}
+                              onChange={(e) =>
+                                setBroker({ ...broker, [key]: e.target.value })
+                              }
+                              placeholder={
+                                auth.method === "apikey"
+                                  ? "留空沿用已保存的值"
+                                  : "仅在本机输入"
+                              }
+                            />
+                          </label>
+                        ))}
+                      </>
                     )}
                     <div className="setting-row">
                       <div>
@@ -290,7 +408,7 @@ export default function SettingsPanel({
                       />
                     </div>
                     <div className="notice">
-                      保存凭据后，在运行方式中选择“实盘”。程序将同步持仓与自选，并加载交易日历、历史K线和推送行情。
+                      完成接入后，在「运行方式」中选择「实盘」并保存，即可开始同步。
                     </div>
                   </>
                 )}

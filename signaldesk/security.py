@@ -49,7 +49,7 @@ class Vault:
         self.directory.mkdir(parents=True, exist_ok=True)
 
     def _path(self, service: str) -> Path:
-        if service not in {"qq", "longport"}:
+        if service not in {"qq", "longport", "longbridge_client"}:
             raise ValueError("未知凭据服务")
         return self.directory / f"{service}.encrypted"
 
