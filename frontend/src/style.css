@@ -1551,10 +1551,11 @@ p {
 
 .ohlc-hud {
   flex-shrink: 0;
+  min-height: 28px;
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 4px 5px;
+  gap: 4px 6px;
   padding: 4px 10px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
@@ -5292,6 +5293,8 @@ p {
 }
 
 .hud-forming-note {
+  margin-left: auto;
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
@@ -5378,7 +5381,6 @@ p {
   .verdict-badges,
   .forecast-strip,
   .chart-toolbar,
-  .ohlc-hud,
   .forecast-action-row {
     flex-wrap: wrap;
   }

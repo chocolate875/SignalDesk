@@ -1,5 +1,26 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 最新盘中 K 线选中交互稳定性与图面边缘渲染修复
+
+- **问题复现与根因定位。**
+  - 在实盘盘中（`http://127.0.0.1:8765/`，`1440×810`）对 `NVDA`（「近1年」「最新」「全部」）、`ADT`、`SQQQ`、`ANT` 的最右侧当日实时 K 线（`2026-11-23`）执行逐像素悬停、点击及多轮 WebSocket 实时推送复测，定位出 6 项直接导致「选上去出问题、最右侧渲染异常」的根因：
+    1. WebSocket 每秒推来新报价时 `Chart.tsx` 对整图执行 `setOption(..., { notMerge: true })`，强行销毁重建坐标系、Tooltip 与十字准星，导致悬停最新 K 线 1 秒内浮窗即消失；
+    2. ECharts 默认 `tooltip.triggerOn: "mousemove|click"` 且有过渡动画延迟，点击最新 K 线柱体上下空白区时直接触发 `hideTip` 关闭弹窗；
+    3. `candlestick` 数据中对 `intraday_forming` 混入 `{ value, itemStyle: { opacity: 0.78, borderType: "dashed" } }` 与纯数组，且默认启用 `large: true`（阈值 `600`），导致实体与上下影线被切碎发虚，且在「全部」1001 根视图下与普通系列索引错位；
+    4. 所有子图 `xAxis.axisPointer` 默认同时渲染日期浮标，悬停最右侧 K 线时 3 个子图在右下角垂直叠加 3 个蓝色 `2026-11-23` 标签盖死 Y 轴数字；
+    5. 多子图垂直间距过窄（~7px）且主图价格轴未限制非负下限，造成主图底刻度与成交量 `900.0M` 撞车重叠，以及「全部」视图下出现 `-300.00` 负股价刻度；
+    6. 右侧靠边波浪拐点胶囊向右溢出遮挡最新 K 线与 Y 轴，且窄屏下 `.ohlc-hud` 折行易引发画布高度抖动。
+- **修复内容。**
+  - [Chart.tsx](../frontend/src/Chart.tsx)：① 拆分「结构性重建（`notMerge: true`）」与「盘中实时价格/成交量增量刷新（`notMerge: false` 仅更新 `price`/`volume` 两个 series 的 `data`）」；② 统一全部 K 线为纯数组 `[open, close, low, high]` 并关闭 `large`、`selectedMode`、限制 `barMaxWidth: 28`，成交量实时柱去除虚线毛边；③ `tooltip` 设为 `triggerOn: "mousemove"`、`transitionDuration: 0`，`formatter` 通过 ref 读取最新行情并加全量边界校验与 `try/catch` 兜底；④ 仅最底部子图显示 `xAxis.axisPointer.label`，重排 2/3/4 窗格垂直槽位间距（每层留白 25px+），主图价格 Y 轴钳制下限 `>= 0`、`grid.right = 80`、`yAxis.axisLabel.margin = 12`；⑤ 右边缘波浪拐点标签改为 `align: "right"` 向左展开，`dataZoom` 统一传安全整数索引；⑥ 精简 HUD 盘中提示为 `未收盘 · 指标按已收盘计` 并复用单例 `Intl.DateTimeFormat`。
+  - [style.css](../frontend/src/style.css)：固定 `.ohlc-hud` 最小高度 `28px`、`.hud-forming-note` 右对齐与常规均线区位置一致，移除窄屏媒体查询中对 `.ohlc-hud` 的 `flex-wrap: wrap` 以消除高度跳动。
+- **自动化测试、构建与 1440×810 盘中实盘复验。**
+  - 全量 `pytest -q` **94 项通过**，`ruff check signaldesk tests` 全通过，CSS 全部 `243` 条 `font-size` 最小值为 `12.0px`，前端 `tsc -b && vite build` 构建通过（产物 `index-BSlXdylC.js`）。
+  - 实盘 `1440×810` 浏览器终验：
+    - `NVDA`「最新」（60 根）悬停最右侧 `2026-11-23` K 线（`x=961, y=571`）：不点击停留 4 秒（每秒采样）与**直接点击该 K 线后再停留 3 秒**，Tooltip 全程保持可见不消失（`tipLen = 133`）且内部现价（`166.02 → 165.99 → 166.02 → 166.05 → 166.04 → 166.02 → 166.01 → 165.38`）与 `.ohlc-hud` 同帧实时同步；
+    - 图面核验：最右侧 `2026-11-23` 为实心锐利 K 线，仅底部 X 轴有 1 个蓝色 `2026-11-23` 浮标，`低低* $124.50` 胶囊向左收拢不遮挡最新 K 线和 Y 轴，3 窗格与 4 窗格（同时开启 `MACD + RSI`）全部标题与 Y 轴刻度零叠字；
+    - `NVDA`「全部」（1001 根）主图价格轴下限修正为 `0.00`（消除 `-300.00` 负数），`x=962..966` 连续扫描 HUD 与 Tooltip 同步无错位（注：1001 根全历史下每根 K 线宽度不足 0.7px，最右侧第 1001 根位于整数像素边界 `966~967` 交界处，放大至「近1年 / 近6月 / 近3月 / 最新」即可宽裕精准点选）；
+    - `ANT`（3 根短历史）与 `SQQQ` 回归验证均渲染正常、WS 推送期间 Tooltip 稳定；全程控制台 **0 errors**，`.error-fallback = 0`，`.chart-error-overlay = 0`。
+
 ## 2026-11-24 当日盘中实时 K 线展示与精简盘外动态结论卡
 
 - **盘中实时 K 线接入（零污染正式收盘指标）。**

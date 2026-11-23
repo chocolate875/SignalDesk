@@ -34,18 +34,64 @@ echarts.use([
 
 type OverlayMode = "MA" | "BOLL" | "NONE";
 
-function formatVolume(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  if (v >= 1_000_000_000) {
-    const val = v / 1_000_000_000;
+const NY_DATE_FMT = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function safeNumber(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const num = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatVolume(v: unknown): string {
+  const num = safeNumber(v);
+  if (num == null) return "—";
+  if (num >= 1_000_000_000) {
+    const val = num / 1_000_000_000;
     return val.toFixed(val >= 100 ? 1 : 2) + "B";
   }
-  if (v >= 1_000_000) {
-    const val = v / 1_000_000;
+  if (num >= 1_000_000) {
+    const val = num / 1_000_000;
     return val.toFixed(val >= 100 ? 1 : 2) + "M";
   }
-  if (v >= 1_000) return (v / 1_000).toFixed(1) + "K";
-  return v.toFixed(0);
+  if (num >= 1_000) return (num / 1_000).toFixed(1) + "K";
+  return num.toFixed(0);
+}
+
+function buildCandleSeriesData(rows: ChartRow[]) {
+  // 统一使用纯数组 [open, close, low, high]，避免 ECharts 6 混合对象项与虚线边框导致实体/影线碎裂及大图错位
+  return rows.map((r) => [
+    safeNumber(r.open),
+    safeNumber(r.close),
+    safeNumber(r.low),
+    safeNumber(r.high),
+  ]);
+}
+
+function buildVolumeSeriesData(rows: ChartRow[], up: string, down: string) {
+  return rows.map((r) => {
+    const open = safeNumber(r.open) ?? 0;
+    const close = safeNumber(r.close) ?? open;
+    const isRise = close >= open;
+    const baseColor = isRise ? up : down;
+    const forming = Boolean(r.intraday_forming);
+    return {
+      value: safeNumber(r.volume) ?? 0,
+      itemStyle: forming
+        ? {
+            color: baseColor + "55",
+            borderColor: baseColor,
+            borderWidth: 1,
+          }
+        : {
+            color: baseColor + "99",
+          },
+    };
+  });
 }
 
 function OhlcHud({
@@ -76,19 +122,22 @@ function OhlcHud({
   }
 
   const idx =
-    hoverIdx != null && hoverIdx >= 0 && hoverIdx < rows.length
+    hoverIdx != null && Number.isInteger(hoverIdx) && hoverIdx >= 0 && hoverIdx < rows.length
       ? hoverIdx
       : rows.length - 1;
   const row = rows[idx];
   const prev = idx > 0 ? rows[idx - 1] : null;
-  const close = row.close == null ? null : Number(row.close);
-  const open = row.open == null ? null : Number(row.open);
-  const prevClose = prev?.close == null ? null : Number(prev.close);
+  const close = safeNumber(row.close);
+  const open = safeNumber(row.open);
+  const high = safeNumber(row.high);
+  const low = safeNumber(row.low);
+  const prevClose = safeNumber(prev?.close);
+  const ret1 = safeNumber(row.return_1);
   const chgPct =
-    close != null && prevClose
-      ? ((close / prevClose - 1) * 100)
-      : row.return_1 != null
-        ? Number(row.return_1) * 100
+    close != null && prevClose != null && prevClose > 0
+      ? (close / prevClose - 1) * 100
+      : ret1 != null
+        ? ret1 * 100
         : null;
   const isUp =
     chgPct != null
@@ -105,19 +154,19 @@ function OhlcHud({
       {isForming && (
         <span
           className="hud-live-pill"
-          title="当天盘中实时生成（未收盘），均线/MACD/评分/波浪仍严格基于已收盘日线计算"
+          title="当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算"
         >
           盘中
         </span>
       )}
       <span>
-        开<b>{fmt(row.open as number, 2)}</b>
+        开<b>{fmt(open, 2)}</b>
       </span>
       <span>
-        高<b>{fmt(row.high as number, 2)}</b>
+        高<b>{fmt(high, 2)}</b>
       </span>
       <span>
-        低<b>{fmt(row.low as number, 2)}</b>
+        低<b>{fmt(low, 2)}</b>
       </span>
       <span>
         {isForming ? "现" : "收"}
@@ -129,25 +178,30 @@ function OhlcHud({
           : "—"}
       </span>
       <span>
-        量<b>{formatVolume(row.volume as number)}</b>
+        量<b>{formatVolume(row.volume)}</b>
       </span>
       {isForming ? (
-        <span className="hud-forming-note">盘中实时K线（指标以已收盘日线计）</span>
+        <span
+          className="hud-forming-note"
+          title="当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算"
+        >
+          未收盘 · 指标按已收盘计
+        </span>
       ) : (
         <>
           {overlay === "MA" && (
             <span className="hud-ma">
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-                MA20 {fmt(row.ma20 as number, 2)}
+                MA20 {fmt(safeNumber(row.ma20), 2)}
               </span>
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#9e9cf2" : "#1e40af" }} />
-                MA50 {fmt(row.ma50 as number, 2)}
+                MA50 {fmt(safeNumber(row.ma50), 2)}
               </span>
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#5cb8e6" : "#64748b" }} />
-                MA200 {fmt(row.ma200 as number, 2)}
+                MA200 {fmt(safeNumber(row.ma200), 2)}
               </span>
             </span>
           )}
@@ -155,15 +209,15 @@ function OhlcHud({
             <span className="hud-ma">
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-                上 {fmt(row.bb_upper as number, 2)}
+                上 {fmt(safeNumber(row.bb_upper), 2)}
               </span>
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-                中 {fmt(row.bb_middle as number, 2)}
+                中 {fmt(safeNumber(row.bb_middle), 2)}
               </span>
               <span className="hud-ma-item">
                 <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-                下 {fmt(row.bb_lower as number, 2)}
+                下 {fmt(safeNumber(row.bb_lower), 2)}
               </span>
             </span>
           )}
@@ -356,6 +410,10 @@ function Chart({
   const wrapper = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const previousKey = useRef("");
+  const structSigRef = useRef("");
+  const latestRowsRef = useRef<ChartRow[]>([]);
+  const latestDatesRef = useRef<string[]>([]);
+  const pivotByIndexRef = useRef<Map<number, WavePivot>>(new Map());
   const hoverSetter = useRef<(idx: number | null) => void>(() => {});
   const [overlay, setOverlay] = useState<OverlayMode>("MA");
   const [showMacd, setShowMacd] = useState(true);
@@ -393,70 +451,69 @@ function Chart({
     }
     const qMs = Date.parse(liveQuote.timestamp);
     if (!Number.isFinite(qMs)) return base;
-    const nyDateFmt = new Intl.DateTimeFormat("sv-SE", {
-      timeZone: "America/New_York",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const qDay = nyDateFmt.format(new Date(qMs));
+    const qDay = NY_DATE_FMT.format(new Date(qMs));
     const lastRow = base[base.length - 1];
     const lastMs = lastRow?.timestamp ? Date.parse(lastRow.timestamp) : Number.NaN;
-    const lastDay = Number.isFinite(lastMs) ? nyDateFmt.format(new Date(lastMs)) : "";
+    const lastDay = Number.isFinite(lastMs) ? NY_DATE_FMT.format(new Date(lastMs)) : "";
 
-    const pos = (v: number | null | undefined) =>
-      v != null && Number.isFinite(v) && v > 0 ? v : null;
+    const pos = (v: unknown) => {
+      const n = safeNumber(v);
+      return n != null && n > 0 ? n : null;
+    };
     const close = liveQuote.last;
 
     if (Boolean(lastRow.intraday_forming) && qDay === lastDay) {
-      const open = pos(liveQuote.open) ?? pos(lastRow.open as number) ?? close;
+      const open = pos(liveQuote.open) ?? pos(lastRow.open) ?? close;
       const high = Math.max(
         pos(liveQuote.high) ?? close,
-        pos(lastRow.high as number) ?? close,
+        pos(lastRow.high) ?? close,
         open,
         close,
       );
       const low = Math.min(
         pos(liveQuote.low) ?? close,
-        pos(lastRow.low as number) ?? close,
+        pos(lastRow.low) ?? close,
         open,
         close,
       );
       const prevClose =
         pos(liveQuote.prev_close) ??
-        (base.length >= 2 ? pos(base[base.length - 2].close as number) : null);
+        (base.length >= 2 ? pos(base[base.length - 2].close) : null);
+      const liveVol = safeNumber(liveQuote.volume);
+      const prevVol = safeNumber(lastRow.volume) ?? 0;
+      const liveTurn = safeNumber(liveQuote.turnover);
+      const prevTurn = safeNumber(lastRow.turnover) ?? 0;
       const updated: ChartRow = {
         ...lastRow,
         open,
         high,
         low,
         close,
-        volume:
-          liveQuote.volume != null && Number.isFinite(liveQuote.volume)
-            ? Math.max(liveQuote.volume, Number(lastRow.volume ?? 0))
-            : lastRow.volume,
-        turnover:
-          liveQuote.turnover != null && Number.isFinite(liveQuote.turnover)
-            ? Math.max(liveQuote.turnover, Number(lastRow.turnover ?? 0))
-            : lastRow.turnover,
+        volume: liveVol != null ? Math.max(liveVol, prevVol) : lastRow.volume,
+        turnover: liveTurn != null ? Math.max(liveTurn, prevTurn) : lastRow.turnover,
         return_1: prevClose ? close / prevClose - 1 : lastRow.return_1,
       };
       return [...base.slice(0, -1), updated];
     }
 
-    if (!lastRow.intraday_forming && lastDay && qDay > lastDay && (marketSession === "regular" || pos(liveQuote.open) != null)) {
+    if (
+      !lastRow.intraday_forming &&
+      lastDay &&
+      qDay > lastDay &&
+      (marketSession === "regular" || pos(liveQuote.open) != null)
+    ) {
       const open = pos(liveQuote.open) ?? close;
       const high = Math.max(pos(liveQuote.high) ?? close, open, close);
       const low = Math.min(pos(liveQuote.low) ?? close, open, close);
-      const prevClose = pos(liveQuote.prev_close) ?? pos(lastRow.close as number);
+      const prevClose = pos(liveQuote.prev_close) ?? pos(lastRow.close);
       const forming: ChartRow = {
         timestamp: liveQuote.timestamp,
         open,
         high,
         low,
         close,
-        volume: liveQuote.volume ?? 0,
-        turnover: liveQuote.turnover ?? 0,
+        volume: safeNumber(liveQuote.volume) ?? 0,
+        turnover: safeNumber(liveQuote.turnover) ?? 0,
         return_1: prevClose ? close / prevClose - 1 : null,
         intraday_forming: true,
       };
@@ -468,17 +525,14 @@ function Chart({
 
   const dates = useMemo(() => {
     if (!displayRows.length) return [];
-    const dateFormat = new Intl.DateTimeFormat("sv-SE", {
-      timeZone: "America/New_York",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
     return displayRows.map((r) => {
       const ms = r?.timestamp ? Date.parse(r.timestamp) : Number.NaN;
-      return Number.isFinite(ms) ? dateFormat.format(new Date(ms)) : "";
+      return Number.isFinite(ms) ? NY_DATE_FMT.format(new Date(ms)) : "";
     });
   }, [displayRows]);
+
+  latestRowsRef.current = displayRows;
+  latestDatesRef.current = dates;
 
   useEffect(() => {
     hoverSetter.current(null);
@@ -498,9 +552,13 @@ function Chart({
       renderer: "canvas",
     });
     chart.current = instance;
+    structSigRef.current = "";
+    previousKey.current = "";
     instance.on("updateAxisPointer", (event: any) => {
       const idx = event?.axesInfo?.[0]?.value;
-      hoverSetter.current(typeof idx === "number" ? idx : null);
+      hoverSetter.current(
+        typeof idx === "number" && Number.isInteger(idx) && idx >= 0 ? idx : null,
+      );
     });
     instance.on("globalout", () => {
       hoverSetter.current(null);
@@ -528,6 +586,8 @@ function Chart({
       resize.disconnect();
       if (!instance.isDisposed()) instance.dispose();
       chart.current = null;
+      structSigRef.current = "";
+      previousKey.current = "";
     };
   }, [retrySeq]);
 
@@ -541,6 +601,7 @@ function Chart({
         // 忽略清理异常
       }
       previousKey.current = "";
+      structSigRef.current = "";
       return;
     }
     const rows = displayRows;
@@ -571,17 +632,74 @@ function Chart({
       detail.timeframe ?? "",
       detail.session ?? "",
     ].join("/");
+
+    const flRef = detail.stock.forecast?.levels;
+    const structSig = JSON.stringify([
+      key,
+      detail.rows.length,
+      detail.rows[detail.rows.length - 1]?.timestamp ?? "",
+      dates.length,
+      dates[0] ?? "",
+      dates[dates.length - 1] ?? "",
+      detail.stock.wave_trend?.trend?.channel?.end_date ?? "",
+      detail.stock.wave_trend?.wave?.pivots?.length ?? 0,
+      detail.stock.long_plan.stop ?? null,
+      detail.stock.long_plan.target ?? null,
+      detail.stock.broker_quantity,
+      detail.stock.cost_price ?? null,
+      flRef?.available ?? false,
+      flRef?.buy_high ?? null,
+      flRef?.sell_low ?? null,
+      flRef?.stop_loss ?? null,
+      overlay,
+      showMacd,
+      showRsi,
+      showCost,
+      showForecast,
+      showWaveTrend,
+      theme,
+      reverse,
+      retrySeq,
+    ]);
+
+    const candleData = buildCandleSeriesData(rows);
+    const volumeData = buildVolumeSeriesData(rows, up, down);
+
+    // 仅 WebSocket 推送刷新当日未收盘 K 线的实时价格/成交量时，做轻量增量更新，
+    // 绝不调用 notMerge:true 重建整图，避免鼠标悬停/点选最新 K 线时 Tooltip 与十字准星瞬间消失
+    if (structSig === structSigRef.current && key === previousKey.current) {
+      try {
+        instance.setOption(
+          {
+            series: [
+              { id: "price", data: candleData },
+              { id: "volume", data: volumeData },
+            ],
+          },
+          { notMerge: false },
+        );
+        setChartError("");
+      } catch (err: any) {
+        console.error("[SignalDesk Chart live update]", err);
+      }
+      return;
+    }
+
     let old: any = null;
     try {
       old = instance.getOption();
     } catch {
       old = null;
     }
+    const isSameSymbol = key === previousKey.current;
     const zoom =
-      key === previousKey.current && old?.xAxis?.[0]?.data?.length >= 2
+      isSameSymbol && old?.xAxis?.[0]?.data?.length >= 2
         ? old?.dataZoom?.[0]
         : null;
     previousKey.current = key;
+    if (!isSameSymbol) {
+      setActiveRange(252);
+    }
 
     let left = Math.max(0, rows.length - 252);
     let right = rows.length - 1;
@@ -620,7 +738,7 @@ function Chart({
     right = Math.max(left, Math.min(right, rows.length - 1));
 
     const val = (field: string) =>
-      rows.map((r) => (r[field] == null ? null : Number(r[field])));
+      rows.map((r) => safeNumber(r[field]));
     const line = (
       name: string,
       field: string,
@@ -645,20 +763,20 @@ function Chart({
     const panes: PaneSpec[] =
       showMacd && showRsi
         ? [
-            { kind: "price", top: 32, height: "45%" },
-            { kind: "vol", top: "55%", height: "10%" },
-            { kind: "macd", top: "69%", height: "12%" },
-            { kind: "rsi", top: "84%", height: "10%" },
+            { kind: "price", top: 28, height: "36.5%" },
+            { kind: "vol", top: "50.5%", height: "10%" },
+            { kind: "macd", top: "67.5%", height: "10.5%" },
+            { kind: "rsi", top: "84.5%", height: "9.5%" },
           ]
         : showMacd || showRsi
           ? [
-              { kind: "price", top: 32, height: "58%" },
-              { kind: "vol", top: "68%", height: "11%" },
-              { kind: showMacd ? "macd" : "rsi", top: "82%", height: "14%" },
+              { kind: "price", top: 30, height: "48%" },
+              { kind: "vol", top: "63%", height: "11%" },
+              { kind: showMacd ? "macd" : "rsi", top: "81.5%", height: "12%" },
             ]
           : [
-              { kind: "price", top: 32, height: "72%" },
-              { kind: "vol", top: "81%", height: "14%" },
+              { kind: "price", top: 30, height: "64%" },
+              { kind: "vol", top: "79%", height: "14%" },
             ];
 
     const paneIndex = (kind: PaneSpec["kind"]) =>
@@ -730,18 +848,10 @@ function Chart({
         type: "candlestick",
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: rows.map((r) =>
-          r.intraday_forming
-            ? {
-                value: [r.open, r.close, r.low, r.high],
-                itemStyle: {
-                  opacity: 0.78,
-                  borderType: "dashed",
-                  borderWidth: 1.5,
-                },
-              }
-            : [r.open, r.close, r.low, r.high],
-        ),
+        large: false,
+        selectedMode: false,
+        barMaxWidth: 28,
+        data: candleData,
         markLine: {
           silent: true,
           symbol: "none",
@@ -777,22 +887,10 @@ function Chart({
         type: "bar",
         xAxisIndex: 1,
         yAxisIndex: 1,
-        data: rows.map((r) => ({
-          value: r.volume,
-          itemStyle: {
-            color:
-              Number(r.close) >= Number(r.open)
-                ? up + (r.intraday_forming ? "55" : "99")
-                : down + (r.intraday_forming ? "55" : "99"),
-            borderColor: r.intraday_forming
-              ? Number(r.close) >= Number(r.open)
-                ? up
-                : down
-              : undefined,
-            borderType: r.intraday_forming ? "dashed" : undefined,
-            borderWidth: r.intraday_forming ? 1 : 0,
-          },
-        })),
+        large: false,
+        selectedMode: false,
+        barMaxWidth: 28,
+        data: volumeData,
       },
     ];
 
@@ -982,20 +1080,25 @@ function Chart({
           const hasWave = Boolean(pivot.wave_label);
           const showLabel = hasWave || (!hasAnyWave && mIdx >= structCutoff);
           const isHigh = pivot.kind === "H";
+          const nearRightEdge = idx >= rows.length - 8;
           const bucket = isHigh ? shownSameKindIndices.H : shownSameKindIndices.L;
           let labelPos: string = isHigh ? "top" : "bottom";
           let labelDist = 6;
           if (showLabel) {
             const nearCount = bucket.filter((prevIdx) => Math.abs(idx - prevIdx) <= 28).length;
             if (nearCount > 0) {
-              // 相邻同侧拐点错开左右与距离，防止带价格胶囊重叠
-              labelPos = isHigh
-                ? nearCount % 2 === 1
-                  ? "topRight"
-                  : "topLeft"
-                : nearCount % 2 === 1
-                  ? "bottomRight"
-                  : "bottomLeft";
+              // 相邻同侧拐点错开左右与距离，防止带价格胶囊重叠；靠右边界拐点保持右对齐向左展开
+              labelPos = nearRightEdge
+                ? isHigh
+                  ? "top"
+                  : "bottom"
+                : isHigh
+                  ? nearCount % 2 === 1
+                    ? "topRight"
+                    : "topLeft"
+                  : nearCount % 2 === 1
+                    ? "bottomRight"
+                    : "bottomLeft";
               labelDist = 6 + nearCount * 14;
             }
             bucket.push(idx);
@@ -1026,6 +1129,7 @@ function Chart({
             label: {
               show: showLabel,
               position: labelPos,
+              align: nearRightEdge ? "right" : undefined,
               distance: labelDist,
               formatter: formatPivotBadge(pivot),
               fontSize: 12,
@@ -1060,6 +1164,7 @@ function Chart({
         });
       }
     }
+    pivotByIndexRef.current = pivotByIndex;
 
     if (macdIdx >= 0) {
       series.push(
@@ -1069,10 +1174,15 @@ function Chart({
           type: "bar",
           xAxisIndex: macdIdx,
           yAxisIndex: macdIdx,
-          data: rows.map((r) => ({
-            value: r.macd_hist,
-            itemStyle: { color: Number(r.macd_hist) >= 0 ? up : down },
-          })),
+          large: false,
+          selectedMode: false,
+          data: rows.map((r) => {
+            const mh = safeNumber(r.macd_hist);
+            return {
+              value: mh,
+              itemStyle: { color: (mh ?? 0) >= 0 ? up : down },
+            };
+          }),
         },
         line("MACD", "macd", ma20Color, macdIdx),
         line("Signal", "macd_signal", ma50Color, macdIdx),
@@ -1111,39 +1221,51 @@ function Chart({
       },
       tooltip: {
         trigger: "axis",
+        triggerOn: "mousemove",
+        transitionDuration: 0,
         axisPointer: { type: "cross" },
         confine: true,
         renderMode: "html",
-        formatter: (items: { dataIndex: number }[]) => {
-          const i = items[0]?.dataIndex;
-          const row = rows[i];
-          if (!row) return "";
-          const value = (field: string, digits = 2) =>
-            fmt(row[field] == null ? null : Number(row[field]), digits);
-          const isForming = Boolean(row.intraday_forming);
-          const lines = [
-            isForming
-              ? `<b>${dates[i]}</b> · 盘中实时（未收盘，不计入正式指标）`
-              : `<b>${dates[i]}</b> · 纽约收盘`,
-            `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · ${isForming ? "现" : "收"} ${value("close")}`,
-            `成交量 ${formatVolume(row.volume as number)} · 成交额 $${formatVolume(row.turnover as number)}`,
-            isForming
-              ? "MA / MACD / RSI / 波浪评级仍按最近已确认收盘日线计算"
-              : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
-          ];
-          const pv = pivotByIndex.get(i);
-          if (pv) {
-            const wText = pv.wave_label
-              ? pv.wave_label === "0"
-                ? "波浪起点"
-                : `第 ${pv.wave_label} 浪`
-              : "波段拐点";
-            const stateText = pv.confirmed ? "已确认" : "进行中";
-            lines.push(
-              `<b>${wText}</b> · ${structFull[pv.structure] ?? pv.structure} · $${fmt(pv.price, 2)}（${stateText}）`,
-            );
+        formatter: (items: any) => {
+          try {
+            const list = Array.isArray(items) ? items : items ? [items] : [];
+            const i = list[0]?.dataIndex;
+            const liveRows = latestRowsRef.current;
+            const liveDates = latestDatesRef.current;
+            if (typeof i !== "number" || !Number.isInteger(i) || i < 0 || i >= liveRows.length) {
+              return "";
+            }
+            const row = liveRows[i];
+            if (!row) return "";
+            const value = (field: string, digits = 2) =>
+              fmt(safeNumber(row[field]), digits);
+            const isForming = Boolean(row.intraday_forming);
+            const lines = [
+              isForming
+                ? `<b>${liveDates[i] ?? "—"}</b> · 盘中实时（未收盘，不计入正式指标）`
+                : `<b>${liveDates[i] ?? "—"}</b> · 纽约收盘`,
+              `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · ${isForming ? "现" : "收"} ${value("close")}`,
+              `成交量 ${formatVolume(row.volume)} · 成交额 $${formatVolume(row.turnover)}`,
+              isForming
+                ? "MA / MACD / RSI / 波浪评级仍按最近已确认收盘日线计算"
+                : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
+            ];
+            const pv = pivotByIndexRef.current.get(i);
+            if (pv) {
+              const wText = pv.wave_label
+                ? pv.wave_label === "0"
+                  ? "波浪起点"
+                  : `第 ${pv.wave_label} 浪`
+                : "波段拐点";
+              const stateText = pv.confirmed ? "已确认" : "进行中";
+              lines.push(
+                `<b>${wText}</b> · ${structFull[pv.structure] ?? pv.structure} · $${fmt(pv.price, 2)}（${stateText}）`,
+              );
+            }
+            return lines.join("<br>");
+          } catch {
+            return "";
           }
-          return lines.join("<br>");
         },
         backgroundColor: dark ? "#16212f" : "#ffffff",
         borderColor: gridColor,
@@ -1158,7 +1280,7 @@ function Chart({
       },
       grid: panes.map((p) => ({
         left: 14,
-        right: 68,
+        right: 80,
         top: p.top,
         height: p.height,
       })),
@@ -1177,15 +1299,31 @@ function Chart({
           margin: 8,
         },
         splitLine: { show: false },
-        axisPointer: { show: true },
+        axisPointer: {
+          show: true,
+          snap: true,
+          // 仅最底部窗格显示日期浮标，避免多子图在最右侧重复堆叠日期块遮盖 Y 轴数字
+          label: { show: i === lastIdx },
+        },
       })),
       yAxis: panes.map((p, i) => ({
-        scale: true,
+        scale: p.kind !== "vol",
         gridIndex: i,
         position: "right",
         splitNumber: p.kind === "price" ? 5 : 2,
         boundaryGap: p.kind === "price" ? ["10%", "12%"] : undefined,
-        min: p.kind === "rsi" ? 0 : undefined,
+        min:
+          p.kind === "rsi" || p.kind === "vol"
+            ? 0
+            : p.kind === "price"
+              ? (v: { min: number; max: number }) =>
+                  Number.isFinite(v.min) &&
+                  Number.isFinite(v.max) &&
+                  v.min >= 0 &&
+                  v.min - Math.max(v.max - v.min, 0) * 0.12 <= 0
+                    ? 0
+                    : (undefined as any)
+              : undefined,
         max: p.kind === "rsi" ? 100 : undefined,
         splitLine: {
           show: true,
@@ -1194,6 +1332,7 @@ function Chart({
         axisLabel: {
           color: axis,
           fontSize: 12,
+          margin: 12,
           formatter: (v: number) =>
             p.kind === "vol"
               ? formatVolume(v)
@@ -1208,14 +1347,15 @@ function Chart({
         {
           type: "inside",
           xAxisIndex: panes.map((_, i) => i),
-          startValue: dates[left] ?? 0,
-          endValue: dates[right] ?? rows.length - 1,
+          startValue: left,
+          endValue: right,
         },
       ],
       series,
     };
     try {
       instance.setOption(option, { notMerge: true });
+      structSigRef.current = structSig;
       setChartError("");
     } catch (err: any) {
       console.error("[SignalDesk Chart setOption]", err);
@@ -1240,25 +1380,25 @@ function Chart({
     if (showMacd && showRsi) {
       return [
         { label: "日线价格 / 美元", top: "4px", isPrice: true },
-        { label: "成交量 / 股", top: "51.5%", isPrice: false },
-        { label: "MACD (12, 26, 9)", top: "65.5%", isPrice: false },
+        { label: "成交量 / 股", top: "46.5%", isPrice: false },
+        { label: "MACD (12, 26, 9)", top: "63.5%", isPrice: false },
         { label: "RSI (14)", top: "80.5%", isPrice: false },
       ];
     }
     if (showMacd || showRsi) {
       return [
         { label: "日线价格 / 美元", top: "4px", isPrice: true },
-        { label: "成交量 / 股", top: "64.5%", isPrice: false },
+        { label: "成交量 / 股", top: "58.5%", isPrice: false },
         {
           label: showMacd ? "MACD (12, 26, 9)" : "RSI (14)",
-          top: "78.5%",
+          top: "77%",
           isPrice: false,
         },
       ];
     }
     return [
       { label: "日线价格 / 美元", top: "4px", isPrice: true },
-      { label: "成交量 / 股", top: "77.5%", isPrice: false },
+      { label: "成交量 / 股", top: "74.5%", isPrice: false },
     ];
   }, [showMacd, showRsi]);
 
