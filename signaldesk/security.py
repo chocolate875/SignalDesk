@@ -328,5 +328,32 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
             key: stock.get("quote", {}).get(key)
             for key in ["last", "timestamp", "trade_status", "session", "stale"]
         },
+        "extended_hours": (
+            {
+                k: (stock.get("extended_hours") or {}).get(k)
+                for k in (
+                    "available",
+                    "is_live_session",
+                    "source",
+                    "active_session",
+                    "active_label",
+                    "price",
+                    "ref_close",
+                    "gap_pct",
+                    "high",
+                    "low",
+                    "turnover",
+                    "turnover_text",
+                    "timestamp",
+                    "liquid",
+                    "liquidity_label",
+                    "alert_level",
+                    "headline",
+                    "triggers",
+                )
+            }
+            if stock.get("extended_hours")
+            else {}
+        ),
         "technical": {"day:regular": summaries["day:regular"]} if "day:regular" in summaries else {},
     }

@@ -36,6 +36,39 @@ def normalize_bar(candle, timeframe: str, confirmed: bool = True) -> dict:
     }
 
 
+def _extract_pre_post(sub) -> dict | None:
+    """提取 LongPort PrePostQuote（盘前/盘后/夜盘）子行情，忽略无效零值。"""
+    if sub is None:
+        return None
+    try:
+        last = float(sub.last_done)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if last <= 0:
+        return None
+    stamp = getattr(sub, "timestamp", None)
+    return {
+        "last": last,
+        "prev_close": float(getattr(sub, "prev_close", 0.0) or 0.0) or None,
+        "high": float(getattr(sub, "high", 0.0) or 0.0) or None,
+        "low": float(getattr(sub, "low", 0.0) or 0.0) or None,
+        "volume": int(getattr(sub, "volume", 0) or 0),
+        "turnover": float(getattr(sub, "turnover", 0.0) or 0.0),
+        "timestamp": aware(stamp).isoformat() if stamp is not None else None,
+    }
+
+
+def _session_key_from_trade_session(raw_session) -> str:
+    text = str(raw_session or "").lower()
+    if "overnight" in text:
+        return "overnight"
+    if "pre" in text:
+        return "pre"
+    if "post" in text:
+        return "post"
+    return "regular"
+
+
 class LongPortFeed:
     """Only read APIs are wrapped. No order, watchlist mutation or cloud alert methods."""
 
@@ -58,7 +91,7 @@ class LongPortFeed:
             http_url=f"https://openapi.{domain}",
             quote_ws_url=f"wss://openapi-quote.{domain}/v2",
             trade_ws_url=f"wss://openapi-trade.{domain}/v2",
-            enable_overnight=False,
+            enable_overnight=True,
             push_candlestick_mode=lp.PushCandlestickMode.Confirmed,
             enable_print_quote_packages=False,
         )
@@ -68,9 +101,32 @@ class LongPortFeed:
         self.quote_context.set_on_quote(self._on_quote)
 
     def _on_quote(self, symbol, quote):
-        if quote.trade_session != self.lp.TradeSession.Intraday:
-            return
+        session_key = _session_key_from_trade_session(getattr(quote, "trade_session", None))
         stamp = aware(quote.timestamp)
+        if session_key != "regular":
+            # 盘外推送走独立通道，绝不覆盖常规盘主价或触发常规盘计划穿越
+            try:
+                last = float(quote.last_done)
+            except (TypeError, ValueError):
+                return
+            if last <= 0:
+                return
+            self.emit(
+                {
+                    "type": "extended_quote",
+                    "symbol": symbol,
+                    "session": session_key,
+                    "quote": {
+                        "last": last,
+                        "high": float(getattr(quote, "high", 0.0) or 0.0) or None,
+                        "low": float(getattr(quote, "low", 0.0) or 0.0) or None,
+                        "volume": int(getattr(quote, "volume", 0) or 0),
+                        "turnover": float(getattr(quote, "turnover", 0.0) or 0.0),
+                        "timestamp": stamp.isoformat(),
+                    },
+                }
+            )
+            return
         self.emit(
             {
                 "type": "quote",
@@ -143,18 +199,25 @@ class LongPortFeed:
                     except Exception:
                         continue
             for quote in items:
-                result.append(
-                    {
-                        "symbol": quote.symbol,
-                        "quote": {
-                            "last": float(quote.last_done),
-                            "prev_close": float(quote.prev_close),
-                            "timestamp": aware(quote.timestamp).isoformat(),
-                            "trade_status": str(quote.trade_status).split(".")[-1],
-                            "session": "regular",
-                        },
-                    }
-                )
+                extended = {}
+                for sess_key, attr in (
+                    ("pre", "pre_market_quote"),
+                    ("post", "post_market_quote"),
+                    ("overnight", "overnight_quote"),
+                ):
+                    parsed = _extract_pre_post(getattr(quote, attr, None))
+                    if parsed is not None:
+                        extended[sess_key] = parsed
+                quote_payload = {
+                    "last": float(quote.last_done),
+                    "prev_close": float(quote.prev_close),
+                    "timestamp": aware(quote.timestamp).isoformat(),
+                    "trade_status": str(quote.trade_status).split(".")[-1],
+                    "session": "regular",
+                }
+                if extended:
+                    quote_payload["extended"] = extended
+                result.append({"symbol": quote.symbol, "quote": quote_payload})
         return result
 
     def watchlist(self) -> dict:

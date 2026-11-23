@@ -113,6 +113,50 @@ def yield_curve(last_close: datetime) -> dict:
     return curve_summary(observations)
 
 
+def demo_extended_quote(symbol: str, regular_close: float, regular_end: datetime, now: datetime) -> dict:
+    """为演示模式生成确定性的合成夜盘/盘前报价，用于离线展示盘外跳空与流动性门控效果。"""
+    presets: dict[str, tuple[float, float, float]] = {
+        "NVDA.US": (0.036, 0.044, 68_500_000.0),   # 盘前放量显著高开
+        "AAPL.US": (0.008, 0.011, 24_200_000.0),   # 温和波动
+        "TSLA.US": (-0.034, -0.041, 52_000_000.0), # 盘前放量低开
+        "AMD.US": (0.035, 0.039, 420_000.0),       # 成交偏薄（< $100万，测试流动性门控降级）
+    }
+    if symbol not in presets or regular_close <= 0:
+        return {}
+    ov_gap, pre_gap, turnover = presets[symbol]
+    # 仅生成严格晚于常规收盘且不晚于当前时刻的合成时间戳
+    if now <= regular_end:
+        return {}
+    pre_ts = min(now, regular_end + timedelta(hours=12))
+    ov_ts = min(pre_ts - timedelta(minutes=30), regular_end + timedelta(hours=6))
+    if ov_ts <= regular_end:
+        ov_ts = regular_end + timedelta(seconds=10)
+    if pre_ts <= ov_ts:
+        pre_ts = min(now, ov_ts + timedelta(seconds=10))
+    ov_price = round(regular_close * (1.0 + ov_gap), 2)
+    pre_price = round(regular_close * (1.0 + pre_gap), 2)
+    return {
+        "overnight": {
+            "last": ov_price,
+            "prev_close": round(regular_close, 2),
+            "high": round(ov_price * 1.006, 2),
+            "low": round(ov_price * 0.994, 2),
+            "volume": int(turnover * 0.6 / max(ov_price, 1.0)),
+            "turnover": round(turnover * 0.6, 2),
+            "timestamp": ov_ts.isoformat(),
+        },
+        "pre": {
+            "last": pre_price,
+            "prev_close": round(regular_close, 2),
+            "high": round(pre_price * 1.008, 2),
+            "low": round(pre_price * 0.992, 2),
+            "volume": int(turnover / max(pre_price, 1.0)),
+            "turnover": round(turnover, 2),
+            "timestamp": pre_ts.isoformat(),
+        },
+    }
+
+
 def make_benchmark_bars(symbol: str, now: datetime) -> list[dict]:
     """为全市场基准 ETF（SPY/QQQ/RSP/IWM/HYG/IEF）生成确定性常规日线，独立于演示自选股。"""
     base, drift = DEMO_BENCHMARKS.get(symbol, (100.0, 0.0003))

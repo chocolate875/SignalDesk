@@ -18,7 +18,7 @@ import {
 } from "./types";
 
 type RailTab = "all" | "favorite" | "held" | "watchlist";
-type SortMode = "rating" | "alert" | "gainers" | "losers";
+type SortMode = "rating" | "alert" | "extended" | "gainers" | "losers";
 
 const LABEL_LEGEND: { label: string; tone: string; desc: string }[] = [
   { label: "跌破止损", tone: "danger", desc: "收盘价已低于您设定的止损/失效价" },
@@ -106,6 +106,20 @@ export default function WatchlistRail({
         const techDiff = (b.primary?.score ?? -1) - (a.primary?.score ?? -1);
         if (techDiff !== 0) return techDiff;
         return Number(b.favorite) - Number(a.favorite);
+      }
+      if (sort === "extended") {
+        const extA = a.extended_hours;
+        const extB = b.extended_hours;
+        const liveA = Boolean(extA?.available && extA.is_live_session && extA.gap_pct != null);
+        const liveB = Boolean(extB?.available && extB.is_live_session && extB.gap_pct != null);
+        if (liveA !== liveB) return Number(liveB) - Number(liveA);
+        const liqA = liveA && extA?.liquid ? 1 : 0;
+        const liqB = liveB && extB?.liquid ? 1 : 0;
+        if (liqA !== liqB) return liqB - liqA;
+        const gapA = liveA ? Math.abs(extA!.gap_pct!) : -1;
+        const gapB = liveB ? Math.abs(extB!.gap_pct!) : -1;
+        if (gapB !== gapA) return gapB - gapA;
+        return (extB?.turnover ?? -1) - (extA?.turnover ?? -1);
       }
       if (sort === "gainers") {
         const chgA = a.change_percent ?? Number.NEGATIVE_INFINITY;
@@ -236,6 +250,7 @@ export default function WatchlistRail({
           >
             <option value="rating">买卖评级</option>
             <option value="alert">风险预警</option>
+            <option value="extended">盘外异动</option>
             <option value="gainers">今日涨幅</option>
             <option value="losers">今日跌幅</option>
           </select>
@@ -387,6 +402,49 @@ export default function WatchlistRail({
                   )}
                 </div>
               </div>
+
+              {s.extended_hours?.available &&
+                s.extended_hours.is_live_session &&
+                s.extended_hours.price != null &&
+                (sort === "extended" ||
+                  (s.extended_hours.gap_pct != null &&
+                    Math.abs(s.extended_hours.gap_pct) >= 1.5) ||
+                  s.extended_hours.triggers.length > 0) && (
+                  <div
+                    className="stock-row-ext"
+                    title={s.extended_hours.headline}
+                  >
+                    <span className="stock-row-ext-left">
+                      <span
+                        className={`stock-row-ext-tag ${
+                          s.extended_hours.liquid ? "" : "thin"
+                        }`}
+                      >
+                        {s.extended_hours.active_label}
+                      </span>
+                      <span className="stock-row-ext-price">
+                        ${fmt(s.extended_hours.price, 2)}
+                      </span>
+                      {s.extended_hours.gap_pct != null && (
+                        <span
+                          className={
+                            s.extended_hours.gap_pct >= 0
+                              ? "quote-up"
+                              : "quote-down"
+                          }
+                        >
+                          {s.extended_hours.gap_pct >= 0 ? "+" : ""}
+                          {fmt(s.extended_hours.gap_pct, 1)}%
+                        </span>
+                      )}
+                    </span>
+                    <span className="stock-row-ext-right">
+                      {s.extended_hours.liquid
+                        ? s.extended_hours.turnover_text
+                        : "偏薄"}
+                    </span>
+                  </div>
+                )}
             </div>
           );
         })}

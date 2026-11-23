@@ -932,6 +932,92 @@ export default function App() {
                         )}
                     </div>
                   )}
+                  {stock.extended_hours?.available &&
+                    stock.extended_hours.is_live_session &&
+                    stock.extended_hours.price != null && (
+                      <div
+                        className={`ext-hours-strip level-${stock.extended_hours.alert_level}`}
+                        title={[
+                          stock.extended_hours.headline,
+                          ...stock.extended_hours.triggers.slice(1),
+                          stock.extended_hours.disclaimer,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      >
+                        <div className="ext-strip-main">
+                          <span className="ext-session-pill">
+                            <i />
+                            {stock.extended_hours.active_label}
+                          </span>
+                          <strong className="ext-strip-price">
+                            ${fmt(stock.extended_hours.price, 2)}
+                          </strong>
+                          {stock.extended_hours.gap_pct != null && (
+                            <span
+                              className={`ext-strip-gap ${
+                                stock.extended_hours.gap_pct >= 0
+                                  ? "quote-up"
+                                  : "quote-down"
+                              }`}
+                            >
+                              {stock.extended_hours.gap_pct >= 0 ? "+" : ""}
+                              {fmt(stock.extended_hours.gap_pct, 2)}%
+                            </span>
+                          )}
+                          {stock.extended_hours.low != null &&
+                            stock.extended_hours.high != null && (
+                              <span className="ext-strip-meta">
+                                区间 ${fmt(stock.extended_hours.low, 2)}–$
+                                {fmt(stock.extended_hours.high, 2)}
+                              </span>
+                            )}
+                          <span
+                            className={`ext-strip-liq ${
+                              stock.extended_hours.liquid ? "ok" : "thin"
+                            }`}
+                          >
+                            额 {stock.extended_hours.turnover_text} ·{" "}
+                            {stock.extended_hours.liquidity_label}
+                          </span>
+                          {stock.extended_hours.active_session === "pre" &&
+                            stock.extended_hours.sessions?.overnight?.is_fresh && (
+                              <span className="ext-strip-prev-sess">
+                                夜盘 $
+                                {fmt(
+                                  stock.extended_hours.sessions.overnight.price,
+                                  2,
+                                )}
+                                {stock.extended_hours.sessions.overnight
+                                  .gap_pct != null
+                                  ? ` (${
+                                      stock.extended_hours.sessions.overnight
+                                        .gap_pct >= 0
+                                        ? "+"
+                                        : ""
+                                    }${fmt(
+                                      stock.extended_hours.sessions.overnight
+                                        .gap_pct,
+                                      1,
+                                    )}%)`
+                                  : ""}
+                              </span>
+                            )}
+                        </div>
+                        {stock.extended_hours.triggers.length > 0 && (
+                          <button
+                            type="button"
+                            className={`ext-strip-alert level-${stock.extended_hours.alert_level}`}
+                            onClick={() => setInspectorTab("summary")}
+                            title={stock.extended_hours.triggers.join("；")}
+                          >
+                            {stock.extended_hours.liquid
+                              ? `${stock.extended_hours.active_label}异动 · ${stock.extended_hours.triggers.length}条`
+                              : "偏薄参考"}
+                          </button>
+                        )}
+                      </div>
+                    )}
                 </div>
               )}
 

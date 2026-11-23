@@ -11,6 +11,7 @@ from .broker_oauth import BrokerOAuth, OAuthError
 from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
 from .events import EventEngine
+from .extended_hours import summarize_extended_hours
 from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
 from .instruments import classify_instrument, compute_fund_metrics
@@ -185,14 +186,20 @@ class Monitor:
             regular = self.frames[("demo", item.symbol, "day")]
             if not regular.empty:
                 row = regular.iloc[-1]
-                self.quotes[("demo", item.symbol)] = {
-                    "last": float(row["close"]),
+                reg_end = bar_end(row["timestamp"].to_pydatetime(), "day")
+                reg_close = float(row["close"])
+                demo_ext = demo.demo_extended_quote(item.symbol, reg_close, reg_end, now)
+                quote_entry = {
+                    "last": reg_close,
                     "prev_close": float(regular.iloc[-2]["close"]),
-                    "timestamp": bar_end(row["timestamp"].to_pydatetime(), "day").isoformat(),
+                    "timestamp": reg_end.isoformat(),
                     "spread_ratio": 0.0005,
                     "trade_status": "normal",
                     "session": "regular",
                 }
+                if demo_ext:
+                    quote_entry["extended"] = demo_ext
+                self.quotes[("demo", item.symbol)] = quote_entry
             # Replay actual factor crossings from synthetic history; no fabricated signal cards.
             key = f"daily-demo-seeded:{item.symbol}:{now.date()}"
             if not self.store.get(key):
@@ -496,6 +503,15 @@ class Monitor:
             instrument=instrument,
             fund_metrics=fund_metrics,
         )
+        extended_hours = summarize_extended_hours(
+            quote,
+            market,
+            long_plan,
+            wave_trend,
+            forecast,
+            now,
+            demo=mode == "demo",
+        )
         result = {
             **allocation.model_dump(),
             "sleeves": allocation.sleeves(),
@@ -503,6 +519,7 @@ class Monitor:
             "instrument": instrument,
             "fund_metrics": fund_metrics,
             "quote": quote,
+            "extended_hours": extended_hours,
             "summaries": summaries,
             "primary_key": primary,
             "primary": summary,
@@ -1335,12 +1352,57 @@ class Monitor:
             events = await asyncio.to_thread(self.rebuild, symbol, initial=missing, catchup=True, mode="live")
             await self.on_events(events)
 
+    @staticmethod
+    def _merge_extended_maps(old_ext: dict | None, new_ext: dict | None) -> dict:
+        """按盘外分段（overnight/pre/post）合并报价，拒绝乱序旧时间戳回退。"""
+        merged: dict[str, dict] = {
+            k: dict(v) for k, v in (old_ext or {}).items() if isinstance(v, dict)
+        }
+        for key, incoming in (new_ext or {}).items():
+            if not isinstance(incoming, dict):
+                continue
+            prev = merged.get(key)
+            if prev and prev.get("timestamp") and incoming.get("timestamp"):
+                try:
+                    if datetime.fromisoformat(incoming["timestamp"]) < datetime.fromisoformat(prev["timestamp"]):
+                        continue
+                except ValueError:
+                    pass
+            base = dict(prev) if prev else {}
+            for field, val in incoming.items():
+                if val is not None:
+                    base[field] = val
+            merged[key] = base
+        return merged
+
+    async def _extended_quote(self, symbol: str, session_key: str, ext_quote: dict):
+        """接收夜盘/盘前/盘后实时推送，仅更新独立 extended 字段，绝不修改常规主价或触发常规盘计划价穿越。"""
+        mode = "live"
+        if self.settings.mode != mode or session_key not in {"overnight", "pre", "post"}:
+            return
+        try:
+            last = float(ext_quote.get("last"))
+            if not math.isfinite(last) or last <= 0:
+                return
+        except (TypeError, ValueError):
+            return
+        old = dict(self.quotes.get((mode, symbol), {}))
+        cleaned = dict(ext_quote)
+        cleaned["last"] = last
+        if cleaned.get("prev_close") is None and old.get("last"):
+            cleaned["prev_close"] = old["last"]
+        old["extended"] = self._merge_extended_maps(old.get("extended"), {session_key: cleaned})
+        self.quotes[(mode, symbol)] = old
+
     async def _quote(self, symbol: str, quote: dict):
         mode = "live"
         if self.settings.mode != mode:
             return
         old = self.quotes.get((mode, symbol), {})
+        merged_ext = self._merge_extended_maps(old.get("extended"), quote.get("extended"))
         value = {**old, **quote}
+        if merged_ext:
+            value["extended"] = merged_ext
         try:
             last = float(value.get("last"))
             if not math.isfinite(last) or last <= 0:
@@ -1353,6 +1415,9 @@ class Monitor:
             if old.get("timestamp"):
                 previous = datetime.fromisoformat(old["timestamp"])
                 if stamp < previous:
+                    # 常规主价不回退，但若有更新的盘外行情仍可保留
+                    if merged_ext and merged_ext != old.get("extended"):
+                        self.quotes[(mode, symbol)] = {**old, "extended": merged_ext}
                     return  # Late delivery must not rewind price crossing state or the displayed quote.
                 if (
                     "prev_close" not in quote
@@ -1452,6 +1517,10 @@ class Monitor:
                         item = self.queue.get_nowait()
                         if item["type"] == "quote":
                             await self._quote(item["symbol"], item["quote"])
+                        elif item["type"] == "extended_quote":
+                            await self._extended_quote(
+                                item["symbol"], item["session"], item["quote"]
+                            )
                     await self._closing_digest()
             except asyncio.CancelledError:
                 raise

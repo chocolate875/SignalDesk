@@ -212,6 +212,126 @@ function PlanRangeBar({
   );
 }
 
+function ExtendedHoursCard({ stock }: { stock: Stock }) {
+  const ext = stock.extended_hours;
+  if (!ext || !ext.available || ext.price == null) return null;
+
+  const tone =
+    ext.alert_level === "danger"
+      ? "danger"
+      : ext.alert_level === "warning"
+        ? "warning"
+        : ext.alert_level === "positive"
+          ? "positive"
+          : ext.liquid
+            ? "neutral"
+            : "muted";
+  const orderedSessions = (["overnight", "pre", "post"] as const)
+    .map((k) => ext.sessions?.[k])
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  return (
+    <section className={`insp-card ext-card tone-${tone}`}>
+      <div className="insp-card-head">
+        <h3>夜盘 / 盘前 / 盘后动态</h3>
+        <span className={`verdict-chip tone-${tone}`}>
+          {ext.active_label ?? "盘外"} · {ext.liquidity_label}
+        </span>
+      </div>
+
+      <div className="ext-card-hero">
+        <div className="ext-card-price-row">
+          <strong className="ext-card-price">${fmt(ext.price, 2)}</strong>
+          {ext.gap_pct != null && (
+            <span
+              className={`ext-card-gap ${
+                ext.gap_pct >= 0 ? "quote-up" : "quote-down"
+              }`}
+            >
+              {ext.gap_pct >= 0 ? "+" : ""}
+              {fmt(ext.gap_pct, 2)}%
+            </span>
+          )}
+          <span className="ext-card-ref">
+            较常规收 {ext.ref_close != null ? `$${fmt(ext.ref_close, 2)}` : "—"}
+          </span>
+        </div>
+        <div className="ext-card-stats">
+          <span>
+            成交额 <b>{ext.turnover_text}</b>
+          </span>
+          {ext.low != null && ext.high != null && (
+            <span>
+              区间 <b>${fmt(ext.low, 2)} – ${fmt(ext.high, 2)}</b>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {orderedSessions.length > 0 && (
+        <div className="ext-session-grid">
+          {orderedSessions.map((s) => {
+            const isAct = s.session === ext.active_session && ext.is_live_session;
+            const sessTag = isAct
+              ? "当前"
+              : s.timestamp
+                ? time(s.timestamp, "America/New_York").slice(5, 10)
+                : s.is_fresh
+                  ? "最新"
+                  : "上日";
+            return (
+              <div
+                key={s.session}
+                className={`ext-session-cell ${isAct ? "active" : ""} ${
+                  s.is_fresh ? "" : "stale"
+                }`}
+                title={`${s.label}时间：${time(s.timestamp)} · 成交额 ${s.turnover_text}`}
+              >
+                <div className="ext-sc-head">
+                  <span>{s.label}</span>
+                  <em>{sessTag}</em>
+                </div>
+                <strong>${fmt(s.price, 2)}</strong>
+                <small
+                  className={
+                    s.gap_pct == null
+                      ? "muted"
+                      : s.gap_pct >= 0
+                        ? "quote-up"
+                        : "quote-down"
+                  }
+                >
+                  {s.gap_pct != null
+                    ? `${s.gap_pct >= 0 ? "+" : ""}${fmt(s.gap_pct, 2)}%`
+                    : "—"}
+                </small>
+                <span className="ext-sc-turn">额 {s.turnover_text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {ext.triggers.length > 0 ? (
+        <div className={`ext-triggers-box level-${ext.alert_level}`}>
+          {ext.triggers.map((t, idx) => (
+            <div key={idx} className="ext-trigger-row">
+              <TriangleAlert size={14} />
+              <span>{t}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="ext-headline-note">{ext.headline}</p>
+      )}
+
+      <p className="forecast-disclaimer">
+        {ext.source} · 更新 {time(ext.timestamp)}。{ext.disclaimer}
+      </p>
+    </section>
+  );
+}
+
 function ForecastCard({
   stock,
   onApplyForecastLevels,
@@ -443,6 +563,8 @@ export default function StockInspector({
       <div className="inspector-body">
         {tab === "summary" && stock && (
           <>
+            <ExtendedHoursCard stock={stock} />
+
             <ForecastCard
               stock={stock}
               onApplyForecastLevels={onApplyForecastLevels}
