@@ -52,20 +52,31 @@ async def fetch_curve(now: datetime) -> dict:
     month = today.replace(day=1)
     async with httpx.AsyncClient(timeout=45, follow_redirects=True) as client:
         for _ in range(3):
-            try:
-                response = await client.get(
-                    TREASURY_URL,
-                    params={
-                        "data": "daily_treasury_yield_curve",
-                        "field_tdr_date_value_month": month.strftime("%Y%m"),
-                    },
-                )
-                response.raise_for_status()
-                rows.update(treasury_curve_observations(response.content, today))
-            except (httpx.HTTPError, ElementTree.ParseError, ValueError):
+            fetched_month = False
+            last_err: Exception | None = None
+            for attempt in range(2):
+                try:
+                    response = await client.get(
+                        TREASURY_URL,
+                        params={
+                            "data": "daily_treasury_yield_curve",
+                            "field_tdr_date_value_month": month.strftime("%Y%m"),
+                        },
+                    )
+                    response.raise_for_status()
+                    rows.update(treasury_curve_observations(response.content, today))
+                    fetched_month = True
+                    break
+                except (httpx.HTTPError, ElementTree.ParseError, ValueError) as exc:
+                    last_err = exc
+                    if attempt == 0 and isinstance(exc, httpx.HTTPError):
+                        continue
+                    break
+            if not fetched_month:
                 if rows:
                     break  # Keep the current pair even if the older comparison is unavailable.
-                raise
+                if last_err is not None:
+                    raise last_err
             if len(rows) >= 22:
                 break
             month = (month - timedelta(days=1)).replace(day=1)

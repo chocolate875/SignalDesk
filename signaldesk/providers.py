@@ -1,9 +1,58 @@
 from __future__ import annotations
 
+import socket
+import ssl
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from .calendar import bar_end
 from .models import Allocation
+
+PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
+    "longport": ("longportapp.cn", "longportapp.com"),
+    "longbridge": ("longbridge.cn", "longbridge.com"),
+}
+PLATFORM_DEFAULT_DOMAIN: dict[str, str] = {
+    "longport": "longportapp.com",
+    "longbridge": "longbridge.com",
+}
+
+
+def _tcp_latency_ms(host: str, port: int = 443, timeout: float = 2.0) -> float | None:
+    """测量端到端 TLS 握手延迟（ms），避免本机 TUN/代理 Fake-IP 对纯 TCP ACK 秒回造成误判。"""
+    t0 = time.perf_counter()
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            with ctx.wrap_socket(sock, server_hostname=host):
+                return (time.perf_counter() - t0) * 1000.0
+    except OSError:
+        return None
+
+
+def probe_fastest_broker_domain(
+    platform: str = "longport",
+    timeout: float = 2.0,
+    exclude: str | None = None,
+) -> str:
+    """并行探测同品牌 .cn / .com 行情网关 TLS 握手延迟，自动选择国内直连更快节点且不跨品牌混发。"""
+    key = platform if platform in PLATFORM_DOMAINS else "longport"
+    candidates = [d for d in PLATFORM_DOMAINS[key] if d != exclude] or list(PLATFORM_DOMAINS[key])
+    if len(candidates) == 1:
+        return candidates[0]
+    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+        futures = {
+            d: pool.submit(_tcp_latency_ms, f"openapi-quote.{d}", 443, timeout)
+            for d in candidates
+        }
+        latencies = {d: fut.result() for d, fut in futures.items()}
+    reachable = [(ms, d) for d, ms in latencies.items() if ms is not None]
+    if not reachable:
+        return candidates[0] if exclude else PLATFORM_DEFAULT_DOMAIN[key]
+    reachable.sort(key=lambda item: (item[0], 0 if item[1].endswith(".cn") else 1))
+    return reachable[0][1]
 
 
 def aware(value: datetime) -> datetime:
@@ -72,13 +121,22 @@ def _session_key_from_trade_session(raw_session) -> str:
 class LongPortFeed:
     """Only read APIs are wrapped. No order, watchlist mutation or cloud alert methods."""
 
-    def __init__(self, credentials: dict, emit):
+    def __init__(self, credentials: dict, emit, domain: str | None = None):
         import longbridge.openapi as lp
 
         self.lp, self.emit = lp, emit
-        domain = {"longport": "longportapp.com", "longbridge": "longbridge.com"}[
-            credentials.get("platform", "longport")
-        ]
+        platform = credentials.get("platform", "longport")
+        allowed = PLATFORM_DOMAINS.get(platform)
+        if allowed is None:
+            raise ValueError("未知券商平台")
+        if domain is not None:
+            if domain not in allowed:
+                raise ValueError("网关域名与所选券商平台不匹配")
+            selected_domain = domain
+        else:
+            selected_domain = PLATFORM_DEFAULT_DOMAIN[platform]
+        self.platform = platform
+        self.domain = selected_domain
         self.renew_at = credentials.get("renew_at")
         if credentials.get("method") == "oauth":
             # The SDK's HTTP signer skips HMAC for a Bearer header and empty secret.
@@ -88,9 +146,9 @@ class LongPortFeed:
             auth = tuple(credentials[key].strip() for key in ("app_key", "app_secret", "access_token"))
         config = lp.Config.from_apikey(
             *auth,
-            http_url=f"https://openapi.{domain}",
-            quote_ws_url=f"wss://openapi-quote.{domain}/v2",
-            trade_ws_url=f"wss://openapi-trade.{domain}/v2",
+            http_url=f"https://openapi.{selected_domain}",
+            quote_ws_url=f"wss://openapi-quote.{selected_domain}/v2",
+            trade_ws_url=f"wss://openapi-trade.{selected_domain}/v2",
             enable_overnight=True,
             push_candlestick_mode=lp.PushCandlestickMode.Confirmed,
             enable_print_quote_packages=False,

@@ -1,5 +1,17 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 非代理国内加速路由、秒出报价与盘中「待更新」根因修复
+
+- **网络实测与根因定位。**
+  - 实测本机连接长桥节点耗时：`longbridge.cn` 行情耗时 **`608 ms`**，较此前硬编码的 `longbridge.com`（**`2,560 ms`**）快 **4.2 倍**；美国财政部 `home.treasury.gov` 在弱网/直连下易 `ReadTimeout`；并确认造成界面长时间或反复显示「待更新」的三个直接原因：① `_connect()` 在拉取首次 `quotes()` 前串行逐只拉取 93 只标的 1,000 根历史日线阻塞 ~2 分钟；② 盘中实时 `PushQuote` 不含 `prev_close`，跨交易日时 `_quote()` 主动 `pop("prev_close")` 导致涨跌幅清空；③ 盘中 `_poll()` 每分钟串行轮询 93 只未收盘日线堵塞实时推送消费。
+- **修复内容。**
+  - [providers.py](../signaldesk/providers.py) 新增 `probe_fastest_broker_domain()`（端到端 TLS 握手测速，避免本机 TUN Fake-IP 代答 TCP ACK 误判）与同品牌 `.cn`/`.com` 白名单校验，[broker_oauth.py](../signaldesk/broker_oauth.py) 增加 `.cn` OAuth 网络故障容错回退，[research.py](../signaldesk/research.py) 为财政部接口增加单次网络重试。
+  - [service.py](../signaldesk/service.py) 改造启动与轮询管线：实盘启动从 SQLite 已确认日线预填参考价与昨收（`_seed_quote_from_frame`）；`_connect()` 优先 1 秒内批量拉取全部 `quotes()` 再 `subscribe()` 并刷新估值，缺失日线与基准 ETF 交由后台 `Semaphore(5)` 异步补齐；盘中例行 `_poll(skip_synced_daily=True)` 自动跳过已对齐最近已完成交易日的标的；跨交易日无 `prev_close` 实时推送自动以本机已确认上一交易日收盘兜底并在 5 秒内快刷校对精确昨收；断连时自动排除故障节点切换同品牌备用网关。
+- **自动化测试与实盘盘中核验。**
+  - 新增 `tests/test_connectivity.py`（5 项测试），全量 `pytest -q` **92 项全部通过**，`ruff check signaldesk tests` 全通过，私密文件隔离测试通过。
+  - 美股常规盘中实盘核验（`http://127.0.0.1:8765`）：左侧 `93` 只自选与整页 **0 处「待更新」**；`NVDA` 5 秒连续盘中推送（`$166.22 → $166.18 → $166.27 → $165.79`）涨跌幅稳定无闪回，右侧估值 `LongPort · 有效`；盘中自动抑制中栏 `.ext-hours-strip`，右侧 `.ext-card` 三段轨迹两行显示无省略号；控制台 **0 errors**，无 `4xx/5xx` 错误请求；并实测复验 TLS 握手探测在 TUN 环境下精准选中 `longbridge.cn`。
+- **未验证项。** 彻底关闭代理软件 TUN 网卡后的纯运营商宽带 24 小时断线重连压测仍需在实际离线网络下观察；美国财政部 `home.treasury.gov` 无代理超时仍依赖 6 小时本机缓存降级。
+
 ## 2026-11-23 夜盘、盘前与盘后独立行情融合及流动性过滤跳空预警（方案 A）
 
 - **LongPort 实盘接口实测。** 以只读方式启用 `enable_overnight=True` 并探测 `NVDA.US`/`AAPL.US`/`QQQ.US`/`SPY.US`/`TSLA.US`，核实账号可完整返回 `pre_market_quote`、`overnight_quote` 与 `post_market_quote`（含 `last_done`、`high`、`low`、`prev_close`、`volume`、`turnover`、`timestamp`，且三段 `prev_close` 均锚定最近常规收盘价）。

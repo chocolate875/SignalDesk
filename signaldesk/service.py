@@ -23,7 +23,7 @@ from .macro import (
 )
 from .models import Allocation, Settings, utcnow
 from .notifications import NotificationDispatcher
-from .providers import LongPortFeed
+from .providers import LongPortFeed, probe_fastest_broker_domain
 from .research import fetch_curve, research_context
 from .security import Vault
 from .storage import Store
@@ -74,6 +74,11 @@ class Monitor:
         self.watchlist_unsupported = []
         self.watchlist_sync_error = ""
         self.last_watchlist_sync = store.get("watchlist-last-sync:live")
+        self.broker_domain: str | None = None
+        self.failed_domain: str | None = None
+        self.quote_resync_needed: bool = False
+        self.last_quote_resync: float = 0.0
+        self.history_backfill_task: asyncio.Task | None = None
 
     def portfolio(self, mode: str | None = None) -> list[Allocation]:
         mode = mode or self.settings.mode
@@ -149,6 +154,39 @@ class Monitor:
                 self.macro_frames[(mode, sym)] = frame
         self.macro_cache = None
 
+    def _seed_quote_from_frame(self, symbol: str, mode: str = "live"):
+        """实盘启动在首次券商报价到达前，用本机已确认日线收盘预填参考价与昨收，避免满屏「待更新」。"""
+        if (mode, symbol) in self.quotes:
+            return
+        with self.frame_lock:
+            frame = self.frames.get((mode, symbol, "day"))
+        if frame is None or frame.empty:
+            return
+        reg = frame[frame["session"] == "regular"] if "session" in frame.columns else frame
+        if reg.empty:
+            return
+        last_row = reg.iloc[-1]
+        try:
+            close_last = float(last_row["close"])
+            if not math.isfinite(close_last) or close_last <= 0:
+                return
+            ts = bar_end(last_row["timestamp"].to_pydatetime(), "day").isoformat()
+            prev_close = None
+            if len(reg) >= 2:
+                prev_val = float(reg.iloc[-2]["close"])
+                if math.isfinite(prev_val) and prev_val > 0:
+                    prev_close = prev_val
+        except Exception:
+            return
+        self.quotes[(mode, symbol)] = {
+            "last": close_last,
+            "prev_close": prev_close,
+            "timestamp": ts,
+            "trade_status": "normal",
+            "session": "regular",
+            "seeded": True,
+        }
+
     async def start(self, background: bool = True):
         self.loop = asyncio.get_running_loop()
         if self.settings.mode == "demo":
@@ -157,6 +195,7 @@ class Monitor:
             self.status, self.detail = "unconfigured", "请在本机设置LongPort凭据；不会加载演示持仓到实盘"
             for item in self.portfolio():
                 await asyncio.to_thread(self.rebuild, item.symbol, True)
+                self._seed_quote_from_frame(item.symbol, "live")
             await asyncio.to_thread(self._load_cached_macro_benchmarks, "live")
         if background:
             self.tasks = [
@@ -1021,33 +1060,146 @@ class Monitor:
         )
         return [item.symbol for item in ordered]
 
+    def _frame_has_recent_daily(self, symbol: str, now: datetime) -> bool:
+        """检查本机缓存日线是否已对齐至最近应完成常规交易日且近200日无交易日缺口。"""
+        expected = latest_expected_end(now, "day", "regular")
+        if expected is None:
+            return False
+        with self.frame_lock:
+            frame = self.frames.get(("live", symbol, "day"))
+        if frame is None or frame.empty:
+            return False
+        reg = frame[frame["session"] == "regular"] if "session" in frame.columns else frame
+        if reg.empty:
+            return False
+        last_end = bar_end(reg["timestamp"].iloc[-1].to_pydatetime(), "day")
+        if last_end < expected:
+            return False
+        dates = set(reg["timestamp"].tail(200).dt.tz_convert(NY).dt.date)
+        if not dates:
+            return False
+        cal_sessions = calendar().sessions_in_range(min(dates), max(dates))
+        return all(session.date() in dates for session in cal_sessions)
+
+    async def _create_feed_with_fallback(self, credentials: dict) -> LongPortFeed:
+        """优先选择同品牌延迟更低的网关（国内自动优先 .cn），失败时自动回退同品牌备用节点。"""
+        platform = credentials.get("platform", "longport")
+        primary = await asyncio.to_thread(
+            probe_fastest_broker_domain, platform, 1.5, self.failed_domain
+        )
+        try:
+            feed = await asyncio.to_thread(LongPortFeed, credentials, self.emit, primary)
+            self.broker_domain = feed.domain
+            self.failed_domain = None
+            return feed
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            fallback = await asyncio.to_thread(
+                probe_fastest_broker_domain, platform, 1.5, primary
+            )
+            if fallback == primary:
+                self.failed_domain = primary
+                raise
+            feed = await asyncio.to_thread(LongPortFeed, credentials, self.emit, fallback)
+            self.broker_domain = feed.domain
+            self.failed_domain = None
+            return feed
+
+    async def _backfill_missing_history(self, symbols: list[str]):
+        """后台低并发补齐缺失或未对齐的历史日线与基准 ETF，绝不阻塞首屏报价和实时推送。"""
+        feed = self.feed
+        if feed is None or self.settings.mode != "live":
+            return
+        try:
+            cal_meta = await asyncio.to_thread(feed.market_calendar)
+            self.store.set("broker-calendar", cal_meta)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+
+        now = utcnow()
+        missing_symbols = [
+            sym
+            for sym in symbols
+            if not self._frame_has_recent_daily(sym, now)
+            and time.monotonic() >= self.history_retry_at.get(sym, 0)
+        ]
+        sem = asyncio.Semaphore(5)
+
+        async def fetch_one(sym: str):
+            async with sem:
+                if self.feed is not feed or self.settings.mode != "live":
+                    return
+                with self.frame_lock:
+                    frame = self.frames.get(("live", sym, "day"))
+                need_initial = frame is None or len(frame) < 200
+                try:
+                    bars = await asyncio.to_thread(feed.history, sym, "day", need_initial)
+                    confirmed = [b for b in bars if b.get("confirmed")]
+                    if confirmed:
+                        self.store.put_bars("live", sym, "day", confirmed)
+                        await asyncio.to_thread(self.rebuild, sym, True, mode="live")
+                    if not self._frame_has_recent_daily(sym, utcnow()) and not need_initial:
+                        full = await asyncio.to_thread(feed.history, sym, "day", True)
+                        full_ok = [b for b in full if b.get("confirmed")]
+                        if full_ok:
+                            self.store.put_bars("live", sym, "day", full_ok)
+                            await asyncio.to_thread(self.rebuild, sym, True, mode="live")
+                        self.history_retry_at[sym] = time.monotonic() + 3600
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.history_retry_at[sym] = time.monotonic() + 3600
+
+        if missing_symbols:
+            await asyncio.gather(*(fetch_one(sym) for sym in missing_symbols))
+        if self.feed is feed and self.settings.mode == "live":
+            await self._sync_macro_benchmarks()
+
     async def _connect(self):
         if not self.vault.configured("longport"):
             self.status, self.detail = "unconfigured", "实盘等待本机LongPort凭据；可先手动添加观察股票"
             return
-        self.status, self.detail = "connecting", "正在建立券商只读连接与补齐历史行情"
+        self.status, self.detail = "connecting", "正在选择最快券商网关并建立只读连接"
         credentials = await self.oauth.credentials()
-        self.feed = await asyncio.to_thread(LongPortFeed, credentials, self.emit)
+        self.feed = await self._create_feed_with_fallback(credentials)
         await self._sync_account()
         symbols = self._ordered_symbols("live")
-        self.store.set("broker-calendar", await asyncio.to_thread(self.feed.market_calendar))
-        for symbol in symbols:
+        # 优先在 1 秒内先批量拿到全部最新报价、昨收与盘外行情，再开启实时推送，避免启动出现「待更新」
+        if symbols:
             try:
-                bars = await asyncio.to_thread(self.feed.history, symbol, "day", True)
-                self.store.put_bars("live", symbol, "day", bars)
-                await asyncio.to_thread(self.rebuild, symbol, True, mode="live")
+                for item in await asyncio.to_thread(self.feed.quotes, symbols):
+                    await self._quote(item["symbol"], item["quote"])
+                self.quote_resync_needed = False
             except asyncio.CancelledError:
                 raise
             except Exception:
-                self.history_retry_at[symbol] = time.monotonic() + 3600
-                continue
+                pass
         await asyncio.to_thread(self.feed.subscribe, symbols)
+        # 若有新标的或估值过期，顺手完成一次批量估值刷新
+        missing_val = any(s not in self.valuations for s in symbols)
+        if symbols and (missing_val or time.monotonic() >= self.valuation_retry):
+            try:
+                valuations = await asyncio.to_thread(self.feed.valuations, symbols)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.valuation_retry = time.monotonic() + 900
+            else:
+                self.valuations = valuations
+                self.store.set("valuations:live", valuations)
+                self.valuation_retry = time.monotonic() + 3600
         if self.settings.mode != "live":
             return
-        self.status, self.detail = "live", "LongPort只读连接已建立；各股票数据有效性独立检查"
+        node_note = f"（{self.broker_domain}）" if self.broker_domain else ""
+        self.status, self.detail = "live", f"LongPort只读连接已建立{node_note}；各股票数据有效性独立检查"
         self.failures = 0
-        self.last_probe = 0
-        await self._sync_macro_benchmarks()
+        self.last_probe = time.monotonic()
+        if self.history_backfill_task and not self.history_backfill_task.done():
+            self.history_backfill_task.cancel()
+        self.history_backfill_task = asyncio.create_task(self._backfill_missing_history(symbols))
 
     async def _sync_macro_benchmarks(self):
         """只读拉取全市场基准 ETF（SPY/QQQ/RSP/IWM/HYG/IEF）日线到独立缓存分区，不污染用户自选列表。"""
@@ -1283,7 +1435,7 @@ class Monitor:
             "message": msg,
         }
 
-    async def _poll(self):
+    async def _poll(self, skip_synced_daily: bool = False):
         await self._sync_account()
         symbols = self._ordered_symbols("live")
         new_symbols = set(symbols) - self.feed.symbols
@@ -1305,6 +1457,9 @@ class Monitor:
                 self.history_retry_at[symbol] = time.monotonic() + 3600
                 continue
         await asyncio.to_thread(self.feed.subscribe, symbols)
+        for item in await asyncio.to_thread(self.feed.quotes, symbols):
+            await self._quote(item["symbol"], item["quote"])
+        self.quote_resync_needed = False
         if symbols and (new_symbols or time.monotonic() >= self.valuation_retry):
             try:
                 valuations = await asyncio.to_thread(self.feed.valuations, symbols)
@@ -1315,19 +1470,30 @@ class Monitor:
                 self.valuations = valuations
                 self.store.set("valuations:live", valuations)
                 self.valuation_retry = time.monotonic() + 3600
-        for item in await asyncio.to_thread(self.feed.quotes, symbols):
-            await self._quote(item["symbol"], item["quote"])
-        for symbol in symbols:
-            try:
-                await self._poll_daily(symbol)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                continue
+        now = utcnow()
+        daily_targets = [
+            symbol
+            for symbol in symbols
+            if not (skip_synced_daily and self._frame_has_recent_daily(symbol, now))
+        ]
+        if daily_targets:
+            sem = asyncio.Semaphore(5)
+
+            async def poll_one(sym: str):
+                async with sem:
+                    try:
+                        await self._poll_daily(sym)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        return
+
+            await asyncio.gather(*(poll_one(sym) for sym in daily_targets))
         await self._sync_macro_benchmarks()
         if self.settings.mode != "live":
             return
-        self.status, self.detail = "live", "数据同步正常；历史补齐不会作为新机会推送"
+        node_note = f"（{self.broker_domain}）" if self.broker_domain else ""
+        self.status, self.detail = "live", f"数据同步正常{node_note}；历史补齐不会作为新机会推送"
         self.failures = 0
 
     async def _poll_daily(self, symbol: str):
@@ -1394,6 +1560,25 @@ class Monitor:
         old["extended"] = self._merge_extended_maps(old.get("extended"), {session_key: cleaned})
         self.quotes[(mode, symbol)] = old
 
+    def _fallback_prev_close(self, mode: str, symbol: str, trade_day) -> float | None:
+        """跨交易日实时推送缺少 prev_close 时，从本机已确认常规日线回退取上一交易日收盘。"""
+        with self.frame_lock:
+            frame = self.frames.get((mode, symbol, "day"))
+        if frame is None or frame.empty:
+            return None
+        reg = frame[frame["session"] == "regular"] if "session" in frame.columns else frame
+        if reg.empty:
+            return None
+        try:
+            dates = reg["timestamp"].dt.tz_convert(NY).dt.date
+            prior = reg[dates < trade_day]
+            if prior.empty:
+                return None
+            val = float(prior.iloc[-1]["close"])
+            return val if math.isfinite(val) and val > 0 else None
+        except Exception:
+            return None
+
     async def _quote(self, symbol: str, quote: dict):
         mode = "live"
         if self.settings.mode != mode:
@@ -1401,6 +1586,8 @@ class Monitor:
         old = self.quotes.get((mode, symbol), {})
         merged_ext = self._merge_extended_maps(old.get("extended"), quote.get("extended"))
         value = {**old, **quote}
+        if not quote.get("seeded"):
+            value.pop("seeded", None)
         if merged_ext:
             value["extended"] = merged_ext
         try:
@@ -1423,7 +1610,17 @@ class Monitor:
                     "prev_close" not in quote
                     and stamp.astimezone(NY).date() != previous.astimezone(NY).date()
                 ):
-                    value.pop("prev_close", None)
+                    fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
+                    if fallback is not None:
+                        value["prev_close"] = fallback
+                    else:
+                        value.pop("prev_close", None)
+                    self.quote_resync_needed = True
+            elif "prev_close" not in quote and value.get("prev_close") is None:
+                fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
+                if fallback is not None:
+                    value["prev_close"] = fallback
+                self.quote_resync_needed = True
             fresh = 0 <= (utcnow() - stamp).total_seconds() <= 120
         except (ValueError, TypeError, KeyError):
             fresh = False
@@ -1503,17 +1700,14 @@ class Monitor:
                 if self.settings.mode == "live":
                     if self.feed and self.feed.renew_at and time.time() >= self.feed.renew_at:
                         credentials = await self.oauth.credentials()
-                        fresh = await asyncio.to_thread(LongPortFeed, credentials, self.emit)
+                        fresh = await self._create_feed_with_fallback(credentials)
                         self.feed.close()
                         self.feed = fresh
                         await asyncio.to_thread(fresh.subscribe, self._ordered_symbols("live"))
                     if self.feed is None and time.monotonic() >= self.reconnect_at:
                         self.reconnect_at = time.monotonic() + 30
                         await self._connect()
-                    if self.feed and time.monotonic() - self.last_probe > 60:
-                        self.last_probe = time.monotonic()
-                        await self._poll()
-                    for _ in range(min(self.queue.qsize(), 150)):
+                    for _ in range(min(self.queue.qsize(), 200)):
                         item = self.queue.get_nowait()
                         if item["type"] == "quote":
                             await self._quote(item["symbol"], item["quote"])
@@ -1521,12 +1715,28 @@ class Monitor:
                             await self._extended_quote(
                                 item["symbol"], item["session"], item["quote"]
                             )
+                    if (
+                        self.feed
+                        and self.quote_resync_needed
+                        and time.monotonic() - self.last_quote_resync >= 5.0
+                    ):
+                        self.last_quote_resync = time.monotonic()
+                        symbols = self._ordered_symbols("live")
+                        if symbols:
+                            for item in await asyncio.to_thread(self.feed.quotes, symbols):
+                                await self._quote(item["symbol"], item["quote"])
+                        self.quote_resync_needed = False
+                    if self.feed and time.monotonic() - self.last_probe > 60:
+                        self.last_probe = time.monotonic()
+                        await self._poll(skip_synced_daily=True)
                     await self._closing_digest()
             except asyncio.CancelledError:
                 raise
             except Exception as error:
                 self.failures += 1
                 self.status = "degraded"
+                if self.broker_domain:
+                    self.failed_domain = self.broker_domain
                 code = getattr(error, "code", None)
                 if isinstance(error, OAuthError):
                     self.detail = str(error)
@@ -1544,9 +1754,12 @@ class Monitor:
                     self.feed.close()
                     self.feed = None
                 self.reconnect_at = time.monotonic() + min(120, self.failures * 15)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
 
     async def stop(self):
+        if self.history_backfill_task and not self.history_backfill_task.done():
+            self.history_backfill_task.cancel()
+            await asyncio.gather(self.history_backfill_task, return_exceptions=True)
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)

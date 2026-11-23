@@ -13,6 +13,7 @@ import httpx
 from .security import Vault
 
 OAUTH_BASE = "https://openapi.longbridge.com/oauth2"
+OAUTH_FALLBACK_BASE = "https://openapi.longbridge.cn/oauth2"
 CALLBACK = "/broker/oauth/callback"
 FLOW_SECONDS = 600
 REAUTHORIZE = "长桥授权已失效，请在设置中重新登录长桥。"
@@ -51,13 +52,24 @@ class BrokerOAuth:
         }
 
     async def _post(self, endpoint: str, **kwargs) -> dict:
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(f"{OAUTH_BASE}/{endpoint}", **kwargs)
-            payload = response.json()
-        except (httpx.HTTPError, ValueError):
-            raise OAuthError("暂时无法连接长桥授权服务，请稍后重试。") from None
-        if not isinstance(payload, dict):
+        bases = [OAUTH_BASE]
+        if OAUTH_BASE == "https://openapi.longbridge.com/oauth2" and OAUTH_FALLBACK_BASE != OAUTH_BASE:
+            bases.append(OAUTH_FALLBACK_BASE)
+        response = None
+        payload = None
+        for idx, base in enumerate(bases):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.post(f"{base}/{endpoint}", **kwargs)
+                payload = response.json()
+                break
+            except httpx.HTTPError:
+                if idx + 1 < len(bases):
+                    continue
+                raise OAuthError("暂时无法连接长桥授权服务，请稍后重试。") from None
+            except ValueError:
+                raise OAuthError("暂时无法连接长桥授权服务，请稍后重试。") from None
+        if response is None or not isinstance(payload, dict):
             raise OAuthError("长桥授权服务返回了无效响应，请重试。")
         if response.is_error or payload.get("error"):
             if payload.get("error") == "invalid_grant":
