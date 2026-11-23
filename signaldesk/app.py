@@ -132,6 +132,11 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             monitor.detail_for(normalized, timeframe, "regular" if timeframe == "day" else session)
         )
 
+    @app.get("/api/stock/{symbol}/live-eval")
+    async def stock_live_eval(symbol: str):
+        normalized = Allocation(symbol=symbol).symbol
+        return _sanitize_json(monitor.live_evaluation_for(normalized))
+
     @app.put("/api/allocations")
     async def allocation(value: Allocation):
         saved = monitor.save_allocation(value)

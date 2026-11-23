@@ -46,6 +46,7 @@ class Monitor:
         self.wave_trends = {}
         self.fund_metrics = {}
         self.forecast_cache = {}
+        self.live_eval_cache = {}
         self.frame_lock = RLock()
         self.quotes = {}
         self.feed = None
@@ -283,6 +284,7 @@ class Monitor:
             self.wave_trends[(mode, symbol)] = (frame_sig, wave_trend)
             self.fund_metrics[(mode, symbol)] = (frame_sig, fund_metrics)
             self.forecast_cache.pop((mode, symbol), None)
+            self.live_eval_cache.pop((mode, symbol), None)
             if symbol in MACRO_BENCHMARK_SYMBOLS:
                 self.macro_cache = None
         allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
@@ -1056,6 +1058,251 @@ class Monitor:
             "intraday_forming": True,
         }
 
+    @staticmethod
+    def _detect_split_adjustment(
+        existing_bars: list[dict], incoming_bars: list[dict], tolerance: float = 0.005
+    ) -> bool:
+        """比对重叠交易日的已确认前复权收盘价，若变动超过容差（0.5%）说明发生拆股/合股/大额除权，需全量重写历史。"""
+        if not existing_bars or not incoming_bars:
+            return False
+        existing_by_day: dict[str, float] = {}
+        for b in existing_bars[-30:]:
+            try:
+                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(NY).date().isoformat()
+                close = float(b["close"])
+                if math.isfinite(close) and close > 0:
+                    existing_by_day[day_key] = close
+            except (KeyError, TypeError, ValueError):
+                continue
+        for b in incoming_bars:
+            if not b.get("confirmed"):
+                continue
+            try:
+                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(NY).date().isoformat()
+                new_close = float(b["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            old_close = existing_by_day.get(day_key)
+            if old_close and math.isfinite(new_close) and new_close > 0:
+                if abs(new_close / old_close - 1.0) > tolerance:
+                    return True
+        return False
+
+    def live_evaluation_for(self, symbol: str, now: datetime | None = None) -> dict:
+        """基于最新盘中或盘外行情临时拼装当日未收盘 K 线，复用完整系统规则引擎实时试算指标、评级、买卖点与波浪（绝不污染正式日线与告警）。"""
+        now = now or utcnow()
+        mode = self.settings.mode
+        allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
+        if allocation is None:
+            raise ValueError("股票不在本机监控列表")
+        if mode != "live":
+            return {"available": False, "reason": "演示模式无实盘未收盘行情，请切换实盘模式体验实时试算"}
+
+        with self.frame_lock:
+            frame = self.frames.get((mode, symbol, "day"))
+            stock = self.stock(allocation)
+
+        if frame is None or frame.empty:
+            return {"available": False, "reason": "已确认前复权日线尚未就绪，暂无法试算最新行情"}
+
+        base_bars = self.store.bars(mode, symbol, "day", count=360)
+        confirmed_bars = [b for b in base_bars if b.get("confirmed")]
+        if len(confirmed_bars) < 60:
+            return {"available": False, "reason": "已确认连续日线不足 60 根，暂不进行实时试算"}
+
+        last_confirmed = confirmed_bars[-1]
+        ref_close = float(last_confirmed["close"]) if last_confirmed.get("close") else None
+        forming = self._forming_daily_row(stock, [last_confirmed], now)
+
+        basis_kind = ""
+        basis_label = ""
+        liquid = True
+        quote_ts: str | None = None
+        prov_bar: dict | None = None
+        if forming is not None:
+            basis_kind = "regular_live"
+            basis_label = "盘中实时试算"
+            liquid = True
+            quote_ts = (stock.get("quote") or {}).get("timestamp") or forming["timestamp"]
+            prov_bar = {
+                "timestamp": forming["timestamp"],
+                "open": float(forming["open"]),
+                "high": float(forming["high"]),
+                "low": float(forming["low"]),
+                "close": float(forming["close"]),
+                "volume": int(forming.get("volume") or 0),
+                "turnover": float(forming.get("turnover") or 0.0),
+                "session": "regular",
+                "confirmed": True,
+            }
+        else:
+            ext = stock.get("extended_hours") or {}
+            active_sess = ext.get("active_session")
+            ext_price = ext.get("price")
+            if (
+                ext.get("available")
+                and active_sess in {"pre", "post", "overnight"}
+                and isinstance(ext_price, (int, float))
+                and math.isfinite(ext_price)
+                and ext_price > 0
+            ):
+                import pandas as pd
+
+                cal = calendar()
+                last_day = datetime.fromisoformat(last_confirmed["timestamp"]).astimezone(NY).date()
+                next_sess_day = cal.next_session(pd.Timestamp(last_day))
+                next_open = cal.session_open(next_sess_day).to_pydatetime()
+                sess_map = ext.get("sessions") or {}
+                sess_item = sess_map.get(active_sess) or {}
+                p = float(ext_price)
+                hi = max(float(sess_item.get("high") or p), p)
+                lo = min(float(sess_item.get("low") or p), p)
+                vol = int(sess_item.get("volume") or 0)
+                turn = float(sess_item.get("turnover") or 0.0)
+                basis_kind = f"ext_{active_sess}"
+                basis_label = f"{ext.get('active_label') or '盘外'}价格试算"
+                liquid = bool(ext.get("liquid", False))
+                quote_ts = ext.get("timestamp") or next_open.isoformat()
+                prov_bar = {
+                    "timestamp": next_open.isoformat(),
+                    "open": round(p, 4),
+                    "high": round(hi, 4),
+                    "low": round(lo, 4),
+                    "close": round(p, 4),
+                    "volume": max(0, vol),
+                    "turnover": round(max(0.0, turn), 2),
+                    "session": "regular",
+                    "confirmed": True,
+                }
+
+        if prov_bar is None:
+            return {"available": False, "reason": "当前最新报价已反映在最近已确认收盘日线中"}
+
+        cache_sig = (
+            id(frame),
+            basis_kind,
+            round(prov_bar["open"], 3),
+            round(prov_bar["high"], 3),
+            round(prov_bar["low"], 3),
+            round(prov_bar["close"], 3),
+            prov_bar["volume"] // 10000,
+            stock["long_plan"].get("stop"),
+            stock["long_plan"].get("target"),
+            allocation.broker_quantity,
+            (stock.get("primary") or {}).get("rule_version", ""),
+        )
+        with self.frame_lock:
+            cached = self.live_eval_cache.get((mode, symbol))
+            if cached is not None and cached[0] == cache_sig:
+                return cached[1]
+
+        prov_dt = datetime.fromisoformat(prov_bar["timestamp"])
+        eval_now = max(now, bar_end(prov_dt, "day"))
+        prov_bars = [*confirmed_bars, prov_bar]
+        prov_frame = enrich(prov_bars, "day", eval_now, self.settings.rules)
+        prov_quote = {
+            **(stock.get("quote") or {}),
+            "last": prov_bar["close"],
+            "timestamp": quote_ts or eval_now.isoformat(),
+            "stale": False,
+        }
+        prov_summary = summarize(
+            prov_frame,
+            "day",
+            "regular",
+            eval_now,
+            self.settings.rules,
+            prov_quote,
+            demo=False,
+        )
+        prov_close = prov_bar["close"]
+        stop, target = allocation.long_levels()
+        prov_long_plan = {
+            **stock["long_plan"],
+            "basis": "live_provisional",
+            "close": prov_close,
+            "as_of": quote_ts or prov_summary.get("as_of"),
+            "stop_distance_percent": ((prov_close / stop - 1) * 100) if prov_close and stop else None,
+            "target_distance_percent": ((prov_close / target - 1) * 100) if prov_close and target else None,
+        }
+        instrument = stock["instrument"]
+        research = stock["research"]
+        prov_wave_trend = compute_wave_trend(prov_frame, prov_summary)
+        prov_fund_metrics = compute_fund_metrics(prov_frame, prov_summary)
+        prov_forecast = compute_forecast(
+            prov_frame,
+            prov_summary,
+            research,
+            prov_long_plan,
+            instrument=instrument,
+            fund_metrics=prov_fund_metrics,
+        )
+        prov_verdict = self._build_verdict(
+            allocation,
+            prov_summary,
+            research,
+            prov_long_plan,
+            instrument=instrument,
+            fund_metrics=prov_fund_metrics,
+        )
+
+        # 提取当日试算 K 线完整指标行，便于在试算口径下同步在 K 线图延续均线/布林/MACD/RSI
+        live_rows = chart_rows(prov_frame, "regular", count=1)
+        live_row = {**live_rows[-1], "intraday_forming": True} if live_rows else None
+
+        base_score = (stock.get("primary") or {}).get("score")
+        prov_score = prov_summary.get("score")
+        score_delta = (
+            round(float(prov_score) - float(base_score), 1)
+            if base_score is not None and prov_score is not None
+            else None
+        )
+        base_rating = (stock.get("forecast") or {}).get("rating") or {}
+        prov_rating = (prov_forecast or {}).get("rating") or {}
+        base_r_score = base_rating.get("score")
+        prov_r_score = prov_rating.get("score")
+        rating_delta = (
+            round(float(prov_r_score) - float(base_r_score), 1)
+            if base_r_score is not None and prov_r_score is not None
+            else None
+        )
+        base_r_code = base_rating.get("code")
+        prov_r_code = prov_rating.get("code")
+        rating_changed = bool(base_r_code and prov_r_code and base_r_code != prov_r_code)
+        change_pct = ((prov_close / ref_close - 1.0) * 100.0) if ref_close and ref_close > 0 else None
+
+        disclaimer = (
+            "基于最新未收盘行情临时试算（盘外成交偏薄时参考性更低），用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以纽约已确认收盘日线为准。"
+            if not liquid
+            else "基于最新未收盘行情临时试算，用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以纽约已确认收盘日线为准。"
+        )
+        payload = {
+            "available": True,
+            "reason": "",
+            "basis_kind": basis_kind,
+            "basis_label": basis_label,
+            "liquid": liquid,
+            "price": round(prov_close, 4),
+            "ref_close": round(ref_close, 4) if ref_close is not None else None,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "timestamp": quote_ts,
+            "summary": prov_summary,
+            "score_delta": score_delta,
+            "forecast": prov_forecast,
+            "rating_delta": rating_delta,
+            "rating_changed": rating_changed,
+            "prev_rating_label": base_rating.get("label") or "",
+            "wave_trend": prov_wave_trend,
+            "fund_metrics": prov_fund_metrics,
+            "verdict": prov_verdict,
+            "long_plan": prov_long_plan,
+            "live_row": live_row,
+            "disclaimer": disclaimer,
+        }
+        with self.frame_lock:
+            self.live_eval_cache[(mode, symbol)] = (cache_sig, payload)
+        return payload
+
     def detail_for(self, symbol: str, timeframe: str, session: str):
         allocation = next((a for a in self.portfolio() if a.symbol == symbol), None)
         if allocation is None:
@@ -1069,18 +1316,24 @@ class Monitor:
             if not bars and self.settings.mode == "demo" and symbol in {d[0] for d in demo.DEMO_NAMES}:
                 bars = demo.make_bars(symbol, timeframe, utcnow())
             frame = enrich(bars, timeframe, utcnow(), self.settings.rules)
+        now = utcnow()
         rows = chart_rows(frame, session, count=1000) if frame is not None else []
         if timeframe == "day" and session == "regular" and self.settings.mode == "live":
-            forming = self._forming_daily_row(stock, rows, utcnow())
+            forming = self._forming_daily_row(stock, rows, now)
             if forming is not None:
                 rows = [*rows, forming]
+        live_eval = (
+            self.live_evaluation_for(symbol, now=now)
+            if timeframe == "day" and session == "regular"
+            else {"available": False, "reason": ""}
+        )
         summary = stock["summaries"].get(f"{timeframe}:{session}")
         if summary is None and timeframe == "15m":
             summary = summarize(
                 frame,
                 timeframe,
                 session,
-                utcnow(),
+                now,
                 self.settings.rules,
                 stock["quote"],
                 demo=self.settings.mode == "demo",
@@ -1090,6 +1343,7 @@ class Monitor:
             "mode": self.settings.mode,
             "rows": rows,
             "summary": summary,
+            "live_eval": live_eval,
             "timeframe": timeframe,
             "session": session,
         }
@@ -1194,7 +1448,7 @@ class Monitor:
             if not self._frame_has_recent_daily(sym, now)
             and time.monotonic() >= self.history_retry_at.get(sym, 0)
         ]
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(6)
 
         async def fetch_one(sym: str):
             async with sem:
@@ -1206,14 +1460,21 @@ class Monitor:
                 try:
                     bars = await asyncio.to_thread(feed.history, sym, "day", need_initial)
                     confirmed = [b for b in bars if b.get("confirmed")]
-                    if confirmed:
-                        self.store.put_bars("live", sym, "day", confirmed)
+                    split_shifted = False
+                    if confirmed and not need_initial:
+                        existing = self.store.bars("live", sym, "day", count=30)
+                        split_shifted = self._detect_split_adjustment(existing, confirmed)
+                    if confirmed and not split_shifted:
+                        if need_initial:
+                            self.store.replace_bars("live", sym, "day", confirmed)
+                        else:
+                            self.store.put_bars("live", sym, "day", confirmed)
                         await asyncio.to_thread(self.rebuild, sym, True, mode="live")
-                    if not self._frame_has_recent_daily(sym, utcnow()) and not need_initial:
+                    if (split_shifted or not self._frame_has_recent_daily(sym, utcnow())) and not need_initial:
                         full = await asyncio.to_thread(feed.history, sym, "day", True)
                         full_ok = [b for b in full if b.get("confirmed")]
                         if full_ok:
-                            self.store.put_bars("live", sym, "day", full_ok)
+                            self.store.replace_bars("live", sym, "day", full_ok)
                             await asyncio.to_thread(self.rebuild, sym, True, mode="live")
                         self.history_retry_at[sym] = time.monotonic() + 3600
                 except asyncio.CancelledError:
@@ -1289,7 +1550,19 @@ class Monitor:
                 bars = await asyncio.to_thread(self.feed.history, sym, "day", initial)
                 confirmed = [b for b in bars if b.get("confirmed")]
                 if confirmed:
-                    self.store.put_bars("macro-live", sym, "day", confirmed)
+                    split_shifted = False
+                    if not initial:
+                        existing = self.store.bars("macro-live", sym, "day", count=30)
+                        split_shifted = self._detect_split_adjustment(existing, confirmed)
+                    if split_shifted:
+                        full = await asyncio.to_thread(self.feed.history, sym, "day", True)
+                        full_ok = [b for b in full if b.get("confirmed")]
+                        if full_ok:
+                            self.store.replace_bars("macro-live", sym, "day", full_ok)
+                    elif initial:
+                        self.store.replace_bars("macro-live", sym, "day", confirmed)
+                    else:
+                        self.store.put_bars("macro-live", sym, "day", confirmed)
                     all_bars = self.store.bars("macro-live", sym, "day")
                     frame = await asyncio.to_thread(enrich, all_bars, "day", now, self.settings.rules)
                     with self.frame_lock:
@@ -1568,6 +1841,17 @@ class Monitor:
         batch = await asyncio.to_thread(self.feed.history, symbol, "day")
         confirmed = [b for b in batch if b["confirmed"]]
         if not confirmed:
+            return
+        # 检测到拆股、合股或大额除权导致前复权历史价跳变时，全量重写整段前复权日线，杜绝新旧口径拼接断崖
+        existing_tail = self.store.bars("live", symbol, "day", count=30)
+        split_shifted = self._detect_split_adjustment(existing_tail, confirmed)
+        if split_shifted:
+            history = await asyncio.to_thread(self.feed.history, symbol, "day", True)
+            full_ok = [b for b in history if b.get("confirmed")]
+            if full_ok and self.store.replace_bars("live", symbol, "day", full_ok):
+                self.history_retry_at[symbol] = time.monotonic() + 3600
+                events = await asyncio.to_thread(self.rebuild, symbol, initial=True, catchup=True, mode="live")
+                await self.on_events(events)
             return
         # The transport can survive a sleeping PC while its five-bar history window moves on.
         with self.frame_lock:

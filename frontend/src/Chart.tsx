@@ -16,7 +16,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 import { HelpCircle, Maximize2, Minimize2, X } from "lucide-react";
 import { IndicatorGuideMenu } from "./GuidePopover";
-import type { ChartRow, Detail, Stock, WavePivot, WaveTrend } from "./types";
+import type { ChartRow, Detail, EvalMode, Stock, WavePivot, WaveTrend } from "./types";
 import { fmt, ticker, time } from "./types";
 
 echarts.use([
@@ -99,12 +99,14 @@ function OhlcHud({
   dates,
   overlay,
   theme,
+  evalMode = "confirmed",
   registerHover,
 }: {
   rows: ChartRow[];
   dates: string[];
   overlay: OverlayMode;
   theme: string;
+  evalMode?: EvalMode;
   registerHover: (setter: (idx: number | null) => void) => void;
 }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -146,6 +148,10 @@ function OhlcHud({
         ? close >= open
         : true;
   const isForming = Boolean(row.intraday_forming);
+  const showFormingIndicators =
+    isForming &&
+    evalMode === "live" &&
+    (safeNumber(row.ma20) != null || safeNumber(row.bb_middle) != null);
   const dirClass = isUp ? "quote-up" : "quote-down";
 
   return (
@@ -154,9 +160,13 @@ function OhlcHud({
       {isForming && (
         <span
           className="hud-live-pill"
-          title="当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算"
+          title={
+            showFormingIndicators
+              ? "当前处于「最新行情试算」口径（未收盘临时预览）"
+              : "当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算"
+          }
         >
-          盘中
+          {showFormingIndicators ? "实时试算" : "盘中"}
         </span>
       )}
       <span>
@@ -180,10 +190,10 @@ function OhlcHud({
       <span>
         量<b>{formatVolume(row.volume)}</b>
       </span>
-      {isForming ? (
+      {isForming && !showFormingIndicators ? (
         <span
           className="hud-forming-note"
-          title="当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算"
+          title="当天盘中实时生成（未收盘），均线 / MACD / RSI / 波浪评级仍严格按最近已确认收盘日线计算；可在右侧切换「最新行情试算」预览"
         >
           未收盘 · 指标按已收盘计
         </span>
@@ -397,12 +407,16 @@ function Chart({
   detail,
   liveQuote,
   marketSession,
+  evalMode = "confirmed",
+  liveEvalRow = null,
   theme,
   reverse,
 }: {
   detail: Detail | null;
   liveQuote?: Stock["quote"];
   marketSession?: string;
+  evalMode?: EvalMode;
+  liveEvalRow?: ChartRow | null;
   theme: string;
   reverse: boolean;
 }) {
@@ -413,6 +427,7 @@ function Chart({
   const structSigRef = useRef("");
   const latestRowsRef = useRef<ChartRow[]>([]);
   const latestDatesRef = useRef<string[]>([]);
+  const evalModeRef = useRef<EvalMode>(evalMode);
   const pivotByIndexRef = useRef<Map<number, WavePivot>>(new Map());
   const hoverSetter = useRef<(idx: number | null) => void>(() => {});
   const [overlay, setOverlay] = useState<OverlayMode>("MA");
@@ -433,10 +448,29 @@ function Chart({
     [],
   );
 
-  // 将 WebSocket 实时盘中报价合并到当日未收盘 K 线（严格隔离正式收盘指标）
+  // 将 WebSocket 实时盘中报价合并到当日未收盘 K 线；开启「最新行情试算」时融合当日临时指标预览
   const displayRows = useMemo<ChartRow[]>(() => {
     const base = detail?.rows ?? [];
     if (!base.length) return [];
+
+    const withLiveIndicators = (row: ChartRow): ChartRow => {
+      if (evalMode !== "live" || !liveEvalRow) return row;
+      return {
+        ...row,
+        ma20: liveEvalRow.ma20 ?? row.ma20 ?? null,
+        ma50: liveEvalRow.ma50 ?? row.ma50 ?? null,
+        ma200: liveEvalRow.ma200 ?? row.ma200 ?? null,
+        bb_upper: liveEvalRow.bb_upper ?? row.bb_upper ?? null,
+        bb_middle: liveEvalRow.bb_middle ?? row.bb_middle ?? null,
+        bb_lower: liveEvalRow.bb_lower ?? row.bb_lower ?? null,
+        macd: liveEvalRow.macd ?? row.macd ?? null,
+        macd_signal: liveEvalRow.macd_signal ?? row.macd_signal ?? null,
+        macd_hist: liveEvalRow.macd_hist ?? row.macd_hist ?? null,
+        rsi: liveEvalRow.rsi ?? row.rsi ?? null,
+        atr: liveEvalRow.atr ?? row.atr ?? null,
+      };
+    };
+
     if (
       detail?.mode !== "live" ||
       detail?.timeframe !== "day" ||
@@ -447,6 +481,13 @@ function Chart({
       liveQuote.last <= 0 ||
       !liveQuote.timestamp
     ) {
+      if (evalMode === "live" && liveEvalRow && detail?.mode === "live" && detail?.timeframe === "day") {
+        const last = base[base.length - 1];
+        if (last?.intraday_forming) {
+          return [...base.slice(0, -1), withLiveIndicators(last)];
+        }
+        return [...base, { ...liveEvalRow, intraday_forming: true }];
+      }
       return base;
     }
     const qMs = Date.parse(liveQuote.timestamp);
@@ -483,7 +524,7 @@ function Chart({
       const prevVol = safeNumber(lastRow.volume) ?? 0;
       const liveTurn = safeNumber(liveQuote.turnover);
       const prevTurn = safeNumber(lastRow.turnover) ?? 0;
-      const updated: ChartRow = {
+      const updated: ChartRow = withLiveIndicators({
         ...lastRow,
         open,
         high,
@@ -492,7 +533,7 @@ function Chart({
         volume: liveVol != null ? Math.max(liveVol, prevVol) : lastRow.volume,
         turnover: liveTurn != null ? Math.max(liveTurn, prevTurn) : lastRow.turnover,
         return_1: prevClose ? close / prevClose - 1 : lastRow.return_1,
-      };
+      });
       return [...base.slice(0, -1), updated];
     }
 
@@ -506,7 +547,7 @@ function Chart({
       const high = Math.max(pos(liveQuote.high) ?? close, open, close);
       const low = Math.min(pos(liveQuote.low) ?? close, open, close);
       const prevClose = pos(liveQuote.prev_close) ?? pos(lastRow.close);
-      const forming: ChartRow = {
+      const forming: ChartRow = withLiveIndicators({
         timestamp: liveQuote.timestamp,
         open,
         high,
@@ -516,12 +557,23 @@ function Chart({
         turnover: safeNumber(liveQuote.turnover) ?? 0,
         return_1: prevClose ? close / prevClose - 1 : null,
         intraday_forming: true,
-      };
+      });
       return [...base, forming];
     }
 
+    if (evalMode === "live" && liveEvalRow) {
+      if (lastRow?.intraday_forming) {
+        return [...base.slice(0, -1), withLiveIndicators(lastRow)];
+      }
+      const evMs = liveEvalRow.timestamp ? Date.parse(liveEvalRow.timestamp) : Number.NaN;
+      const evDay = Number.isFinite(evMs) ? NY_DATE_FMT.format(new Date(evMs)) : "";
+      if (evDay && (!lastDay || evDay > lastDay)) {
+        return [...base, { ...liveEvalRow, intraday_forming: true }];
+      }
+    }
+
     return base;
-  }, [detail?.rows, detail?.mode, detail?.timeframe, liveQuote, marketSession]);
+  }, [detail?.rows, detail?.mode, detail?.timeframe, liveQuote, marketSession, evalMode, liveEvalRow]);
 
   const dates = useMemo(() => {
     if (!displayRows.length) return [];
@@ -533,6 +585,7 @@ function Chart({
 
   latestRowsRef.current = displayRows;
   latestDatesRef.current = dates;
+  evalModeRef.current = evalMode;
 
   useEffect(() => {
     hoverSetter.current(null);
@@ -652,6 +705,9 @@ function Chart({
       flRef?.sell_low ?? null,
       flRef?.stop_loss ?? null,
       overlay,
+      evalMode,
+      evalMode === "live" ? (liveEvalRow?.ma20 ?? null) : null,
+      evalMode === "live" ? (liveEvalRow?.rsi ?? null) : null,
       showMacd,
       showRsi,
       showCost,
@@ -1240,15 +1296,18 @@ function Chart({
             const value = (field: string, digits = 2) =>
               fmt(safeNumber(row[field]), digits);
             const isForming = Boolean(row.intraday_forming);
+            const isLiveEval = isForming && evalModeRef.current === "live" && safeNumber(row.rsi) != null;
             const lines = [
               isForming
-                ? `<b>${liveDates[i] ?? "—"}</b> · 盘中实时（未收盘，不计入正式指标）`
-                : `<b>${liveDates[i] ?? "—"}</b> · 纽约收盘`,
+                ? isLiveEval
+                  ? `<b>${liveDates[i] ?? "—"}</b> · 最新行情试算（未收盘临时预览）`
+                  : `<b>${liveDates[i] ?? "—"}</b> · 盘中实时（未收盘，不计入正式指标）`
+                : `<b>${liveDates[i] ?? "—"}</b> · 纽约收盘（前复权）`,
               `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · ${isForming ? "现" : "收"} ${value("close")}`,
               `成交量 ${formatVolume(row.volume)} · 成交额 $${formatVolume(row.turnover)}`,
-              isForming
+              isForming && !isLiveEval
                 ? "MA / MACD / RSI / 波浪评级仍按最近已确认收盘日线计算"
-                : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
+                : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}${isLiveEval ? "（试算）" : ""}`,
             ];
             const pv = pivotByIndexRef.current.get(i);
             if (pv) {
@@ -1366,6 +1425,8 @@ function Chart({
     displayRows,
     dates,
     overlay,
+    evalMode,
+    liveEvalRow,
     showMacd,
     showRsi,
     showCost,
@@ -1427,10 +1488,10 @@ function Chart({
           <div className="fullscreen-chart-title">
             <b>{ticker(detail.stock.symbol)} · 日线</b>
             <span>
-              {detail.mode === "demo" ? "合成行情" : "常规时段 · 不复权"}
+              {detail.mode === "demo" ? "合成行情" : "常规时段 · 前复权"}
             </span>
             <span>
-              收盘 ${fmt(detail.summary?.close, 2)} ·{" "}
+              {evalMode === "live" ? "试算" : "收盘"} ${fmt(detail.summary?.close, 2)} ·{" "}
               {time(detail.summary?.as_of, "America/New_York")}（纽约）
             </span>
           </div>
@@ -1553,6 +1614,7 @@ function Chart({
         dates={dates}
         overlay={overlay}
         theme={theme}
+        evalMode={evalMode}
         registerHover={registerHover}
       />
 

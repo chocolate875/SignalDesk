@@ -435,11 +435,36 @@ export type Dashboard = {
 export type ChartRow = Record<string, number | string | boolean | null> & {
   timestamp: string;
 };
+export type EvalMode = "confirmed" | "live";
+export type LiveEvaluation = {
+  available: boolean;
+  reason?: string;
+  basis_kind?: string;
+  basis_label?: string;
+  liquid?: boolean;
+  price?: number | null;
+  ref_close?: number | null;
+  change_pct?: number | null;
+  timestamp?: string | null;
+  summary?: Summary | null;
+  score_delta?: number | null;
+  forecast?: Stock["forecast"] | null;
+  rating_delta?: number | null;
+  rating_changed?: boolean;
+  prev_rating_label?: string;
+  wave_trend?: WaveTrend | null;
+  fund_metrics?: FundMetrics | null;
+  verdict?: Verdict | null;
+  long_plan?: Stock["long_plan"] | null;
+  live_row?: ChartRow | null;
+  disclaimer?: string;
+};
 export type Detail = {
   mode: string;
   stock: Stock;
   rows: ChartRow[];
   summary: Summary | null;
+  live_eval?: LiveEvaluation | null;
   timeframe: string;
   session: string;
 };

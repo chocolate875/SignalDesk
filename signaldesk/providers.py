@@ -206,10 +206,11 @@ class LongPortFeed:
     def history(self, symbol: str, timeframe: str, initial: bool = False) -> list[dict]:
         lp, ctx = self.lp, self.quote_context
         period = lp.Period.Day if timeframe == "day" else lp.Period.Min_15
+        # 采用前复权（ForwardAdjust）：最新价与真实市场价保持一致，同时自动消除拆股、合股与除息断崖跳空
         batch = ctx.history_candlesticks_by_offset(
             symbol,
             period,
-            lp.AdjustType.NoAdjust,
+            lp.AdjustType.ForwardAdjust,
             False,
             1000 if initial else 5,
             None,

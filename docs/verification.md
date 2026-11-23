@@ -1,5 +1,22 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 SOXL 等 10 股波浪断档修复、全量前复权升级与「最新行情试算」双口径引擎
+
+- **根因排查（全库 94 只实盘日线诊断）。**
+  - **波浪待确认（10 股 `swings = 0`）**：[forecast.py](../signaldesk/forecast.py) 中 `_contiguous_regular_tail()` 仅用 `breaks == breaks.iloc[-1]` 切片而未叠加 `valid` 掩码，导致历史中存在 1 根无效 `NaN` 断档行（例如 `2023-06-05`）时把该 `NaN` 行本身误包含在了连续尾部第 0 行；`_causal_swings()` 初始化 `hi_val = highs[0] = NaN`，造成后续全部 870 根比较恒为 `False`，使 `SOXL`、`BRK.B`、`APH`、`COPX`、`GLW`、`SOXS`、`SPOT`、`TTE`、`USO`、`WOLF` 共 10 只标的拐点归零、波浪长期显示「待确认」。
+  - **拆股与合股断崖（22 股受不复权扭曲）**：此前拉取 `AdjustType.NoAdjust`（不复权）导致 `SOXX`（`2026-11-05` 3:1 `-70.7%` 与 `2024-03-07` 3:1 `-65.5%`）、`NVDA`（10:1）、`SNDK`（`2026-11-20` 10:1）、`AVGO`、`NFLX`、`MSTR`、`APH`、`TQQQ`、`QLD`、`SQQQ`、`SOXS`、`YANG` 等 22 只标的均线、ATR、回撤与波浪受虚假除权悬崖严重扭曲。
+- **核心改动。**
+  - **波浪断档根治**：[forecast.py](../signaldesk/forecast.py) 修复 `_contiguous_regular_tail()` 为 `reg[valid & (breaks == breaks.iloc[-1])]` 并严格校验 OHLC 有限正数；[wave_trend.py](../signaldesk/wave_trend.py) 在 `_causal_swings()` 增加前置有限数防御过滤。
+  - **全量前复权与除权自动自愈**：[providers.py](../signaldesk/providers.py) 将历史 K 线升级为 `lp.AdjustType.ForwardAdjust`（前复权，最新价与真实市场价一致且平滑消除拆股/合股跳空）；[storage.py](../signaldesk/storage.py) 升级缓存分桶至 `live-fwd-v3` / `macro-live-fwd-v3` 并新增原子重写方法 `replace_bars()`；[service.py](../signaldesk/service.py) 新增 `_detect_split_adjustment()`，增量拉取若检测到重叠交易日收盘价变动 `> 0.5%` 自动触发全量前复权重写并重建指标。
+  - **「最新行情试算」双口径引擎**：[service.py](../signaldesk/service.py) 新增 `live_evaluation_for()` 与 [app.py](../signaldesk/app.py) 新增只读端点 `GET /api/stock/{symbol}/live-eval`（仅对当前选中个股按需计算，优先使用盘中实时 OHLCV、非盘中回退盘前/盘后/夜盘有效价格并标注流动性），100% 复用同一套 `enrich → summarize → compute_wave_trend → compute_fund_metrics → compute_forecast` 引擎产出临时试算结果，绝不写入数据库或触发正式告警；[types.ts](../frontend/src/types.ts)、[App.tsx](../frontend/src/App.tsx)、[StockInspector.tsx](../frontend/src/StockInspector.tsx)、[Chart.tsx](../frontend/src/Chart.tsx)、[style.css](../frontend/src/style.css) 新增右侧顶部「收盘确认 / 最新行情试算」双口径分段切换、实时对比横幅、4 秒节流重算及整页（结论卡 / K 线参考线与当日均线 / 波浪 / 买卖评级）一键联动预览，并将全屏标题更新为「常规时段 · 前复权」。
+- **自动化测试、构建与 1440×810 实盘复验。**
+  - 新增 `tests/test_splits_and_live_eval.py`（4 项测试，覆盖 `NaN` 断档后波浪恢复、3 拆 1 因子漂移检测与 `replace_bars`、盘中实时试算零污染、盘前低流动性回退试算）；全量 `pytest -q` **98 项全部通过**，`ruff check signaldesk tests` 通过，CSS 全部 `250` 条 `font-size` 最小值为 `12.0px`，前端 `tsc -b && vite build` 生产构建通过（产物 `index-DqIVxcQ_.js`）。
+  - 重启本地实盘服务并完成 `1440×810` 浏览器全量复验（`http://127.0.0.1:8765/`）：
+    - `93` 只自选「待更新」为 `0`，控制台 **0 errors**，`.error-fallback = 0`；
+    - **`SOXL`**：波浪恢复为 `下降趋势 · 下降五浪推动 · 下跌第5浪`（置信度高，清晰标出 `起 $169.83 → 1浪 $80.22 → 2浪 $108.60 → 3浪 $40.59 → 4浪 $69.73 → 5浪* $29.82`，反转位 `$69.73`）；
+    - **`SOXX`**：`2026-11-05` 与 `2024-03-07` 两次 3 拆 1 断崖彻底消除，近 1 年（`60–240`）与全部（`0–250`）走势连续平滑，准确识别 `下降趋势 · 下跌第3浪`（`起 $174.63 → 1浪 $130.75 → 2浪 $158.58 → 3浪* $122.20`）；
+    - **`NVDA`**：4 年「全部」视图 10 拆 1 断崖彻底消除（Y 轴 `0–300`）；一键切换「最新行情试算」后，蓝底横幅呈现 `盘中实时试算 · $165.42 (+31.78%) · 日线分 +35.5 · 谨慎减持 → 中性观望`，中栏亮出 `实时试算 · 未收盘` 胶囊，日线评分由 `6.5` 联动试算至 `42.1`、评级升至 `中性观望 51.3分`、波浪实时演进为 `潜在下跌第2浪反抽（2浪* $171.50）`；点击「重算」`GET /api/stock/NVDA.US/live-eval` 返回 HTTP `200`；切回「收盘确认」所有基准数值精确还原零污染。
+
 ## 2026-11-24 最新盘中 K 线选中交互稳定性与图面边缘渲染修复
 
 - **问题复现与根因定位。**

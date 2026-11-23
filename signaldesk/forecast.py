@@ -65,11 +65,25 @@ def _contiguous_regular_tail(frame: pd.DataFrame | None) -> pd.DataFrame:
     reg = frame[frame["session"] == "regular"] if "session" in frame.columns else frame
     if reg.empty:
         return pd.DataFrame()
-    valid = reg["close"].notna() & np.isfinite(reg["close"]) & (reg["close"] > 0)
+    valid = (
+        reg["close"].notna()
+        & np.isfinite(reg["close"])
+        & (reg["close"] > 0)
+        & reg["high"].notna()
+        & np.isfinite(reg["high"])
+        & (reg["high"] > 0)
+        & reg["low"].notna()
+        & np.isfinite(reg["low"])
+        & (reg["low"] > 0)
+        & (reg["high"] >= reg["low"])
+    )
+    if "open" in reg.columns:
+        valid = valid & reg["open"].notna() & np.isfinite(reg["open"]) & (reg["open"] > 0)
     if valid.empty or not bool(valid.iloc[-1]):
         return pd.DataFrame()
     breaks = (~valid).cumsum()
-    return reg[breaks == breaks.iloc[-1]]
+    # 必须同时保留 valid 掩码，避免将导致断档递增的那一行 NaN 误包含在连续尾部首行
+    return reg[valid & (breaks == breaks.iloc[-1])]
 
 
 def _pick_anchor(

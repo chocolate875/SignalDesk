@@ -57,16 +57,30 @@ def _ny_date_str(ts) -> str:
 
 def _causal_swings(tail: pd.DataFrame) -> list[dict]:
     """Strictly causal ATR-adaptive swing detection (no future bar lookahead)."""
-    highs = tail["high"].to_numpy(dtype=float)
-    lows = tail["low"].to_numpy(dtype=float)
-    closes = tail["close"].to_numpy(dtype=float)
-    dates = [_ny_date_str(ts) for ts in tail["timestamp"]]
-    n = len(tail)
+    if tail is None or tail.empty:
+        return []
+    valid_mask = (
+        tail["high"].notna()
+        & tail["low"].notna()
+        & tail["close"].notna()
+        & np.isfinite(tail["high"])
+        & np.isfinite(tail["low"])
+        & np.isfinite(tail["close"])
+        & (tail["high"] > 0)
+        & (tail["low"] > 0)
+        & (tail["close"] > 0)
+    )
+    clean = tail[valid_mask]
+    highs = clean["high"].to_numpy(dtype=float)
+    lows = clean["low"].to_numpy(dtype=float)
+    closes = clean["close"].to_numpy(dtype=float)
+    dates = [_ny_date_str(ts) for ts in clean["timestamp"]]
+    n = len(clean)
     if n < 20:
         return []
 
-    if "atr" in tail.columns:
-        atrs = tail["atr"].to_numpy(dtype=float)
+    if "atr" in clean.columns:
+        atrs = clean["atr"].to_numpy(dtype=float)
     else:
         atrs = np.full(n, np.nan, dtype=float)
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -32,6 +32,8 @@ import {
   ticker,
   type Dashboard,
   type Detail,
+  type EvalMode,
+  type LiveEvaluation,
   type Stock,
 } from "./types";
 
@@ -295,6 +297,10 @@ export default function App() {
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("summary");
   const [syncingWatchlist, setSyncingWatchlist] = useState(false);
   const [macroOpen, setMacroOpen] = useState(false);
+  const [evalMode, setEvalMode] = useState<EvalMode>("confirmed");
+  const [liveEval, setLiveEval] = useState<LiveEvaluation | null>(null);
+  const [liveEvalBusy, setLiveEvalBusy] = useState(false);
+  const lastLiveEvalAtRef = useRef<number>(0);
 
   const notify = (s: string) => setToast(s);
 
@@ -405,15 +411,21 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
+    setLiveEval(null);
     async function load() {
       if (!stock) return;
       try {
         const value = await api<Detail>(`/stock/${selected}`);
         if (!disposed && value && Array.isArray(value.rows)) {
           setDetail(value);
+          setLiveEval(value.live_eval ?? null);
+          lastLiveEvalAtRef.current = Date.now();
         }
       } catch {
-        if (!disposed) setDetail(null);
+        if (!disposed) {
+          setDetail(null);
+          setLiveEval(null);
+        }
       }
     }
     load();
@@ -434,6 +446,31 @@ export default function App() {
     stock?.long_plan?.target,
   ]);
 
+  const refreshLiveEval = useCallback(async () => {
+    if (!stock || data?.mode !== "live") return;
+    setLiveEvalBusy(true);
+    try {
+      const value = await api<LiveEvaluation>(`/stock/${selected}/live-eval`);
+      setLiveEval(value ?? null);
+      lastLiveEvalAtRef.current = Date.now();
+    } catch {
+      // 保留上一次有效试算结果
+    } finally {
+      setLiveEvalBusy(false);
+    }
+  }, [selected, data?.mode, Boolean(stock)]);
+
+  const activeQuoteSig = `${stock?.quote?.last ?? ""}:${stock?.quote?.high ?? ""}:${stock?.quote?.low ?? ""}:${stock?.extended_hours?.price ?? ""}`;
+  useEffect(() => {
+    if (evalMode !== "live" || data?.mode !== "live" || !stock) return;
+    const elapsed = Date.now() - lastLiveEvalAtRef.current;
+    const wait = elapsed >= 4000 ? 300 : 4000 - elapsed;
+    const timer = setTimeout(() => {
+      refreshLiveEval();
+    }, wait);
+    return () => clearTimeout(timer);
+  }, [evalMode, data?.mode, selected, activeQuoteSig, refreshLiveEval]);
+
   const analysis = (data?.analyses ?? []).find(
     (a) =>
       a.symbol === selected &&
@@ -444,7 +481,38 @@ export default function App() {
     stock && detail?.stock?.symbol === selected && detail.mode === data?.mode
       ? detail
       : null;
-  const summary = currentDetail?.summary ?? null;
+  const activeLiveEval =
+    currentDetail && liveEval ? liveEval : currentDetail?.live_eval ?? null;
+  const isLiveEvalActive = Boolean(
+    data?.mode === "live" && evalMode === "live" && activeLiveEval?.available,
+  );
+
+  // 单一真相源派生：开启「最新行情试算」时，整页中栏结论、K线参考线/波浪与右侧卡片无缝联动，零污染后端收盘确认基线
+  const effectiveStock = useMemo<Stock | null>(() => {
+    if (!stock) return null;
+    if (!isLiveEvalActive || !activeLiveEval) return stock;
+    return {
+      ...stock,
+      primary: activeLiveEval.summary ?? stock.primary,
+      forecast: activeLiveEval.forecast ?? stock.forecast,
+      wave_trend: activeLiveEval.wave_trend ?? stock.wave_trend,
+      fund_metrics: activeLiveEval.fund_metrics ?? stock.fund_metrics,
+      verdict: activeLiveEval.verdict ?? stock.verdict,
+      long_plan: activeLiveEval.long_plan ?? stock.long_plan,
+    };
+  }, [stock, isLiveEvalActive, activeLiveEval]);
+
+  const effectiveDetail = useMemo<Detail | null>(() => {
+    if (!currentDetail) return null;
+    if (!isLiveEvalActive || !effectiveStock) return currentDetail;
+    return {
+      ...currentDetail,
+      stock: effectiveStock,
+      summary: activeLiveEval?.summary ?? currentDetail.summary,
+    };
+  }, [currentDetail, isLiveEvalActive, effectiveStock, activeLiveEval]);
+
+  const summary = effectiveDetail?.summary ?? null;
   const curve = data?.curve;
 
   async function refresh() {
@@ -565,7 +633,8 @@ export default function App() {
         ? "quote-up"
         : "quote-down";
 
-  const verdict = stock?.verdict;
+  const verdict = effectiveStock?.verdict ?? stock?.verdict;
+  const activeForecast = effectiveStock?.forecast ?? stock?.forecast;
   const canDeleteSelected = Boolean(
     stock && stock.broker_quantity === 0 && !stock.in_watchlist,
   );
@@ -857,13 +926,21 @@ export default function App() {
                       >
                         {verdict.action}
                       </span>
-                      {stock.forecast?.rating?.available && (
+                      {activeForecast?.rating?.available && (
                         <span
-                          className={`verdict-badge forecast-rating-badge tone-${stock.forecast.rating.tone}`}
-                          title={stock.forecast.rating.summary}
+                          className={`verdict-badge forecast-rating-badge tone-${activeForecast.rating.tone}`}
+                          title={activeForecast.rating.summary}
                         >
-                          {stock.forecast.rating.label}{" "}
-                          {fmt(stock.forecast.rating.score, 0)}分
+                          {activeForecast.rating.label}{" "}
+                          {fmt(activeForecast.rating.score, 0)}分
+                        </span>
+                      )}
+                      {isLiveEvalActive && (
+                        <span
+                          className="verdict-live-tag"
+                          title="当前结论、点位、评级与波浪已按最新未收盘行情临时试算预览"
+                        >
+                          实时试算 · 未收盘
                         </span>
                       )}
                     </div>
@@ -885,36 +962,36 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {stock.forecast?.levels?.available && (
+                  {activeForecast?.levels?.available && (
                     <div className="forecast-strip">
                       <div className="forecast-strip-item">
                         <span>买点</span>
                         <strong className="up">
-                          ${fmt(stock.forecast.levels.buy_low, 2)} – $
-                          {fmt(stock.forecast.levels.buy_high, 2)}
+                          ${fmt(activeForecast.levels.buy_low, 2)} – $
+                          {fmt(activeForecast.levels.buy_high, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
                         <span>卖点</span>
                         <strong className="accent-val">
-                          ${fmt(stock.forecast.levels.sell_low, 2)} – $
-                          {fmt(stock.forecast.levels.sell_high, 2)}
+                          ${fmt(activeForecast.levels.sell_low, 2)} – $
+                          {fmt(activeForecast.levels.sell_high, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
                         <span>止损</span>
                         <strong className="down">
-                          ${fmt(stock.forecast.levels.stop_loss, 2)}
+                          ${fmt(activeForecast.levels.stop_loss, 2)}
                         </strong>
                       </div>
                       <div className="forecast-strip-item">
                         <span>盈亏比</span>
                         <strong>
-                          {fmt(stock.forecast.levels.risk_reward_ratio, 2)}:1
+                          {fmt(activeForecast.levels.risk_reward_ratio, 2)}:1
                         </strong>
                       </div>
-                      {stock.forecast.levels.stop_loss != null &&
-                        stock.forecast.levels.sell_low != null && (
+                      {activeForecast.levels.stop_loss != null &&
+                        activeForecast.levels.sell_low != null && (
                           <button
                             type="button"
                             className="text-btn forecast-strip-apply"
@@ -922,8 +999,8 @@ export default function App() {
                             onClick={() =>
                               setEditor({
                                 stock,
-                                presetStop: stock.forecast!.levels.stop_loss,
-                                presetTarget: stock.forecast!.levels.sell_low,
+                                presetStop: activeForecast.levels.stop_loss,
+                                presetTarget: activeForecast.levels.sell_low,
                               })
                             }
                           >
@@ -1028,9 +1105,11 @@ export default function App() {
                   resetKey={`${selected}:${data?.mode ?? ""}`}
                 >
                   <Chart
-                    detail={currentDetail}
+                    detail={effectiveDetail}
                     liveQuote={stock?.quote}
                     marketSession={data?.market?.session}
+                    evalMode={isLiveEvalActive ? "live" : "confirmed"}
+                    liveEvalRow={isLiveEvalActive ? (activeLiveEval?.live_row ?? null) : null}
                     theme={theme}
                     reverse={reverse}
                   />
@@ -1076,8 +1155,18 @@ export default function App() {
           <StockInspector
             tab={inspectorTab}
             onTabChange={setInspectorTab}
-            stock={stock}
+            stock={effectiveStock}
             summary={summary}
+            evalMode={evalMode}
+            liveEval={activeLiveEval}
+            liveEvalBusy={liveEvalBusy}
+            onEvalModeChange={(nextMode) => {
+              setEvalMode(nextMode);
+              if (nextMode === "live") {
+                refreshLiveEval();
+              }
+            }}
+            onRefreshLiveEval={refreshLiveEval}
             analysis={analysis}
             events={data?.events ?? []}
             channels={data?.channels}

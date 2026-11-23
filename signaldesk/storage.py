@@ -53,9 +53,17 @@ class Store:
                 (key, encoded),
             )
 
+    @staticmethod
+    def _bar_source(source: str) -> str:
+        """隔离不同历史数据口径版本：v3 起全面采用前复权（ForwardAdjust）以消除拆股/合股跳空。"""
+        if source == "live":
+            return "live-fwd-v3"
+        if source == "macro-live":
+            return "macro-live-fwd-v3"
+        return source
+
     def put_bars(self, source: str, symbol: str, timeframe: str, bars: list[dict]):
-        # Legacy live rows used host-local SDK wall times as UTC. Refill from the broker.
-        source = "live-utc-v2" if source == "live" else source
+        source = self._bar_source(source)
         with self.lock, self.db:
             cursor = self.db.executemany(
                 """INSERT INTO bars VALUES(?,?,?,?,?) ON CONFLICT(source,symbol,timeframe,timestamp)
@@ -66,8 +74,24 @@ class Store:
             )
             return cursor.rowcount
 
+    def replace_bars(self, source: str, symbol: str, timeframe: str, bars: list[dict]) -> int:
+        """检测到拆股/合股/除权因子变化时，原子清空并重写该标的整段前复权历史 K 线。"""
+        source = self._bar_source(source)
+        with self.lock, self.db:
+            self.db.execute(
+                "DELETE FROM bars WHERE source=? AND symbol=? AND timeframe=?",
+                (source, symbol, timeframe),
+            )
+            if not bars:
+                return 0
+            cursor = self.db.executemany(
+                "INSERT OR REPLACE INTO bars VALUES(?,?,?,?,?)",
+                [(source, symbol, timeframe, b["timestamp"], json.dumps(b, allow_nan=False)) for b in bars],
+            )
+            return cursor.rowcount
+
     def bars(self, source: str, symbol: str, timeframe: str, count: int = 6000) -> list[dict]:
-        source = "live-utc-v2" if source == "live" else source
+        source = self._bar_source(source)
         with self.lock:
             rows = self.db.execute(
                 "SELECT payload FROM bars WHERE source=? AND symbol=? AND timeframe=? ORDER BY timestamp DESC LIMIT ?",

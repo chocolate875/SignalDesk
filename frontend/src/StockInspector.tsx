@@ -10,6 +10,7 @@ import {
   Gauge,
   LoaderCircle,
   LockKeyhole,
+  RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -24,6 +25,8 @@ import {
   time,
   type Analysis,
   type Dashboard,
+  type EvalMode,
+  type LiveEvaluation,
   type Signal,
   type Stock,
   type Summary,
@@ -476,6 +479,11 @@ export default function StockInspector({
   onTabChange,
   stock,
   summary,
+  evalMode = "confirmed",
+  liveEval = null,
+  liveEvalBusy = false,
+  onEvalModeChange,
+  onRefreshLiveEval,
   analysis,
   events,
   channels,
@@ -494,6 +502,11 @@ export default function StockInspector({
   onTabChange: (t: InspectorTab) => void;
   stock: Stock | null;
   summary: Summary | null;
+  evalMode?: EvalMode;
+  liveEval?: LiveEvaluation | null;
+  liveEvalBusy?: boolean;
+  onEvalModeChange?: (mode: EvalMode) => void;
+  onRefreshLiveEval?: () => void;
   analysis: Analysis | undefined;
   events: Signal[];
   channels: Dashboard["channels"] | undefined;
@@ -523,6 +536,10 @@ export default function StockInspector({
   const codexStatus = channels?.codex;
   const codexBusy =
     analysis?.status === "running" || analysis?.status === "queued";
+  const hasLiveEval = Boolean(liveEval?.available);
+  const isLiveEvalView = evalMode === "live" && hasLiveEval;
+  const liveScoreDelta = liveEval?.score_delta;
+  const liveRatingLabel = liveEval?.forecast?.rating?.label ?? "";
 
   return (
     <aside className="inspector-panel" aria-label="个股研判与工具">
@@ -564,6 +581,100 @@ export default function StockInspector({
       <div className="inspector-body">
         {tab === "summary" && stock && (
           <>
+            {mode === "live" && onEvalModeChange && (
+              <section
+                className="insp-card eval-mode-card"
+                aria-label="评估口径切换"
+              >
+                <div className="eval-mode-top">
+                  <div className="eval-mode-seg" role="group" aria-label="指标评估口径">
+                    <button
+                      type="button"
+                      className={!isLiveEvalView ? "active" : ""}
+                      onClick={() => onEvalModeChange("confirmed")}
+                      title="以最近已确认的纽约收盘前复权日线计算（长期复核与告警基准）"
+                    >
+                      收盘确认
+                    </button>
+                    <button
+                      type="button"
+                      className={isLiveEvalView ? "live-active" : ""}
+                      disabled={!hasLiveEval}
+                      onClick={() => onEvalModeChange("live")}
+                      title={
+                        hasLiveEval
+                          ? "把当前最新未收盘行情临时纳入同一套规则引擎，实时试算指标、评级、买卖点与波浪"
+                          : liveEval?.reason || "当前暂无更新的未收盘行情可试算"
+                      }
+                    >
+                      {hasLiveEval && <span className="eval-live-dot" />}
+                      最新行情试算
+                    </button>
+                  </div>
+                  {isLiveEvalView && onRefreshLiveEval && (
+                    <button
+                      type="button"
+                      className="eval-refresh-btn"
+                      disabled={liveEvalBusy}
+                      onClick={onRefreshLiveEval}
+                      title="按当前最新报价立即重新试算"
+                    >
+                      <RefreshCw
+                        size={12}
+                        className={liveEvalBusy ? "spin" : ""}
+                      />
+                      重算
+                    </button>
+                  )}
+                </div>
+
+                {isLiveEvalView && liveEval ? (
+                  <div className="eval-mode-banner">
+                    <div className="eval-mode-banner-head">
+                      <span>
+                        {liveEval.basis_label || "盘中实时试算"} · $
+                        {fmt(liveEval.price, 2)}
+                        {liveEval.change_pct != null
+                          ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 2)}%)`
+                          : ""}
+                      </span>
+                      {liveScoreDelta != null && (
+                        <span className="eval-mode-delta">
+                          日线分 {liveScoreDelta >= 0 ? "+" : ""}
+                          {fmt(liveScoreDelta, 1)}
+                        </span>
+                      )}
+                      {liveEval.rating_changed &&
+                        liveEval.prev_rating_label &&
+                        liveRatingLabel && (
+                          <span className="eval-mode-delta">
+                            {liveEval.prev_rating_label} → {liveRatingLabel}
+                          </span>
+                        )}
+                    </div>
+                    <span className="eval-mode-note">
+                      未收盘临时预览，仅作盘中决策参考；正式复核与告警仍按收盘确认日线执行。
+                    </span>
+                  </div>
+                ) : hasLiveEval && liveEval ? (
+                  <div className="eval-mode-hint">
+                    <span>
+                      {liveEval.basis_label || "实时试算"}（$
+                      {fmt(liveEval.price, 2)}）：
+                      {liveScoreDelta != null
+                        ? `日线分 ${liveScoreDelta >= 0 ? "+" : ""}${fmt(liveScoreDelta, 1)}`
+                        : "已就绪"}
+                      {liveEval.rating_changed &&
+                      liveEval.prev_rating_label &&
+                      liveRatingLabel
+                        ? ` · 评级 ${liveEval.prev_rating_label} → ${liveRatingLabel}`
+                        : ""}
+                    </span>
+                  </div>
+                ) : null}
+              </section>
+            )}
+
             {stock.extended_hours?.is_live_session && (
               <ExtendedHoursCard stock={stock} />
             )}
@@ -585,9 +696,11 @@ export default function StockInspector({
               <div className="insp-card-head">
                 <h3>日线结构评分</h3>
                 <span className="muted-tag">
-                  {activeSummary?.as_of
-                    ? time(activeSummary.as_of, "America/New_York").slice(0, 10)
-                    : "待更新"}
+                  {isLiveEvalView
+                    ? "实时试算 · 未收盘"
+                    : activeSummary?.as_of
+                      ? time(activeSummary.as_of, "America/New_York").slice(0, 10)
+                      : "待更新"}
                 </span>
               </div>
               <div className="insp-score-row">
