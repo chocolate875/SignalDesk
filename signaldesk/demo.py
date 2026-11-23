@@ -11,6 +11,15 @@ from .calendar import NY, bar_end, calendar
 from .models import Allocation
 from .research import curve_summary
 
+DEMO_BENCHMARKS: dict[str, tuple[float, float]] = {
+    "SPY.US": (595.0, 0.00045),
+    "QQQ.US": (515.0, 0.00060),
+    "RSP.US": (182.0, 0.00038),
+    "IWM.US": (228.0, 0.00032),
+    "HYG.US": (79.5, 0.00018),
+    "IEF.US": (94.2, 0.00004),
+}
+
 DEMO_NAMES = [
     ("NVDA.US", "英伟达", 142.8, 12, 8, 0.0012),
     ("AAPL.US", "苹果", 232.4, 24, 0, 0.0007),
@@ -98,10 +107,53 @@ def yield_curve(last_close: datetime) -> dict:
     end = pd.Timestamp(last_close.astimezone(NY).date())
     days = calendar().sessions_in_range(end - pd.Timedelta(days=45), end)[-22:]
     observations = {
-        day.date().isoformat(): (3.7, 4.1 - (len(days) - 1 - i) * 0.01)
+        day.date().isoformat(): (3.7, 4.1 - (len(days) - 1 - i) * 0.01, 3.85)
         for i, day in enumerate(days)
     }
     return curve_summary(observations)
+
+
+def make_benchmark_bars(symbol: str, now: datetime) -> list[dict]:
+    """为全市场基准 ETF（SPY/QQQ/RSP/IWM/HYG/IEF）生成确定性常规日线，独立于演示自选股。"""
+    base, drift = DEMO_BENCHMARKS.get(symbol, (100.0, 0.0003))
+    seed = 7100 + sum((idx + 1) * ord(ch) for idx, ch in enumerate(symbol))
+    rng = np.random.default_rng(seed)
+    cal = calendar()
+    end_day = pd.Timestamp(now.astimezone(NY).date())
+    days = cal.sessions_in_range(end_day - pd.Timedelta(days=620), end_day)
+    clocks = []
+    for day in days[-340:]:
+        ts = cal.session_open(day).to_pydatetime()
+        if bar_end(ts, "day") <= now:
+            clocks.append((ts, "regular"))
+    count = len(clocks)
+    if count == 0:
+        return []
+    noise = rng.normal(0, 0.0055, count)
+    slopes = drift + noise
+    slopes[-65:] = drift * 1.4 + noise[-65:] * 0.4
+    closes = np.exp(np.cumsum(slopes))
+    closes *= base / closes[-1]
+    result = []
+    for i, (ts, session) in enumerate(clocks):
+        closing = float(closes[i])
+        opening = float(closes[i - 1] if i else closes[i] * 0.999)
+        width = closing * rng.uniform(0.001, 0.0035)
+        volume = int(rng.integers(5_000_000, 40_000_000))
+        result.append(
+            {
+                "timestamp": ts.astimezone(pd.Timestamp.now(tz="UTC").tz).isoformat(),
+                "session": session,
+                "open": opening,
+                "close": closing,
+                "high": max(opening, closing) + width,
+                "low": min(opening, closing) - width,
+                "volume": volume,
+                "turnover": float(volume * closing),
+                "confirmed": True,
+            }
+        )
+    return result
 
 
 def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:

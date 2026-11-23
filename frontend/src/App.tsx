@@ -21,6 +21,7 @@ import {
 import Chart from "./Chart";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MacroStripWithGuide } from "./GuidePopover";
+import { MacroRegimeModal, MacroRegimeTrigger } from "./MacroRegimePanel";
 import SettingsPanel from "./Settings";
 import StockInspector, { type InspectorTab } from "./StockInspector";
 import WatchlistRail from "./WatchlistRail";
@@ -293,6 +294,7 @@ export default function App() {
   const [deliveries, setDeliveries] = useState<any[] | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("summary");
   const [syncingWatchlist, setSyncingWatchlist] = useState(false);
+  const [macroOpen, setMacroOpen] = useState(false);
 
   const notify = (s: string) => setToast(s);
 
@@ -604,7 +606,17 @@ export default function App() {
           </div>
         </div>
 
-        <MacroStripWithGuide curve={curve} />
+        <div className="topbar-macro-group">
+          <MacroRegimeTrigger
+            macro={data?.macro}
+            open={macroOpen}
+            onOpen={() => setMacroOpen(true)}
+          />
+          <MacroStripWithGuide
+            curve={curve}
+            onOpenMacroPanel={() => setMacroOpen(true)}
+          />
+        </div>
 
         <div className="topbar-right">
           <span
@@ -1124,6 +1136,13 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+
+      {macroOpen && (
+        <MacroRegimeModal
+          macro={data?.macro}
+          onClose={() => setMacroOpen(false)}
+        />
       )}
 
       {toast && (

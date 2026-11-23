@@ -14,6 +14,12 @@ from .events import EventEngine
 from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
 from .instruments import classify_instrument, compute_fund_metrics
+from .macro import (
+    MACRO_BENCHMARK_SYMBOLS,
+    compute_macro_regime,
+    demo_fred_bundle,
+    fetch_fred_bundle,
+)
 from .models import Allocation, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed
@@ -58,6 +64,11 @@ class Monitor:
         self.valuations = store.get("valuations:live", {})
         self.curve = store.get("treasury:live", {})
         self.demo_curve = {}
+        self.fred = store.get("macro-fred:live", {})
+        self.demo_fred = {}
+        self.macro_frames = {}
+        self.macro_benchmark_retry_at = {}
+        self.macro_cache = None
         self.watchlist_groups = store.get("watchlist-groups:live", [])
         self.watchlist_unsupported = []
         self.watchlist_sync_error = ""
@@ -124,6 +135,19 @@ class Monitor:
         self.codex.settings = value.codex
         self.last_probe = 0
 
+    def _load_cached_macro_benchmarks(self, mode: str = "live"):
+        """从独立 SQLite 分区加载宏观基准 ETF 日线，不触碰用户自选列表。"""
+        now = utcnow()
+        source = f"macro-{mode}"
+        for sym in MACRO_BENCHMARK_SYMBOLS:
+            bars = self.store.bars(source, sym, "day")
+            if not bars:
+                continue
+            frame = enrich(bars, "day", now, self.settings.rules)
+            with self.frame_lock:
+                self.macro_frames[(mode, sym)] = frame
+        self.macro_cache = None
+
     async def start(self, background: bool = True):
         self.loop = asyncio.get_running_loop()
         if self.settings.mode == "demo":
@@ -132,6 +156,7 @@ class Monitor:
             self.status, self.detail = "unconfigured", "请在本机设置LongPort凭据；不会加载演示持仓到实盘"
             for item in self.portfolio():
                 await asyncio.to_thread(self.rebuild, item.symbol, True)
+            await asyncio.to_thread(self._load_cached_macro_benchmarks, "live")
         if background:
             self.tasks = [
                 asyncio.create_task(self.run()),
@@ -144,6 +169,13 @@ class Monitor:
         now = utcnow()
         end = latest_expected_end(now, "day", "regular")
         self.demo_curve = demo.yield_curve(end)
+        self.demo_fred = demo_fred_bundle(now)
+        for sym in MACRO_BENCHMARK_SYMBOLS:
+            bm_bars = demo.make_benchmark_bars(sym, now)
+            frame = enrich(bm_bars, "day", now, self.settings.rules)
+            with self.frame_lock:
+                self.macro_frames[("demo", sym)] = frame
+        self.macro_cache = None
         for item in self.portfolio("demo"):
             if item.symbol not in {d[0] for d in demo.DEMO_NAMES}:
                 continue
@@ -205,6 +237,8 @@ class Monitor:
             self.wave_trends[(mode, symbol)] = (frame_sig, wave_trend)
             self.fund_metrics[(mode, symbol)] = (frame_sig, fund_metrics)
             self.forecast_cache.pop((mode, symbol), None)
+            if symbol in MACRO_BENCHMARK_SYMBOLS:
+                self.macro_cache = None
         allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
         if (
             not allocation
@@ -224,7 +258,47 @@ class Monitor:
         )
         return [event] if event else []
 
-    def stock(self, allocation: Allocation) -> dict:
+    def macro_regime(self) -> dict:
+        """合成当前模式下的六分项宏观水位与市场大势四象限（带分钟级签名缓存）。"""
+        mode = self.settings.mode
+        now = utcnow()
+        fred = self.demo_fred if mode == "demo" else self.fred
+        curve = self.demo_curve if mode == "demo" else self.curve
+        bm_frames = {}
+        bm_sigs = []
+        with self.frame_lock:
+            for sym in MACRO_BENCHMARK_SYMBOLS:
+                frame = self.frames.get((mode, sym, "day"))
+                if frame is None or frame.empty:
+                    frame = self.macro_frames.get((mode, sym))
+                if frame is not None and not frame.empty:
+                    bm_frames[sym] = frame
+                    bm_sigs.append((sym, id(frame), len(frame)))
+                else:
+                    bm_sigs.append((sym, 0, 0))
+            cached = self.macro_cache
+
+        ny_minute = now.astimezone(NY).strftime("%Y-%m-%d %H:%M")
+        sig = (
+            mode,
+            ny_minute,
+            (fred or {}).get("fetched_at"),
+            (fred or {}).get("ok_count"),
+            (fred or {}).get("refresh_failed"),
+            (curve or {}).get("as_of"),
+            (curve or {}).get("three_month"),
+            (curve or {}).get("ten_year"),
+            (curve or {}).get("refresh_failed"),
+            tuple(bm_sigs),
+        )
+        if cached is not None and cached[0] == sig:
+            return cached[1]
+        result = compute_macro_regime(fred, curve, bm_frames, now, demo=mode == "demo")
+        with self.frame_lock:
+            self.macro_cache = (sig, result)
+        return result
+
+    def stock(self, allocation: Allocation, macro: dict | None = None) -> dict:
         mode = self.settings.mode
         quote = dict(self.quotes.get((mode, allocation.symbol), {}))
         with self.frame_lock:
@@ -320,7 +394,16 @@ class Monitor:
                     "dividend_yield_pct": index / 3,
                     "fetched_at": summary["as_of"],
                 }
-        research = research_context(valuation, curve, now, mode == "demo")
+        macro_data = macro if macro is not None else self.macro_regime()
+        real_rate = macro_data.get("real_rate") or {}
+        research = research_context(
+            valuation,
+            curve,
+            now,
+            mode == "demo",
+            real_ten_year=real_rate.get("ten_year_real"),
+            real_rate_fresh=real_rate.get("fresh"),
+        )
         close = summary.get("close")
         if not allocation.reconciled:
             review = "核对持仓分类"
@@ -770,11 +853,14 @@ class Monitor:
             "dimension_notes": dimension_notes,
         }
 
-    def stocks(self) -> list[dict]:
-        return [self.stock(a) for a in self.portfolio()]
+    def stocks(self, macro: dict | None = None) -> list[dict]:
+        macro_data = macro if macro is not None else self.macro_regime()
+        return [self.stock(a, macro=macro_data) for a in self.portfolio()]
 
     async def snapshot(self) -> dict:
-        stocks = self.stocks()
+        macro = self.macro_regime()
+        real_rate = macro.get("real_rate") or {}
+        stocks = self.stocks(macro=macro)
         scores = [s["primary"]["score"] for s in stocks if s["primary"].get("valid")]
         # Split a dual-sleeve position proportionally, never count it twice.
         weights = {
@@ -792,7 +878,10 @@ class Monitor:
                 self.demo_curve if self.settings.mode == "demo" else self.curve,
                 utcnow(),
                 self.settings.mode == "demo",
+                real_ten_year=real_rate.get("ten_year_real"),
+                real_rate_fresh=real_rate.get("fresh"),
             )["curve"],
+            "macro": macro,
             "mode": self.settings.mode,
             "status": self.status,
             "detail": self.detail,
@@ -941,20 +1030,78 @@ class Monitor:
         self.status, self.detail = "live", "LongPort只读连接已建立；各股票数据有效性独立检查"
         self.failures = 0
         self.last_probe = 0
+        await self._sync_macro_benchmarks()
+
+    async def _sync_macro_benchmarks(self):
+        """只读拉取全市场基准 ETF（SPY/QQQ/RSP/IWM/HYG/IEF）日线到独立缓存分区，不污染用户自选列表。"""
+        if self.settings.mode != "live" or self.feed is None:
+            return
+        now_mono = time.monotonic()
+        now = utcnow()
+        updated = False
+        for sym in MACRO_BENCHMARK_SYMBOLS:
+            with self.frame_lock:
+                user_frame = self.frames.get(("live", sym, "day"))
+                macro_frame = self.macro_frames.get(("live", sym))
+            if user_frame is not None and len(user_frame) >= 220:
+                continue
+            if now_mono < self.macro_benchmark_retry_at.get(sym, 0.0):
+                continue
+            initial = macro_frame is None or len(macro_frame) < 220
+            try:
+                bars = await asyncio.to_thread(self.feed.history, sym, "day", initial)
+                confirmed = [b for b in bars if b.get("confirmed")]
+                if confirmed:
+                    self.store.put_bars("macro-live", sym, "day", confirmed)
+                    all_bars = self.store.bars("macro-live", sym, "day")
+                    frame = await asyncio.to_thread(enrich, all_bars, "day", now, self.settings.rules)
+                    with self.frame_lock:
+                        self.macro_frames[("live", sym)] = frame
+                    updated = True
+                self.macro_benchmark_retry_at[sym] = time.monotonic() + 3600
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.macro_benchmark_retry_at[sym] = time.monotonic() + 1800
+                continue
+        if updated:
+            with self.frame_lock:
+                self.macro_cache = None
 
     async def refresh_macro(self):
-        retry = 0.0
+        curve_retry = 0.0
+        fred_retry = 0.0
         while True:
-            if self.settings.mode == "live" and time.monotonic() >= retry:
-                try:
-                    curve = await fetch_curve(utcnow())
-                except Exception:
-                    self.curve = {**self.curve, "refresh_failed": True}
-                    retry = time.monotonic() + 900
-                else:
-                    self.curve = curve
-                    self.store.set("treasury:live", curve)
-                    retry = time.monotonic() + 21600
+            if self.settings.mode == "live":
+                now_mono = time.monotonic()
+                if now_mono >= curve_retry:
+                    try:
+                        curve = await fetch_curve(utcnow())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self.curve = {**self.curve, "refresh_failed": True}
+                        curve_retry = time.monotonic() + 900
+                    else:
+                        self.curve = curve
+                        self.store.set("treasury:live", curve)
+                        with self.frame_lock:
+                            self.macro_cache = None
+                        curve_retry = time.monotonic() + 21600
+                if time.monotonic() >= fred_retry:
+                    try:
+                        fred = await fetch_fred_bundle(utcnow(), self.fred)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self.fred = {**self.fred, "refresh_failed": True}
+                        fred_retry = time.monotonic() + 900
+                    else:
+                        self.fred = fred
+                        self.store.set("macro-fred:live", fred)
+                        with self.frame_lock:
+                            self.macro_cache = None
+                        fred_retry = time.monotonic() + (900 if fred.get("refresh_failed") else 21600)
             await asyncio.sleep(15)
 
     async def _sync_account(self):
@@ -1160,6 +1307,7 @@ class Monitor:
                 raise
             except Exception:
                 continue
+        await self._sync_macro_benchmarks()
         if self.settings.mode != "live":
             return
         self.status, self.detail = "live", "数据同步正常；历史补齐不会作为新机会推送"

@@ -123,7 +123,14 @@ class CodexBridge:
             "queue_size": self.queue.qsize(),
         }
 
-    async def request(self, stock: dict, source: str, automatic: bool = False, event_id: str | None = None):
+    async def request(
+        self,
+        stock: dict,
+        source: str,
+        automatic: bool = False,
+        event_id: str | None = None,
+        macro: dict | None = None,
+    ):
         if not self.settings.enabled:
             raise ValueError("Codex分析未启用")
         if not self.executable:
@@ -150,7 +157,7 @@ class CodexBridge:
             "automatic": automatic,
             "result": None,
             "error": None,
-            "snapshot": safe_snapshot(stock, source),
+            "snapshot": safe_snapshot(stock, source, macro),
         }
         if automatic:
             self.store.set(f"codex-budget:{today}", used + 1)
@@ -198,8 +205,9 @@ class CodexBridge:
             "复核美股长期多头计划，只使用下方脱敏JSON。不要调用工具、读取其他文件、联网或执行交易。"
             "用中文先给出继续持有、观察、等待、复核止损或分批止盈等一项意见，再给支持和反对证据。"
             "先检查 instrument.asset_type 与 instrument.is_fund："
-            "若是上市公司个股，以市盈率、市净率、盈利收益率和利率环境讨论估值（盈利收益率与国债收益率之差不能充当预期回报或风险溢价），缺少盈利增长/现金流依据时说明局限；"
+            "若是上市公司个股，以市盈率、市净率、盈利收益率和利率环境讨论估值（同时参考名义股债利差 yield_gap_pp 与扣除通胀后的实际利率利差 real_yield_gap_pp；两者均不能单独充当预期回报），缺少盈利增长/现金流依据时说明局限；"
             "若是宽基/行业/商品/杠杆 ETF 或基金，严禁将其当作单一公司讨论财报、净利润或基金主体 PE/PB，应基于追踪基准、近1年高点回撤与价格分位、年化波动率、趋势通道与美债利率环境复核，若为杠杆或反向 ETF 须明确指出每日再平衡波动损耗与仅适合波段/对冲的风险。"
+            "若快照包含 macro_regime，仅将其作为整体市场风险环境底色参考（流动性象限与红灯压力），不可单凭宏观大势替代个股计划或给出指数择时。"
             "区分用户的计划价、已确认日线、券商估值的取数时间、美债观察日期与模型意见。"
             "给出改变意见的具体条件和复核时点。技术分不能单独触发买卖。"
             "fresh=false、输入缺失、持仓未核对时说明暂不能判断。未分配长期持仓或仅观察时不给持仓退出意见。"

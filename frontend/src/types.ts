@@ -123,11 +123,15 @@ export type Stock = {
       refresh_failed?: boolean;
     };
     curve: {
+      three_month?: number | null;
       two_year?: number;
       ten_year?: number;
       spread_bp?: number;
+      spread_10y_3m_bp?: number | null;
+      recession_prob_12m_pct?: number | null;
       ten_change_bp?: number | null;
       prior_date?: string;
+      real_ten_year?: number | null;
       as_of?: string;
       source: string;
       fresh: boolean;
@@ -135,6 +139,8 @@ export type Stock = {
     };
     earnings_yield_pct: number | null;
     yield_gap_pp: number | null;
+    real_ten_year?: number | null;
+    real_yield_gap_pp?: number | null;
   };
   long_plan: {
     status: string;
@@ -288,8 +294,64 @@ export type Analysis = {
     data_as_of: string;
   } | null;
 };
+export type MacroPillar = {
+  key: string;
+  index: number;
+  label: string;
+  light: "green" | "yellow" | "red" | "unavailable" | string;
+  light_label: string;
+  primary_metric: string;
+  percentile_10y: number | null;
+  direction_13w: string | null;
+  change_13w_text: string;
+  as_of: string | null;
+  released_at: string | null;
+  source: string;
+  fresh: boolean;
+  caveat: string;
+  summary: string;
+  details: { label: string; value: string }[];
+};
+export type MacroRegime = {
+  available: boolean;
+  rule_version: string;
+  source: string;
+  fetched_at: string | null;
+  refresh_failed: boolean;
+  partial_errors: Record<string, string>;
+  as_of: string | null;
+  quadrant: {
+    code: "tailwind" | "divergence" | "repair" | "headwind" | "unavailable" | string;
+    label: string;
+    tone: "positive" | "warning" | "danger" | "neutral" | "muted" | string;
+    liquidity_axis: string;
+    liquidity_label: string;
+    trend_axis: string;
+    trend_label: string;
+    description: string;
+  };
+  risk_gauge: {
+    red_count: number;
+    yellow_count: number;
+    green_count: number;
+    available_count: number;
+    total_count: number;
+    label: string;
+    tone: "positive" | "warning" | "danger" | "neutral" | "muted" | string;
+  };
+  alerts: string[];
+  real_rate: {
+    ten_year_real: number | null;
+    as_of: string | null;
+    fresh: boolean;
+    change_21d_bp: number | null;
+  };
+  pillars: MacroPillar[];
+  disclaimer: string;
+};
 export type Dashboard = {
   curve: Stock["research"]["curve"];
+  macro?: MacroRegime;
   rules?: Record<string, number>;
   mode: string;
   status: string;

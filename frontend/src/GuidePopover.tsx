@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { HelpCircle, X } from "lucide-react";
+import { Compass, HelpCircle, X } from "lucide-react";
 import { fmt, type Dashboard } from "./types";
 
 type Curve = Dashboard["curve"] | undefined;
 
 /** 顶部美债收益率看板的可点击二级解读卡片 */
-export function MacroStripWithGuide({ curve }: { curve: Curve }) {
+export function MacroStripWithGuide({
+  curve,
+  onOpenMacroPanel,
+}: {
+  curve: Curve;
+  onOpenMacroPanel?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -41,15 +47,27 @@ export function MacroStripWithGuide({ curve }: { curve: Curve }) {
   }, [open]);
 
   const spread = curve?.spread_bp;
+  const spread103m = curve?.spread_10y_3m_bp;
+  const recProb = curve?.recession_prob_12m_pct;
+  const real10y = curve?.real_ten_year;
   const chg21 = curve?.ten_change_bp;
   const liveSummary = (() => {
     const parts: string[] = [];
-    if (spread != null) {
+    if (spread103m != null) {
+      parts.push(
+        spread103m < 0
+          ? `10Y-3M 为 ${fmt(spread103m, 0)}bp（倒挂${recProb != null ? `，NY Fed 12M 衰退概率 ${fmt(recProb, 1)}%` : ""}）`
+          : `10Y-3M 为 +${fmt(spread103m, 0)}bp（未倒挂${recProb != null ? `，NY Fed 12M 衰退概率 ${fmt(recProb, 1)}%` : ""}）`,
+      );
+    } else if (spread != null) {
       parts.push(
         spread < 0
           ? `10Y-2Y 为 ${fmt(spread, 0)}bp（曲线倒挂，短端资金偏紧，需留意宏观放缓风险）`
           : `10Y-2Y 为 +${fmt(spread, 0)}bp（利率曲线为正，未倒挂）`,
       );
+    }
+    if (real10y != null) {
+      parts.push(`10Y 实际利率（TIPS）为 ${fmt(real10y, 2)}%`);
     }
     if (chg21 != null) {
       if (chg21 <= -10) {
@@ -182,7 +200,46 @@ export function MacroStripWithGuide({ curve }: { curve: Curve }) {
                 近约 1 个月长端利率的变化幅度。<strong>负数</strong>表示利率回落、美股估值压力减轻；<strong>大正数</strong>表示利率急升、容易压制高 PE 标的。
               </p>
             </div>
+            <div className="guide-item">
+              <div className="guide-item-head">
+                <b>10Y-3M 与 NY Fed 衰退概率</b>
+                <em>
+                  {spread103m != null
+                    ? `${spread103m >= 0 ? "+" : ""}${fmt(spread103m, 0)}bp · ${recProb != null ? `${fmt(recProb, 1)}%` : "—"}`
+                    : "待更新"}
+                </em>
+              </div>
+              <p>
+                相比 10Y-2Y，纽约联储官方模型以 <code>10Y − 3M</code>（当前 3M{" "}
+                {fmt(curve?.three_month, 2)}%）估算未来 12 个月衰退概率；注意历史上<strong>倒挂解除≠风险解除</strong>。
+              </p>
+            </div>
+            <div className="guide-item">
+              <div className="guide-item-head">
+                <b>10Y 实际利率（TIPS DFII10）</b>
+                <em>{real10y != null ? `${fmt(real10y, 2)}%` : "待同步"}</em>
+              </div>
+              <p>
+                扣除通胀预期后的真实资金成本。右侧个股卡片同时对照名义与实际利率利差，避免单纯 Fed Model 的通胀错配。
+              </p>
+            </div>
           </div>
+
+          {onOpenMacroPanel && (
+            <div className="guide-pop-foot">
+              <button
+                type="button"
+                className="wt-detail-link"
+                onClick={() => {
+                  setOpen(false);
+                  onOpenMacroPanel();
+                }}
+              >
+                <Compass size={14} />
+                <span>打开「市场大势与宏观流动性全景面板」（六分项与四象限）</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -119,6 +119,10 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
     async def dashboard():
         return _sanitize_json(await monitor.snapshot())
 
+    @app.get("/api/macro")
+    async def macro_regime():
+        return _sanitize_json(monitor.macro_regime())
+
     @app.get("/api/stock/{symbol}")
     async def stock(symbol: str, timeframe: str = "day", session: str = "regular"):
         if timeframe not in {"15m", "day"} or session not in {"regular", "pre", "post", "overnight"}:
@@ -271,7 +275,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         item = next((s for s in monitor.stocks() if s["symbol"] == normalized), None)
         if not item:
             raise HTTPException(404, "未找到股票")
-        return safe_snapshot(item, monitor.settings.mode)
+        return safe_snapshot(item, monitor.settings.mode, monitor.macro_regime())
 
     @app.post("/api/analysis/{symbol}")
     async def analyze(symbol: str):
@@ -279,7 +283,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         item = next((s for s in monitor.stocks() if s["symbol"] == normalized), None)
         if not item:
             raise HTTPException(404, "未找到股票")
-        job_id = await monitor.codex.request(item, monitor.settings.mode)
+        job_id = await monitor.codex.request(item, monitor.settings.mode, macro=monitor.macro_regime())
         return {"job_id": job_id, "status": "queued"}
 
     @app.websocket("/api/stream")

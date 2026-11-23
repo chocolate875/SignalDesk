@@ -122,7 +122,7 @@ def safe_child_environment() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key.upper() in allowed}
 
 
-def safe_snapshot(stock: dict, mode: str) -> dict:
+def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
     """Explicit allowlist instead of trying to redact an unbounded account object."""
     summaries = stock.get("summaries", {})
     plan = stock.get("long_plan", {})
@@ -266,18 +266,64 @@ def safe_snapshot(stock: dict, mode: str) -> dict:
                 for k in (
                     "source",
                     "as_of",
+                    "three_month",
                     "two_year",
                     "ten_year",
                     "spread_bp",
+                    "spread_10y_3m_bp",
+                    "recession_prob_12m_pct",
                     "ten_change_bp",
                     "prior_date",
+                    "real_ten_year",
                     "fresh",
                     "refresh_failed",
                 )
             },
             "earnings_yield_pct": None if is_fund else research.get("earnings_yield_pct"),
             "yield_gap_pp": None if is_fund else research.get("yield_gap_pp"),
+            "real_ten_year": research.get("real_ten_year"),
+            "real_yield_gap_pp": None if is_fund else research.get("real_yield_gap_pp"),
         },
+        "macro_regime": (
+            {
+                "available": bool(macro.get("available")),
+                "rule_version": macro.get("rule_version"),
+                "source": macro.get("source"),
+                "as_of": macro.get("as_of"),
+                "quadrant": {
+                    k: (macro.get("quadrant") or {}).get(k)
+                    for k in ("code", "label", "liquidity_label", "trend_label")
+                },
+                "risk_gauge": {
+                    k: (macro.get("risk_gauge") or {}).get(k)
+                    for k in ("red_count", "yellow_count", "green_count", "available_count", "total_count", "label")
+                },
+                "alerts": list(macro.get("alerts") or [])[:5],
+                "real_rate": {
+                    k: (macro.get("real_rate") or {}).get(k)
+                    for k in ("ten_year_real", "as_of", "fresh", "change_21d_bp")
+                },
+                "pillars": [
+                    {
+                        k: p.get(k)
+                        for k in (
+                            "key",
+                            "label",
+                            "light",
+                            "light_label",
+                            "primary_metric",
+                            "percentile_10y",
+                            "direction_13w",
+                            "as_of",
+                        )
+                    }
+                    for p in (macro.get("pillars") or [])
+                    if isinstance(p, dict)
+                ],
+            }
+            if macro
+            else {}
+        ),
         "market": {
             key: stock.get("quote", {}).get(key)
             for key in ["last", "timestamp", "trade_status", "session", "stale"]

@@ -736,8 +736,12 @@ export default function StockInspector({
                   </div>
                 </div>
                 <p className="val-footnote">
-                  盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%（取数{" "}
-                  {time(stock.research?.valuation?.fetched_at)}）。利差仅作收益率水平参照。
+                  盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%
+                  {stock.research?.real_yield_gap_pp != null &&
+                  stock.research?.real_ten_year != null
+                    ? ` · 实际利率利差（减 10Y TIPS ${fmt(stock.research.real_ten_year, 2)}%）${stock.research.real_yield_gap_pp >= 0 ? "+" : ""}${fmt(stock.research.real_yield_gap_pp, 2)}pp`
+                    : ""}
+                  （取数 {time(stock.research?.valuation?.fetched_at)}）。名义与实际利差仅作收益率水平参照，非预期回报。
                 </p>
               </section>
             )}
