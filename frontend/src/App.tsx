@@ -1029,6 +1029,8 @@ export default function App() {
                 >
                   <Chart
                     detail={currentDetail}
+                    liveQuote={stock?.quote}
+                    marketSession={data?.market?.session}
                     theme={theme}
                     reverse={reverse}
                   />

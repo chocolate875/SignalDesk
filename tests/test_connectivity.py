@@ -222,3 +222,138 @@ async def test_start_live_seeds_reference_quotes_from_cached_daily_bars(tmp_path
 
 async def _noop():
     return SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_detail_for_appends_forming_intraday_bar_without_polluting_indicators(tmp_path, monkeypatch):
+    # 美股盘中：2026-11-23 16:00 UTC = 美东 11:00
+    now = datetime(2026, 11, 23, 16, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("signaldesk.service.utcnow", lambda: now)
+
+    store = Store(tmp_path)
+    monitor = Monitor(store)
+    monitor.settings.mode = "live"
+    alloc = Allocation(symbol="NVDA.US", watch_only=True)
+    monitor.store.set("portfolio:live", [alloc.model_dump()])
+    bars = make_bars("NVDA.US", "day", now)[-260:]
+    monitor.store.put_bars("live", "NVDA.US", "day", bars)
+    monitor.rebuild("NVDA.US", initial=True, mode="live")
+
+    # 先建立新鲜报价基线（同日开盘 $160，排除「报价过期」风控扣分差异）
+    await monitor._quote(
+        "NVDA.US",
+        {
+            "last": 160.0,
+            "prev_close": float(bars[-1]["close"]),
+            "open": 160.0,
+            "high": 160.5,
+            "low": 159.5,
+            "volume": 1_000_000,
+            "timestamp": now.isoformat(),
+            "trade_status": "Normal",
+            "session": "regular",
+        },
+    )
+    baseline_detail = monitor.detail_for("NVDA.US", "day", "regular")
+    baseline_len = len(baseline_detail["rows"])
+    baseline_score = baseline_detail["summary"]["score"]
+    baseline_rating = baseline_detail["stock"]["forecast"]["rating"]["score"]
+    baseline_close = baseline_detail["summary"]["close"]
+
+    # 喂入剧烈波动的今日盘中实时 OHLCV，检验实时 K 线更新但正式指标与评级零变化
+    await monitor._quote(
+        "NVDA.US",
+        {
+            "last": 166.0,
+            "prev_close": float(bars[-1]["close"]),
+            "open": 160.0,
+            "high": 168.5,
+            "low": 158.2,
+            "volume": 85_000_000,
+            "turnover": 13_900_000_000.0,
+            "timestamp": now.isoformat(),
+            "trade_status": "Normal",
+            "session": "regular",
+        },
+    )
+    live_detail = monitor.detail_for("NVDA.US", "day", "regular")
+    assert len(live_detail["rows"]) == baseline_len
+    forming = live_detail["rows"][-1]
+    assert forming["intraday_forming"] is True
+    assert forming["open"] == 160.0
+    assert forming["high"] == 168.5
+    assert forming["low"] == 158.2
+    assert forming["close"] == 166.0
+    assert forming["volume"] == 85_000_000
+    assert "ma20" not in forming
+    # 正式指标、收盘价与评级严格保持已确认收盘值，绝不被盘中未收盘 K 线污染
+    assert live_detail["summary"]["close"] == baseline_close
+    assert live_detail["summary"]["score"] == baseline_score
+    assert live_detail["stock"]["forecast"]["rating"]["score"] == baseline_rating
+
+    # 开盘前（美东 07:00）不生成当日未开盘常规 K 线
+    pre_now = datetime(2026, 11, 23, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("signaldesk.service.utcnow", lambda: pre_now)
+    pre_detail = monitor.detail_for("NVDA.US", "day", "regular")
+    assert len(pre_detail["rows"]) == baseline_len - 1
+    await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_same_day_quote_merges_intraday_ohlcv_and_cross_day_resets_it(tmp_path, monkeypatch):
+    t1 = datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("signaldesk.service.utcnow", lambda: t1)
+    monitor = Monitor(Store(tmp_path))
+    monitor.settings.mode = "live"
+    try:
+        await monitor._quote(
+            "NVDA.US",
+            {
+                "last": 162.0,
+                "prev_close": 125.53,
+                "open": 160.0,
+                "high": 164.0,
+                "low": 159.0,
+                "volume": 30_000_000,
+                "timestamp": t1.isoformat(),
+                "trade_status": "Normal",
+                "session": "regular",
+            },
+        )
+        # 同日后续推送不含 open，但创出新高 167.0
+        t2 = datetime(2026, 11, 23, 15, 5, tzinfo=timezone.utc)
+        monkeypatch.setattr("signaldesk.service.utcnow", lambda: t2)
+        await monitor._quote(
+            "NVDA.US",
+            {
+                "last": 167.0,
+                "volume": 35_000_000,
+                "timestamp": t2.isoformat(),
+                "trade_status": "Normal",
+                "session": "regular",
+            },
+        )
+        q = monitor.quotes[("live", "NVDA.US")]
+        assert q["open"] == 160.0
+        assert q["high"] == 167.0
+        assert q["low"] == 159.0
+        assert q["volume"] == 35_000_000
+
+        # 跨交易日推送自动清理前日旧 OHLCV
+        t3 = datetime(2026, 11, 24, 15, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr("signaldesk.service.utcnow", lambda: t3)
+        await monitor._quote(
+            "NVDA.US",
+            {
+                "last": 170.0,
+                "timestamp": t3.isoformat(),
+                "trade_status": "Normal",
+                "session": "regular",
+            },
+        )
+        q_next = monitor.quotes[("live", "NVDA.US")]
+        assert "open" not in q_next
+        assert "high" not in q_next
+    finally:
+        await monitor.stop()
+

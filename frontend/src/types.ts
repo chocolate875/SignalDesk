@@ -148,9 +148,15 @@ export type Stock = {
   quote: {
     last?: number;
     prev_close?: number;
+    open?: number | null;
+    high?: number | null;
+    low?: number | null;
+    volume?: number | null;
+    turnover?: number | null;
     timestamp?: string;
     spread_ratio?: number;
     stale?: boolean;
+    seeded?: boolean;
   };
   primary_key: string;
   primary: Summary;
@@ -426,7 +432,7 @@ export type Dashboard = {
   };
   unsupported: string[];
 };
-export type ChartRow = Record<string, number | string | null> & {
+export type ChartRow = Record<string, number | string | boolean | null> & {
   timestamp: string;
 };
 export type Detail = {

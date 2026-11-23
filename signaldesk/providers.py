@@ -191,6 +191,11 @@ class LongPortFeed:
                 "symbol": symbol,
                 "quote": {
                     "last": float(quote.last_done),
+                    "open": float(getattr(quote, "open", 0.0) or 0.0) or None,
+                    "high": float(getattr(quote, "high", 0.0) or 0.0) or None,
+                    "low": float(getattr(quote, "low", 0.0) or 0.0) or None,
+                    "volume": int(getattr(quote, "volume", 0) or 0),
+                    "turnover": float(getattr(quote, "turnover", 0.0) or 0.0),
                     "timestamp": stamp.isoformat(),
                     "trade_status": str(getattr(quote, "trade_status", "Normal")).split(".")[-1],
                     "session": "regular",
@@ -269,6 +274,11 @@ class LongPortFeed:
                 quote_payload = {
                     "last": float(quote.last_done),
                     "prev_close": float(quote.prev_close),
+                    "open": float(getattr(quote, "open", 0.0) or 0.0) or None,
+                    "high": float(getattr(quote, "high", 0.0) or 0.0) or None,
+                    "low": float(getattr(quote, "low", 0.0) or 0.0) or None,
+                    "volume": int(getattr(quote, "volume", 0) or 0),
+                    "turnover": float(getattr(quote, "turnover", 0.0) or 0.0),
                     "timestamp": aware(quote.timestamp).isoformat(),
                     "trade_status": str(quote.trade_status).split(".")[-1],
                     "session": "regular",

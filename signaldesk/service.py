@@ -992,6 +992,70 @@ class Monitor:
             "unsupported": self.unsupported if self.settings.mode == "live" else [],
         }
 
+    @staticmethod
+    def _forming_daily_row(stock: dict, rows: list[dict], now: datetime) -> dict | None:
+        """在美股交易日盘中或收盘确认前，基于实时常规报价生成当日未收盘 K 线（仅用于图表展示，不污染正式指标）。"""
+        quote = stock.get("quote") or {}
+        if quote.get("seeded"):
+            return None
+        try:
+            last = float(quote.get("last"))
+            if not math.isfinite(last) or last <= 0:
+                return None
+            ts_str = quote.get("timestamp")
+            if not isinstance(ts_str, str) or not ts_str:
+                return None
+            q_dt = datetime.fromisoformat(ts_str)
+        except (TypeError, ValueError):
+            return None
+
+        q_day = q_dt.astimezone(NY).date()
+        if rows:
+            try:
+                last_row_day = datetime.fromisoformat(rows[-1]["timestamp"]).astimezone(NY).date()
+                if q_day <= last_row_day:
+                    return None
+            except (KeyError, TypeError, ValueError):
+                pass
+        import pandas as pd
+
+        cal = calendar()
+        if not cal.is_session(pd.Timestamp(q_day)):
+            return None
+        # 当日尚未到开盘时间（例如盘前仅停留在旧常规时间戳）不生成今日常规 K 线
+        session_open = cal.session_open(pd.Timestamp(q_day)).to_pydatetime()
+        if q_dt < session_open or now < session_open:
+            return None
+
+        def _pos(val) -> float | None:
+            try:
+                f = float(val)
+                return f if math.isfinite(f) and f > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        o = _pos(quote.get("open")) or last
+        h = max(_pos(quote.get("high")) or last, o, last)
+        lo = min(_pos(quote.get("low")) or last, o, last)
+        vol_raw = quote.get("volume")
+        vol = int(vol_raw) if isinstance(vol_raw, (int, float)) and math.isfinite(vol_raw) and vol_raw >= 0 else 0
+        turn_raw = quote.get("turnover")
+        turn = float(turn_raw) if isinstance(turn_raw, (int, float)) and math.isfinite(turn_raw) and turn_raw >= 0 else 0.0
+        prev_close = _pos(quote.get("prev_close")) or (_pos(rows[-1].get("close")) if rows else None)
+        ret1 = (last / prev_close - 1.0) if prev_close else None
+
+        return {
+            "timestamp": session_open.isoformat(),
+            "open": round(o, 4),
+            "high": round(h, 4),
+            "low": round(lo, 4),
+            "close": round(last, 4),
+            "volume": vol,
+            "turnover": round(turn, 2),
+            "return_1": ret1,
+            "intraday_forming": True,
+        }
+
     def detail_for(self, symbol: str, timeframe: str, session: str):
         allocation = next((a for a in self.portfolio() if a.symbol == symbol), None)
         if allocation is None:
@@ -1006,6 +1070,10 @@ class Monitor:
                 bars = demo.make_bars(symbol, timeframe, utcnow())
             frame = enrich(bars, timeframe, utcnow(), self.settings.rules)
         rows = chart_rows(frame, session, count=1000) if frame is not None else []
+        if timeframe == "day" and session == "regular" and self.settings.mode == "live":
+            forming = self._forming_daily_row(stock, rows, utcnow())
+            if forming is not None:
+                rows = [*rows, forming]
         summary = stock["summaries"].get(f"{timeframe}:{session}")
         if summary is None and timeframe == "15m":
             summary = summarize(
@@ -1606,16 +1674,30 @@ class Monitor:
                     if merged_ext and merged_ext != old.get("extended"):
                         self.quotes[(mode, symbol)] = {**old, "extended": merged_ext}
                     return  # Late delivery must not rewind price crossing state or the displayed quote.
-                if (
-                    "prev_close" not in quote
-                    and stamp.astimezone(NY).date() != previous.astimezone(NY).date()
-                ):
-                    fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
-                    if fallback is not None:
-                        value["prev_close"] = fallback
-                    else:
-                        value.pop("prev_close", None)
-                    self.quote_resync_needed = True
+                if stamp.astimezone(NY).date() != previous.astimezone(NY).date():
+                    # 跨交易日时清理上一交易日的盘中 OHLCV，避免旧日开高低混入新一日实时 K 线
+                    for k in ("open", "high", "low", "volume", "turnover"):
+                        if quote.get(k) is None:
+                            value.pop(k, None)
+                    if "prev_close" not in quote:
+                        fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
+                        if fallback is not None:
+                            value["prev_close"] = fallback
+                        else:
+                            value.pop("prev_close", None)
+                        self.quote_resync_needed = True
+                else:
+                    # 同交易日内合并盘中 OHLCV：保留已有开盘价，高低价与成交量不因缺失字段回退
+                    if value.get("open") is None and old.get("open") is not None:
+                        value["open"] = old["open"]
+                    for k, fn in (("high", max), ("low", min)):
+                        cand = [x for x in (old.get(k), quote.get(k), last) if isinstance(x, (int, float)) and math.isfinite(x) and x > 0]
+                        if cand:
+                            value[k] = fn(cand)
+                    for k in ("volume", "turnover"):
+                        cand = [x for x in (old.get(k), quote.get(k)) if isinstance(x, (int, float)) and math.isfinite(x) and x >= 0]
+                        if cand:
+                            value[k] = max(cand)
             elif "prev_close" not in quote and value.get("prev_close") is None:
                 fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
                 if fallback is not None:

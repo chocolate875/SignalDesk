@@ -16,7 +16,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 import { HelpCircle, Maximize2, Minimize2, X } from "lucide-react";
 import { IndicatorGuideMenu } from "./GuidePopover";
-import type { ChartRow, Detail, WavePivot, WaveTrend } from "./types";
+import type { ChartRow, Detail, Stock, WavePivot, WaveTrend } from "./types";
 import { fmt, ticker, time } from "./types";
 
 echarts.use([
@@ -96,11 +96,20 @@ function OhlcHud({
       : close != null && open != null
         ? close >= open
         : true;
+  const isForming = Boolean(row.intraday_forming);
   const dirClass = isUp ? "quote-up" : "quote-down";
 
   return (
     <div className="ohlc-hud" aria-live="off">
       <span className="hud-date">{dates[idx] ?? "—"}</span>
+      {isForming && (
+        <span
+          className="hud-live-pill"
+          title="当天盘中实时生成（未收盘），均线/MACD/评分/波浪仍严格基于已收盘日线计算"
+        >
+          盘中
+        </span>
+      )}
       <span>
         开<b>{fmt(row.open as number, 2)}</b>
       </span>
@@ -111,7 +120,8 @@ function OhlcHud({
         低<b>{fmt(row.low as number, 2)}</b>
       </span>
       <span>
-        收<b className={dirClass}>{fmt(close, 2)}</b>
+        {isForming ? "现" : "收"}
+        <b className={dirClass}>{fmt(close, 2)}</b>
       </span>
       <span className={dirClass}>
         {chgPct != null
@@ -121,37 +131,43 @@ function OhlcHud({
       <span>
         量<b>{formatVolume(row.volume as number)}</b>
       </span>
-      {overlay === "MA" && (
-        <span className="hud-ma">
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-            MA20 {fmt(row.ma20 as number, 2)}
-          </span>
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#9e9cf2" : "#1e40af" }} />
-            MA50 {fmt(row.ma50 as number, 2)}
-          </span>
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#5cb8e6" : "#64748b" }} />
-            MA200 {fmt(row.ma200 as number, 2)}
-          </span>
-        </span>
-      )}
-      {overlay === "BOLL" && (
-        <span className="hud-ma">
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-            上 {fmt(row.bb_upper as number, 2)}
-          </span>
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
-            中 {fmt(row.bb_middle as number, 2)}
-          </span>
-          <span className="hud-ma-item">
-            <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
-            下 {fmt(row.bb_lower as number, 2)}
-          </span>
-        </span>
+      {isForming ? (
+        <span className="hud-forming-note">盘中实时K线（指标以已收盘日线计）</span>
+      ) : (
+        <>
+          {overlay === "MA" && (
+            <span className="hud-ma">
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
+                MA20 {fmt(row.ma20 as number, 2)}
+              </span>
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#9e9cf2" : "#1e40af" }} />
+                MA50 {fmt(row.ma50 as number, 2)}
+              </span>
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#5cb8e6" : "#64748b" }} />
+                MA200 {fmt(row.ma200 as number, 2)}
+              </span>
+            </span>
+          )}
+          {overlay === "BOLL" && (
+            <span className="hud-ma">
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
+                上 {fmt(row.bb_upper as number, 2)}
+              </span>
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#e2b857" : "#d97706" }} />
+                中 {fmt(row.bb_middle as number, 2)}
+              </span>
+              <span className="hud-ma-item">
+                <i style={{ background: theme === "dark" ? "#858ee7" : "#1e40af" }} />
+                下 {fmt(row.bb_lower as number, 2)}
+              </span>
+            </span>
+          )}
+        </>
       )}
     </div>
   );
@@ -325,10 +341,14 @@ function WaveTrendSummaryPill({
 
 function Chart({
   detail,
+  liveQuote,
+  marketSession,
   theme,
   reverse,
 }: {
   detail: Detail | null;
+  liveQuote?: Stock["quote"];
+  marketSession?: string;
   theme: string;
   reverse: boolean;
 }) {
@@ -355,19 +375,110 @@ function Chart({
     [],
   );
 
+  // 将 WebSocket 实时盘中报价合并到当日未收盘 K 线（严格隔离正式收盘指标）
+  const displayRows = useMemo<ChartRow[]>(() => {
+    const base = detail?.rows ?? [];
+    if (!base.length) return [];
+    if (
+      detail?.mode !== "live" ||
+      detail?.timeframe !== "day" ||
+      !liveQuote ||
+      liveQuote.seeded ||
+      liveQuote.last == null ||
+      !Number.isFinite(liveQuote.last) ||
+      liveQuote.last <= 0 ||
+      !liveQuote.timestamp
+    ) {
+      return base;
+    }
+    const qMs = Date.parse(liveQuote.timestamp);
+    if (!Number.isFinite(qMs)) return base;
+    const nyDateFmt = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "America/New_York",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const qDay = nyDateFmt.format(new Date(qMs));
+    const lastRow = base[base.length - 1];
+    const lastMs = lastRow?.timestamp ? Date.parse(lastRow.timestamp) : Number.NaN;
+    const lastDay = Number.isFinite(lastMs) ? nyDateFmt.format(new Date(lastMs)) : "";
+
+    const pos = (v: number | null | undefined) =>
+      v != null && Number.isFinite(v) && v > 0 ? v : null;
+    const close = liveQuote.last;
+
+    if (Boolean(lastRow.intraday_forming) && qDay === lastDay) {
+      const open = pos(liveQuote.open) ?? pos(lastRow.open as number) ?? close;
+      const high = Math.max(
+        pos(liveQuote.high) ?? close,
+        pos(lastRow.high as number) ?? close,
+        open,
+        close,
+      );
+      const low = Math.min(
+        pos(liveQuote.low) ?? close,
+        pos(lastRow.low as number) ?? close,
+        open,
+        close,
+      );
+      const prevClose =
+        pos(liveQuote.prev_close) ??
+        (base.length >= 2 ? pos(base[base.length - 2].close as number) : null);
+      const updated: ChartRow = {
+        ...lastRow,
+        open,
+        high,
+        low,
+        close,
+        volume:
+          liveQuote.volume != null && Number.isFinite(liveQuote.volume)
+            ? Math.max(liveQuote.volume, Number(lastRow.volume ?? 0))
+            : lastRow.volume,
+        turnover:
+          liveQuote.turnover != null && Number.isFinite(liveQuote.turnover)
+            ? Math.max(liveQuote.turnover, Number(lastRow.turnover ?? 0))
+            : lastRow.turnover,
+        return_1: prevClose ? close / prevClose - 1 : lastRow.return_1,
+      };
+      return [...base.slice(0, -1), updated];
+    }
+
+    if (!lastRow.intraday_forming && lastDay && qDay > lastDay && (marketSession === "regular" || pos(liveQuote.open) != null)) {
+      const open = pos(liveQuote.open) ?? close;
+      const high = Math.max(pos(liveQuote.high) ?? close, open, close);
+      const low = Math.min(pos(liveQuote.low) ?? close, open, close);
+      const prevClose = pos(liveQuote.prev_close) ?? pos(lastRow.close as number);
+      const forming: ChartRow = {
+        timestamp: liveQuote.timestamp,
+        open,
+        high,
+        low,
+        close,
+        volume: liveQuote.volume ?? 0,
+        turnover: liveQuote.turnover ?? 0,
+        return_1: prevClose ? close / prevClose - 1 : null,
+        intraday_forming: true,
+      };
+      return [...base, forming];
+    }
+
+    return base;
+  }, [detail?.rows, detail?.mode, detail?.timeframe, liveQuote, marketSession]);
+
   const dates = useMemo(() => {
-    if (!detail?.rows?.length) return [];
+    if (!displayRows.length) return [];
     const dateFormat = new Intl.DateTimeFormat("sv-SE", {
       timeZone: "America/New_York",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
     });
-    return detail.rows.map((r) => {
+    return displayRows.map((r) => {
       const ms = r?.timestamp ? Date.parse(r.timestamp) : Number.NaN;
       return Number.isFinite(ms) ? dateFormat.format(new Date(ms)) : "";
     });
-  }, [detail?.rows]);
+  }, [displayRows]);
 
   useEffect(() => {
     hoverSetter.current(null);
@@ -423,7 +534,7 @@ function Chart({
   useEffect(() => {
     const instance = chart.current;
     if (!instance || instance.isDisposed()) return;
-    if (!detail?.rows?.length) {
+    if (!detail || !displayRows.length) {
       try {
         instance.clear();
       } catch {
@@ -432,7 +543,7 @@ function Chart({
       previousKey.current = "";
       return;
     }
-    const rows = detail.rows;
+    const rows = displayRows;
     const dark = theme === "dark";
     const up = dark
       ? reverse
@@ -619,7 +730,18 @@ function Chart({
         type: "candlestick",
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: rows.map((r) => [r.open, r.close, r.low, r.high]),
+        data: rows.map((r) =>
+          r.intraday_forming
+            ? {
+                value: [r.open, r.close, r.low, r.high],
+                itemStyle: {
+                  opacity: 0.78,
+                  borderType: "dashed",
+                  borderWidth: 1.5,
+                },
+              }
+            : [r.open, r.close, r.low, r.high],
+        ),
         markLine: {
           silent: true,
           symbol: "none",
@@ -659,7 +781,16 @@ function Chart({
           value: r.volume,
           itemStyle: {
             color:
-              Number(r.close) >= Number(r.open) ? up + "99" : down + "99",
+              Number(r.close) >= Number(r.open)
+                ? up + (r.intraday_forming ? "55" : "99")
+                : down + (r.intraday_forming ? "55" : "99"),
+            borderColor: r.intraday_forming
+              ? Number(r.close) >= Number(r.open)
+                ? up
+                : down
+              : undefined,
+            borderType: r.intraday_forming ? "dashed" : undefined,
+            borderWidth: r.intraday_forming ? 1 : 0,
           },
         })),
       },
@@ -989,11 +1120,16 @@ function Chart({
           if (!row) return "";
           const value = (field: string, digits = 2) =>
             fmt(row[field] == null ? null : Number(row[field]), digits);
+          const isForming = Boolean(row.intraday_forming);
           const lines = [
-            `<b>${dates[i]}</b> · 纽约收盘`,
-            `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · 收 ${value("close")}`,
+            isForming
+              ? `<b>${dates[i]}</b> · 盘中实时（未收盘，不计入正式指标）`
+              : `<b>${dates[i]}</b> · 纽约收盘`,
+            `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · ${isForming ? "现" : "收"} ${value("close")}`,
             `成交量 ${formatVolume(row.volume as number)} · 成交额 $${formatVolume(row.turnover as number)}`,
-            `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
+            isForming
+              ? "MA / MACD / RSI / 波浪评级仍按最近已确认收盘日线计算"
+              : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}`,
           ];
           const pv = pivotByIndex.get(i);
           if (pv) {
@@ -1087,6 +1223,7 @@ function Chart({
     }
   }, [
     detail,
+    displayRows,
     dates,
     overlay,
     showMacd,
@@ -1128,7 +1265,7 @@ function Chart({
   const activeWaveTrend = detail?.stock?.wave_trend;
 
   const zoomTo = (countLimit: number) => {
-    const count = detail?.rows?.length ?? 0;
+    const count = displayRows.length;
     const instance = chart.current;
     if (!count || !instance || instance.isDisposed()) return;
     setActiveRange(countLimit);
@@ -1173,7 +1310,7 @@ function Chart({
               key={label}
               type="button"
               className={activeRange === n ? "active" : ""}
-              disabled={!detail?.rows?.length}
+              disabled={!displayRows.length}
               onClick={() => zoomTo(n)}
               title={tip}
             >
@@ -1272,7 +1409,7 @@ function Chart({
       </div>
 
       <OhlcHud
-        rows={detail?.rows ?? []}
+        rows={displayRows}
         dates={dates}
         overlay={overlay}
         theme={theme}
@@ -1325,7 +1462,7 @@ function Chart({
             </button>
           </div>
         )}
-        {!chartError && !detail?.rows?.length && (
+        {!chartError && !displayRows.length && (
           <div className="chart-empty">
             该标的日线历史尚未就绪，正在等待有效行情
           </div>

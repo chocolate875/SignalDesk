@@ -1,5 +1,16 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 当日盘中实时 K 线展示与精简盘外动态结论卡
+
+- **盘中实时 K 线接入（零污染正式收盘指标）。**
+  - [providers.py](../signaldesk/providers.py) 在常规 `quotes()` 与 `_on_quote()` 同步提取当日 `open/high/low/volume/turnover`；[service.py](../signaldesk/service.py) 在同交易日内保持 `high = max` / `low = min` / `volume = max` 合并、跨交易日自动清零旧 OHLCV，并在 `detail_for()` 为美股盘中实盘追加标记 `intraday_forming = True` 的当日实时 K 线（不生成未收盘均线/MACD/RSI，不修改 `summary`/`wave_trend`/`forecast`）。
+  - [Chart.tsx](../frontend/src/Chart.tsx) 接收 WebSocket 实时 `liveQuote` 原地刷新当日实时 K 线，HUD 显示 `2026-11-23 盘中` 胶囊与「开/高/低/现/量 · 盘中实时K线（指标以已收盘日线计）」，蜡烛与成交量柱采用半透明虚线区分，Tooltip 显式注明未收盘且不计入正式指标。
+- **精简「盘外动态」结论卡。**
+  - 重构 [StockInspector.tsx](../frontend/src/StockInspector.tsx) 的 `ExtendedHoursCard` 为紧凑结论卡（仅展示标题、状态胶囊与一句大白话结论，三段明细默认折叠于 `<details>` 内可按需展开）；常规盘中时段自动将「买卖评级与点位预测」置于右侧第 1 顺位、精简「盘外动态」收至其下方。
+- **自动化测试、构建与 1440×810 盘中实盘复验。**
+  - 新增 2 项盘中实时 K 线零污染与同日/跨日 OHLCV 合并单测，全量 `pytest -q` **94 项通过**，`ruff check signaldesk tests` 全通过，CSS 全部 `243` 条 `font-size` 最小值为 `12.0px`，前端 `tsc -b && vite build` 构建通过。
+  - 美股盘中 `1440×810` 浏览器实盘核验（`http://127.0.0.1:8765/`）：顶栏确认自动选连 **`longbridge.cn`** 加速节点，左侧 `93` 只自选与整页 **0 处「待更新」**；`NVDA` 图面最右侧实时渲染 `2026-11-23` 盘中 K 线与放量成交量柱，HUD 实时跳动（`开 167.08 高 171.50 低 156.93 现 164.39 +30.95% 量 485.4M`）；右侧第 1 顺位为「买卖评级与点位预测」，第 2 顺位为折叠态精简「盘外动态」（`121px` 高，点击展开三段明细正常）；全程控制台 **0 errors**，7 个请求全部 HTTP `200`。
+
 ## 2026-11-24 非代理国内加速路由、秒出报价与盘中「待更新」根因修复
 
 - **网络实测与根因定位。**
