@@ -1,5 +1,14 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 项目区前端设计技能（`.agents/skills/`）安装与安全审查
+
+- **技能选型与安装路径**：在仓库根目录 `.agents/skills/` 下安装 4 项互补的纯规范型前端设计技能（无可执行脚本或网络外联逻辑）：
+  - [frontend-design](../.agents/skills/frontend-design/SKILL.md)（源自 `anthropics/skills`，含 `LICENSE.txt`）：视觉方向、排版层级、色彩规划与反 AI 模板化约束；
+  - [web-design-guidelines](../.agents/skills/web-design-guidelines/SKILL.md)（源自 `vercel-labs/agent-skills`，含 `references/command.md`）：191 条 Web 界面、可访问性（a11y）、键盘焦点与交互细节审计清单；
+  - [vercel-composition-patterns](../.agents/skills/vercel-composition-patterns/SKILL.md)（源自 `vercel-labs/agent-skills`，含 `rules/` 与 `AGENTS.md`）：React 19 复合组件、状态解耦与防布尔属性膨胀架构模式；
+  - [emil-design-eng](../.agents/skills/emil-design-eng/SKILL.md)（源自 `emilkowalski/skills`）：按压反馈、Popover 触发原点缩放、GPU 合成属性、`<= 200ms` 缓动与 `prefers-reduced-motion` 微交互规范。
+- **安全审查与仓库验证**：逐一审查各 `SKILL.md` 及关联文件（无敏感路径读取、无外传命令、无提示词注入）；运行 `ruff check signaldesk tests` 零警告、`pytest tests/test_integrations.py -k test_no_private_runtime_files_tracked -q` 通过、全量 `pytest -q` **108 项全部通过**。
+
 ## 2026-11-24 多 Agent 长期复核泛化、Google Antigravity CLI 官方 ACP 接入与 Codex 官方接口核查
 
 - **官方协议合规核查（严格拒绝一切非官方调用方式）。**

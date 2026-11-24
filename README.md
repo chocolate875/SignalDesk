@@ -106,6 +106,6 @@ Linux复用Python核心，先构建/复制前端资源，再运行 `python -m si
 
 回放及精确公式见 [算子与评分说明](docs/signals.md)。项目选型、许可证和来源见 [量化项目调研](docs/research.md)。验收记录见 [验收说明](docs/verification.md)。Python与前端分别由 `uv.lock`、`frontend/package-lock.json` 锁定版本。
 
-工程约束、UI 规范与文档/Git 连续性纪律见 [AGENTS.md](AGENTS.md)。
+工程约束、UI 规范与文档/Git 连续性纪律见 [AGENTS.md](AGENTS.md)。项目区前端设计与交互工程技能位于 [.agents/skills](.agents/skills)（包含 `frontend-design`、`web-design-guidelines`、`vercel-composition-patterns`、`emil-design-eng`）。
 
 用户反馈、当前进度与下一步「选股推荐功能」规划见 [后续待办](TODO.md)。
