@@ -223,17 +223,22 @@ class LongPortFeed:
         from .indicators import finite
 
         idx = self.lp.CalcIndex
+        fields = [idx.PeTtmRatio, idx.PbRatio, idx.DividendRatioTtm]
+        for extra in ("TurnoverRate", "TotalMarketValue"):
+            member = getattr(idx, extra, None)
+            if member is not None:
+                fields.append(member)
         result = {}
         for start in range(0, len(symbols), 100):
-            batch = self.quote_context.calc_indexes(
-                symbols[start : start + 100], [idx.PeTtmRatio, idx.PbRatio, idx.DividendRatioTtm]
-            )
+            batch = self.quote_context.calc_indexes(symbols[start : start + 100], fields)
             fetched = datetime.now(timezone.utc).isoformat()
             for item in batch:
                 result[item.symbol] = {
                     "pe_ttm": finite(item.pe_ttm_ratio),
                     "pb": finite(item.pb_ratio),
                     "dividend_yield_pct": finite(item.dividend_ratio_ttm),
+                    "turnover_rate_pct": finite(getattr(item, "turnover_rate", None)),
+                    "market_cap": finite(getattr(item, "total_market_value", None)),
                     "fetched_at": fetched,
                 }
         return result

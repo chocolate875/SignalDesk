@@ -1,6 +1,6 @@
 # 算子、因子与提醒口径
 
-当前规则版本为 `fusion-1.1.0`，使用交易日日历检查日线缺口。输出附加当前规则配置的 SHA-256 短指纹，每个事件记录公式版本、数据时间和维度证据。分数描述技术结构。
+当前规则版本为 `fusion-2.0.0`（升级自 `fusion-1.1.0`，经本地 75 股 / 9,307 截面严格因果回放验证），使用交易日日历检查日线缺口。输出附加当前规则配置的 SHA-256 短指纹，每个事件记录公式版本、数据时间和维度证据。分数描述客观技术结构与学术因子特征。
 
 ## 数据前提
 
@@ -16,23 +16,25 @@
 
 `delay(x,n)`、`delta(x,n)`、`returns(x,n)`只允许正整数历史窗口；`mean/std/min/max`要求完整窗口，标准差使用ddof=0；`ts_rank`采用平均秩百分位；`zscore`在零方差时返回NaN；`corr`按相同时间索引对齐；`clip`限制输出范围。不提供eval、动态导入和任意脚本执行。
 
-## 默认融合公式
+## 默认融合公式（`fusion-2.0.0`）
 
-记 `clip(x)=min(1,max(-1,x))`，每个原始维度位于[-1,1]，映射为 `D=50*(1+d)`：
+记 `clip(x)=min(1,max(-1,x))`，每个原始维度位于[-1,1]，映射为 `D=50*(1+d)`（剔除高度共线的 `zscore20`、`rank20`、`corr20`，并将单日量价脉冲改为 10 日平滑资金顺向度）：
 
 ```
-t1 = clip((EMA20 - EMA50) / ATR14)
-t2 = clip((EMA20 - delay(EMA20, 5)) / ATR14)
-t3 = sign(close - MA200)
+t1 = clip((EMA20 - EMA50) / (1.5 * ATR14))
+t2 = clip((EMA50 - MA200) / (3.0 * ATR14))
+t3 = clip((close - MA200) / (3.0 * ATR14))
 trend_raw = (t1 + t2 + t3) / 3
 
-m1 = (RSI14 - 50) / 50
-m2 = clip(MACD_hist / ATR14)
-momentum_raw = (m1 + m2) / 2
+m_ts60 = clip(delta(close, 60) / (ATR14 * sqrt(60)))
+m_macd = clip(MACD_hist / ATR14)
+m_rsi  = clip((RSI14 - 50) / 35)
+momentum_raw = 0.50 * m_ts60 + 0.30 * m_macd + 0.20 * m_rsi
 
-volume_raw = sign(returns(close, 1)) * clip(RVOL - 1, 0, 1)
+signed_flow = clip(returns(close, 1) / (ATR14 / close), -1, 1) * clip(RVOL, 0.5, 2.5)
+volume_raw = mean(signed_flow, 10) / mean(|signed_flow|, 10)   # 满10日全平盘分母为0时回退 0.0
 
-score = 0.40 * trend + 0.30 * momentum + 0.30 * volume_score
+score = 0.45 * trend + 0.40 * momentum + 0.15 * volume_score
 ```
 
 RVOL日线基准为此前20个已完成交易日的成交量均值；分时基准为同一交易时段、纽约本地相同15分钟位置、此前最多20个交易日的成交量均值，至少10个有效历史样本。当前K线不进入自身基准。
@@ -43,7 +45,7 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 
 ## 长期估值与宏观
 
-估值来自 LongPort 的 PeTtmRatio、PbRatio 和 DividendRatioTtm。股息率字段按百分数展示，接口未提供财报观察时点，因此页面显示取数时间。正市盈率可换算成盈利收益率。负市盈率提示复核盈利情况，未返回的数据展示为空。[LongPort 计算指标](https://open.longportapp.com/docs/quote/pull/calc-index)
+估值与流动性指标来自 LongPort 的 `PeTtmRatio`、`PbRatio`、`DividendRatioTtm`、`TurnoverRate`（换手率 `turnover_rate_pct`）和 `TotalMarketValue`（总市值 `market_cap`，随同一次 `CalcIndex` 批量请求零额外开销获取）。股息率与换手率字段按百分数展示，接口未提供财报观察时点，因此页面显示取数时间。正市盈率可换算成盈利收益率。负市盈率提示复核盈利情况，未返回的数据展示为空。[LongPort 计算指标](https://open.longportapp.com/docs/quote/pull/calc-index)
 
 取美国财政部同一观察日的 3 个月（`BC_3MONTH`）、2 年期（`BC_2YEAR`）和 10 年期（`BC_10YEAR`）国债平价收益率。期限利差 `10Y-2Y = (10 年期 − 2 年期) × 100 bp`，`10Y-3M = (10 年期 − 3 个月) × 100 bp`，未来 12 个月衰退参考概率采用纽约联储单变量 Probit 基准公式 `Φ(-0.5333 - 0.6330 × (10Y - 3M))`（Estrella & Mishkin 1998），比较窗口为向前 21 个有效观测。个股估值除名义股债利差（盈利收益率 − 10Y 名义美债）外，还同时对照扣除通胀后的 10Y TIPS 实际利率利差（盈利收益率 − `DFII10`，回应 Asness 2003 对 Fed Model 通胀错配批评），两者均仅作收益率水平参照、不充当预期回报。当月样本不足时向前取月度记录，最多读取三个月，刷新失败时显示缓存日期及失败状态。[财政部数据接口](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)
 
@@ -72,7 +74,17 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
    - 成交额 `>= 2,000 万美元` 标为「放量充分」，`>= 100 万美元` 标为「成交活跃」，`< 100 万美元` 标为「成交偏薄」。
    - 相对最近常规收盘涨跌幅 `>= ±3%` 为显著跳空、`>= ±6%` 为大幅跳空，并同步预检个人计划失效价/目标价、波浪前低失效位/前高反转位与参考买卖点穿越。
    - 若盘外成交额 `< 100 万美元`（流动性偏薄），预警级别强制降级为 `info` 并显式提示谨防小单虚晃。
-4. **脱敏透传**：`safe_snapshot()` 白名单透传独立的 `extended_hours` 摘要（时段、价格、跳空%、成交额、流动性分级与触发明细），供手动 Codex 复核在开盘前结合跳空做预案参考。
+4. **近 20 日隔夜 vs 日内拉锯联动（`tug_of_war`）**：结合前复权日线统计近 20/60 日累计隔夜收益（昨收→今开）与盘中收益（今开→今收，Lou, Polk & Skouras 2019）。当标的呈现「高开低走特征」（近 20 日隔夜累计 `>= +4%` 且盘中累计 `<= -4%`）并在当前盘外高开 `>= +1.5%` 时，自动追加防追高预警并将 `positive` 收敛为 `warning`。
+5. **脱敏透传**：`safe_snapshot()` 白名单透传独立的 `extended_hours` 摘要（时段、价格、跳空%、成交额、流动性分级、触发明细与 `tug_of_war`），供手动复核在开盘前结合跳空做预案参考。
+
+### 严格因果学术因子组（`factors.py`）
+
+`signaldesk/factors.py` 仅使用本机已确认前复权日线与 `macro-live-fwd-v3` 中的 `SPY` 基准日线进行零未来函数计算：
+
+1. **残差动量信息比（`residual_mom_z`）**：对齐近 `60–252` 个共同交易日，采用 Blitz et al. (2011) 扣市场 `Beta` 不扣自身 `Alpha` 的特质超额收益口径，剔除近 `21` 日短期反转窗口后输出标准化信息比（$\sum (r_i - \hat{\beta} r_m) / (\sigma_e \sqrt{L})$）。
+2. **蛙跳动量 / 信息离散度（`info_discreteness` / `id_label`）**：按 Da, Gurun & Warachka (2014) 计算 $ID = \text{sign}(R) \times (\%\text{下跌日} - \%\text{上涨日})$，区分「连续慢牛」（`ID <= -0.06`）、「节奏均衡」与「脉冲跳涨」（`ID >= +0.08`）。
+3. **52 周高点比（`high_52w_ratio`）**：George & Hwang (2004) `close / high_52w` 锚定比，统一覆盖个股与 ETF。
+4. **三维尾部与摩擦画像**：融合隔夜跳空与日内振幅的 **Yang-Zhang 20/60 日无偏年化波动率**（`yang_zhang_hv20_pct` / `yang_zhang_hv60_pct`）、`SPY` 下跌日条件敏感度 **下行 Beta**（`downside_beta`）、近 21 日最大 5 日均值涨幅 **`MAX5` 彩票过热**（`max5_21d_pct` / `lottery_overheated`）、**近 60 日已实现偏度**（`realized_skew_60d`）与 **20 日 `Amihud` 非流动性冲击**（`amihud_20d`）。
 
 日线图、评分及发给模型的技术证据共用同一条**前复权（`AdjustType.ForwardAdjust`）**计算序列：最新收盘价与真实市场价、持仓成本、计划止损/目标价完全同口径，同时历史拆股、合股与除息自动平滑回溯，消除虚假断崖跳空。增量拉取如检测到重叠交易日收盘价变动超过 `0.5%`（发生新拆股/合股/大额除权），系统自动触发全量前复权重写并重建指标。盘口报价可能比最近的日线收盘更新，两者分别标时。
 
@@ -114,22 +126,26 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 3. **艾略特波浪铁律校验与诚实降级**：从尾部因果拐点匹配上升/下降推动浪（`0→1→2→3→4→5` 或进行中的 2/3/4 浪）及三浪调整结构（`0→A→B→C`），严格校验三条核心规则（浪 2 不破浪 1 起点、浪 3 非最短推动浪、浪 4 不与浪 1 价格区间重叠），并输出关键斐波那契测算位（`0.618 / 1.0 / 1.618`）。若近期拐点未形成清晰浪型，绝不强行套用 1–5 浪，诚实标记为 `箱体整理 / 待定浪` 并仅展示客观高低点结构与趋势通道。
 4. **脱敏边界与免责属性**：`safe_snapshot()` 仅透传脱敏的 `wave_trend` 方向、浪型阶段与结构位摘要，不含账户与仓位隐私；所有波浪与趋势通道结果仅作客观结构复核参考，不构成投资建议。
 
-## 点位预测与 5 级买卖评级（forecast）
+## 点位预测、5 级买卖评级与动态风险预算（forecast）
 
-每只股票由 `signaldesk/forecast.py` 的 `compute_forecast()` 基于已确认日线序列、技术摘要、估值/美债研究上下文与长期计划价进行确定性因果计算，输出 `levels`（参考买卖点与防守止损）与 `rating`（5 级综合评级）。
+每只股票由 `signaldesk/forecast.py` 的 `compute_forecast()` 基于已确认日线序列、技术摘要、严格因果学术因子、波浪结构位、估值/美债研究上下文、宏观大势与长期计划价进行确定性因果计算，输出 `levels`（参考买卖点与防守止损）、`rating`（5 级综合评级）与 `risk_budget`（波动率与宏观联动风险预算及 60 日移动保护）。
 
 1. **前置因果条件**：仅截取最近一段无中断的连续有效常规时段（`regular`）日线尾部序列，要求连续有效常规日线 `>= 60` 根、`summary.valid == True`、`summary.confirmed_price_available == True`、`close >= 0.05` 且 `ATR14 > 0`。历史不足、缺交易日断档切断预热或行情失效时，诚实返回 `levels.available = False` 与 `rating.code = "unavailable"`（`暂不评级`）。
-2. **多锚点点位测算与严格单调约束**：结合已确认 `MA20`、`EMA20`、`BOLL 中/上/下轨`、`MA50`、`MA200`、近 20/60 日高低点、20 日枢轴支撑/阻力（`S1`/`R1`）、斐波那契 `1.618` 扩展位及 `ATR14` 波动倍数，分别锚定参考买点上沿（`buy_high`）、深度买点（`buy_low`）、防守止损（`stop_loss`）、第一卖点（`sell_low`）与第二卖点（`sell_high`）。经 `math.floor(close * 100) / 100` 与两位小数舍入后，强制满足严格单调关系：
+2. **去重锚点测算与严格单调约束**：合并高度重合的 `MA20 / EMA20 / BOLL 中轨` 为单一「20 日趋势中枢」，结合 `BOLL 上/下轨`、`MA50`、`MA200`、近 20/60 日高低点、波浪前高突破位/前低结构位、20 日枢轴支撑/阻力（`S1`/`R1`）及 `ATR14` 波动倍数，分别锚定参考买点上沿（`buy_high`）、深度买点（`buy_low`）、防守止损（`stop_loss`）、第一卖点（`sell_low`）与第二卖点（`sell_high`）。经 `math.floor(close * 100) / 100` 与两位小数舍入后，强制满足严格单调关系：
    `0 < stop_loss < buy_low < buy_high <= close < sell_low < sell_high`
    同时输出买点中枢 `ideal_buy`、现价盈亏比 `risk_reward_ratio`、买点盈亏比 `entry_risk_reward_ratio` 与位置标记 `position_label`（`接近买点区` / `区间中段` / `接近卖点压力`）。
-3. **四因子加权 5 级评级**：
-   - 维度与基准权重：`技术结构`（40%，直接取日线 `summary.score`）、`估值利率`（30%，基于有效 `PE TTM`、股息率 `>= 2%` 与 `yield_gap_pp`）、`点位赔率`（20%，基于现价盈亏比与买点贴近度）、`风险控制`（10%，对波动偏高、偏离 `MA20` 超 `2 ATR`、`RSI` 极值与过期风险逐项扣分）。若估值数据缺失或过期，其余有效维度权重自动归一化至 100%。
+3. **正交四维加权 5 级评级（消除二次扣分）**：
+   - 维度与基准权重：`技术结构`（个股/普通 ETF 40%，杠杆 ETF 45%：在日线 `summary.score` 基础上叠加残差动量 `residual_mom_z`、FIP 趋势连续度 `id_label` 与 `52W` 高点比 `high_52w_ratio` 修正）、`估值利率`（个股 30%，融合名义股债利差 `yield_gap_pp` 与 10Y TIPS 实际利率利差 `real_yield_gap_pp`；ETF 改为近 1 年回撤分位与 10Y 变动）、`点位赔率`（个股 20%，普通 ETF 25%，杠杆 ETF 20%）、`风险控制`（个股/普通 ETF 10%，杠杆 ETF 15%：彻底移除对日线已计入的 `RSI`/`MA20 偏离` 的重复扣分，正交评估 `MAX5` 彩票过热、`downside_beta`、Yang-Zhang 60 日年化波动率、`Amihud` 非流动性与高换手拥挤）。若估值数据缺失或过期，其余有效维度权重自动归一化至 100%。
    - 五级映射：`>= 78` `strong_buy`（强烈买入，5 星）、`>= 64` `buy`（建议买入，4 星）、`>= 46` `hold`（中性观望，3 星）、`>= 32` `reduce`（谨慎减持，2 星）、`< 32` `sell`（建议卖出，1 星），并依估值/利率新鲜度与独立风险数给出置信度（`高` / `中` / `低`）。
 4. **保守风控护栏（评级上限封顶）**：
    - 跌破个人计划失效价（`close <= long_plan.stop`）：评级上限封顶为 `reduce`（谨慎减持）。
    - 有效滚动市盈率为负（`pe_ttm <= 0`）：评级上限封顶为 `hold`（中性观望），暂停给出买入评级。
    - 技术处于空头弱势结构（`state == "weak"` 且 `trend < 25`）：评级上限封顶为 `hold`（中性观望），暂停给出买入提示。
-5. **脱敏边界与参考属性**：`safe_snapshot()` 仅将脱敏的 `rating`（`code/label/score/confidence`）与 `levels`（`available/buy_low/buy_high/sell_low/sell_high/stop_loss/risk_reward_ratio`）传入 Codex 快照，不含股数、成本与账户标识。输出均带免责说明，仅供复核参考，不构成投资建议。
+   - 近月单日急涨彩票过热（`lottery_overheated == True` 且 `close > MA20 + 2 × ATR14`）：评级上限封顶为 `hold`（中性观望），防止追高回落。
+5. **波动率参考敞口与 60 日峰值移动保护（`risk_budget`）**：
+   - 基于目标 `20%` 年化波动率与个股 Yang-Zhang 波动率测算波动率缩放系数 `vol_scale = clip(20% / YangZhangHV, 0.25, 1.25)`，联动 `macro-1.0.0` 红灯计数（红灯 `>= 4/6` 乘 `0.70`、红灯 `3/6` 乘 `0.85`）输出纯参考性的建议敞口系数 `suggested_exposure_ratio`（绝不篡改客观买卖点或方向）。
+   - 同时输出近 60 日客观峰值 `peak_60d` 与 `2.5 × ATR14` 动态回撤保护位 `trailing_stop = max(0.01, peak_60d - 2.5 × ATR14)`，仅作防盈利回吐参考，不替代个人长期固定失效价。
+6. **脱敏边界与参考属性**：`safe_snapshot()` 白名单透传脱敏的 `academic_factors`、`rating`、`levels` 与 `risk_budget`，严禁包含股数、成本、资产净值与账户标识。输出均带免责说明，仅供复核参考，不构成投资建议。
 
 ## 回放
 

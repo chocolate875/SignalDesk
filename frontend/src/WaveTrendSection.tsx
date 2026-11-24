@@ -426,7 +426,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
         </div>
       ) : (
         <>
-          {/* 1. 一句话直观定位：现在走在哪一浪 + 在通道什么位置 */}
+          {/* 1. 一句话直观定位：趋势方向 + 通道分位 */}
           <div className="wt-summary-box">
             <div className="wt-summary-top">
               <strong className={`tone-text-${wave.tone}`}>
@@ -437,75 +437,10 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
             <p className="wt-phase-note">{wave.phase_label}</p>
           </div>
 
-          {/* 2. 波浪各点位明确清单：每一浪的日期、确切价格、相对前段涨跌 */}
-          {displayPivots.length > 0 && (
-            <div className="wt-points-block">
-              <div className="wt-block-head">
-                <b>{hasWaveTags ? "波浪各点位明细" : "近期波段关键拐点"}</b>
-                <span>
-                  {hasWaveTags
-                    ? `置信度 ${wave.confidence}`
-                    : "未成型不强行标浪"}
-                </span>
-              </div>
-              <div className="wt-pivot-list">
-                {displayPivots.map((p, idx) => {
-                  const prev = idx > 0 ? displayPivots[idx - 1] : null;
-                  const legPct =
-                    prev && prev.price > 0
-                      ? ((p.price / prev.price - 1) * 100)
-                      : null;
-                  const badgeText = p.wave_label
-                    ? p.wave_label === "0"
-                      ? "起"
-                      : `${p.wave_label}浪${p.confirmed ? "" : "*"}`
-                    : p.kind === "H"
-                      ? "高"
-                      : "低";
-                  return (
-                    <div
-                      className={`wt-pivot-row ${p.confirmed ? "" : "forming"}`}
-                      key={`${p.date}-${p.kind}-${idx}`}
-                    >
-                      <span
-                        className={`wt-pivot-tag ${
-                          p.wave_label ? `tone-${wave.tone}` : ""
-                        }`}
-                      >
-                        {badgeText}
-                      </span>
-                      <span className="wt-pivot-name">
-                        {pivotTitle(p)}
-                        {!p.confirmed && <em>进行中</em>}
-                      </span>
-                      <span className="wt-pivot-date">{shortDate(p.date)}</span>
-                      <strong className="wt-pivot-price">
-                        ${fmt(p.price, 2)}
-                      </strong>
-                      <span
-                        className={`wt-pivot-chg ${
-                          legPct == null
-                            ? "muted"
-                            : legPct >= 0
-                              ? "quote-up"
-                              : "quote-down"
-                        }`}
-                      >
-                        {legPct != null
-                          ? `${legPct >= 0 ? "+" : ""}${fmt(legPct, 1)}%`
-                          : "锚点"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 3. 明确交易关键点位：波浪测算目标 + 突破/失效位 + 通道精确上下轨 */}
+          {/* 2. 核心客观趋势边界：突破位 / 失效反转位 / 回归平行通道 */}
           <div className="wt-points-block">
             <div className="wt-block-head">
-              <b>关键观察与测算点位</b>
+              <b>结构边界与通道位置</b>
               <span>相对现价</span>
             </div>
             <div className="wt-key-grid">
@@ -547,20 +482,6 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
               </div>
             </div>
 
-            {wave.fib_targets.length > 0 && (
-              <div className="wt-fib-list">
-                {wave.fib_targets.map((t, idx) => (
-                  <div className="wt-fib-row" key={`${t.label}-${idx}`}>
-                    <span>{t.label}</span>
-                    <div className="wt-fib-nums">
-                      <b>${fmt(t.price, 2)}</b>
-                      {close != null && <em>{pctDiff(t.price, close)}</em>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
             {ch?.available && (
               <div
                 className="wt-channel-strip"
@@ -575,8 +496,104 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
             )}
           </div>
 
-          {/* 4. 一句大白话行动参考 */}
+          {/* 3. 一句大白话行动参考 */}
           <div className="wt-guide">{wt.action_guide}</div>
+
+          {/* 4. 二级折叠区：主观波浪计数点位与斐波那契测算（辅助参考，不主驱动评级） */}
+          {(displayPivots.length > 0 || wave.fib_targets.length > 0) && (
+            <details className="insp-sub-details">
+              <summary>
+                <span>
+                  展开波浪计数与斐波那契测算
+                  {displayPivots.length > 0
+                    ? `（${hasWaveTags ? wave.current_wave : `${displayPivots.length}拐点`}）`
+                    : ""}
+                </span>
+                <ChevronRight size={14} className="wt-det-chev" />
+              </summary>
+              <div className="insp-sub-body">
+                {displayPivots.length > 0 && (
+                  <div className="wt-points-block">
+                    <div className="wt-block-head">
+                      <b>{hasWaveTags ? "波浪各点位明细" : "近期波段关键拐点"}</b>
+                      <span>
+                        {hasWaveTags
+                          ? `置信度 ${wave.confidence}`
+                          : "未成型不强行标浪"}
+                      </span>
+                    </div>
+                    <div className="wt-pivot-list">
+                      {displayPivots.map((p, idx) => {
+                        const prev = idx > 0 ? displayPivots[idx - 1] : null;
+                        const legPct =
+                          prev && prev.price > 0
+                            ? ((p.price / prev.price - 1) * 100)
+                            : null;
+                        const badgeText = p.wave_label
+                          ? p.wave_label === "0"
+                            ? "起"
+                            : `${p.wave_label}浪${p.confirmed ? "" : "*"}`
+                          : p.kind === "H"
+                            ? "高"
+                            : "低";
+                        return (
+                          <div
+                            className={`wt-pivot-row ${p.confirmed ? "" : "forming"}`}
+                            key={`${p.date}-${p.kind}-${idx}`}
+                          >
+                            <span
+                              className={`wt-pivot-tag ${
+                                p.wave_label ? `tone-${wave.tone}` : ""
+                              }`}
+                            >
+                              {badgeText}
+                            </span>
+                            <span className="wt-pivot-name">
+                              {pivotTitle(p)}
+                              {!p.confirmed && <em>进行中</em>}
+                            </span>
+                            <span className="wt-pivot-date">
+                              {shortDate(p.date)}
+                            </span>
+                            <strong className="wt-pivot-price">
+                              ${fmt(p.price, 2)}
+                            </strong>
+                            <span
+                              className={`wt-pivot-chg ${
+                                legPct == null
+                                  ? "muted"
+                                  : legPct >= 0
+                                    ? "quote-up"
+                                    : "quote-down"
+                              }`}
+                            >
+                              {legPct != null
+                                ? `${legPct >= 0 ? "+" : ""}${fmt(legPct, 1)}%`
+                                : "锚点"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {wave.fib_targets.length > 0 && (
+                  <div className="wt-fib-list">
+                    {wave.fib_targets.map((t, idx) => (
+                      <div className="wt-fib-row" key={`${t.label}-${idx}`}>
+                        <span>{t.label}</span>
+                        <div className="wt-fib-nums">
+                          <b>${fmt(t.price, 2)}</b>
+                          {close != null && <em>{pctDiff(t.price, close)}</em>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
 
           {/* 5. 二级参数/说明窗口快捷入口 */}
           <button

@@ -3212,17 +3212,23 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  flex-wrap: nowrap;
+  gap: 6px 8px;
+  flex-wrap: wrap;
   margin-top: 8px;
 }
 
 .forecast-pos-tags {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: nowrap;
+  gap: 5px 6px;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+.forecast-pos-tags > * {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .button.forecast-apply-btn {
@@ -6086,6 +6092,148 @@ p {
   margin: 0;
   font-size: 12px;
   color: var(--sub);
+}
+
+/* ==================== Fusion 2.0 学术因子与风险预算控件 ==================== */
+.exposure-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-corporate-blue);
+  background: var(--soft-blue-bg);
+  border: 1px solid rgba(30, 64, 175, 0.2);
+  white-space: nowrap;
+}
+
+.ext-tug-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--sub);
+  flex-wrap: wrap;
+}
+
+.ext-tug-strip.warn {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.28);
+  color: var(--amber-text);
+}
+
+.ext-tug-strip em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ext-tug-strip.warn em {
+  color: var(--amber-text);
+}
+
+.trailing-stop-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--sub);
+}
+
+.trailing-stop-strip.breached {
+  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.28);
+  color: var(--down-text);
+}
+
+.trailing-stop-strip b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.trailing-stop-strip em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--down-text);
+}
+
+.trailing-adopt-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(30, 64, 175, 0.24);
+  background: var(--panel);
+  color: var(--color-corporate-blue);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.trailing-adopt-btn:hover {
+  background: var(--soft-blue-bg);
+  border-color: var(--color-corporate-blue);
+}
+
+.acad-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.acad-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.acad-cell.warn {
+  background: rgba(217, 119, 6, 0.08);
+  border-color: rgba(217, 119, 6, 0.3);
+}
+
+.acad-cell span {
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acad-cell strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acad-cell strong.positive {
+  color: var(--up-text);
+}
+
+.acad-cell strong.amber-text {
+  color: var(--amber-text);
 }
 
 /* ==================== Responsive Breakpoints ==================== */

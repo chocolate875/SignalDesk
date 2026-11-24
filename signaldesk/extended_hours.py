@@ -116,13 +116,26 @@ def summarize_extended_hours(
     forecast: dict[str, Any] | None,
     now: datetime,
     demo: bool = False,
+    factors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """汇总夜盘/盘前/盘后独立报价并生成带流动性门控的前置预警。"""
+    """汇总夜盘/盘前/盘后独立报价并生成带流动性门控与日夜拉锯预警的前置引擎。"""
     q = quote or {}
     ext_map = q.get("extended") if isinstance(q.get("extended"), dict) else {}
     regular_last = finite(q.get("last"))
     regular_dt = _parse_iso(q.get("timestamp"))
     market_session = str((market or {}).get("session") or "closed")
+
+    fac = factors or {}
+    tug_of_war = {
+        "available": fac.get("overnight_20d_pct") is not None and fac.get("intraday_20d_pct") is not None,
+        "overnight_20d_pct": fac.get("overnight_20d_pct"),
+        "intraday_20d_pct": fac.get("intraday_20d_pct"),
+        "overnight_60d_pct": fac.get("overnight_60d_pct"),
+        "intraday_60d_pct": fac.get("intraday_60d_pct"),
+        "state": fac.get("tug_of_war_state"),
+        "label": fac.get("tug_of_war_label"),
+        "warning": fac.get("tug_of_war_warning") or "",
+    }
 
     normalized: dict[str, dict[str, Any]] = {}
     for key in ("overnight", "pre", "post"):
@@ -154,6 +167,7 @@ def summarize_extended_hours(
             "headline": "",
             "triggers": [],
             "sessions": {},
+            "tug_of_war": tug_of_war,
             "disclaimer": EXTENDED_DISCLAIMER,
         }
 
@@ -274,6 +288,17 @@ def summarize_extended_hours(
                 if alert_level == "none":
                     alert_level = "info"
 
+        # 日夜拉锯行为特征提醒（Lou, Polk & Skouras 2019）：高开低走标的在盘外明显高开时主动提示防追高
+        if (
+            tug_of_war["available"]
+            and tug_of_war["state"] == "night_pump_day_dump"
+            and gap_pct >= 1.5
+            and tug_of_war["warning"]
+        ):
+            triggers.append(tug_of_war["warning"])
+            if alert_level in {"none", "positive"}:
+                alert_level = "warning"
+
         # 流动性门控：盘外成交额不足 100 万美元时，绝不出高危/强警报，降级为 info 并显式警示
         if not liquid:
             if triggers:
@@ -332,5 +357,6 @@ def summarize_extended_hours(
         "headline": headline,
         "triggers": triggers,
         "sessions": clean_sessions,
+        "tug_of_war": tug_of_war,
         "disclaimer": EXTENDED_DISCLAIMER,
     }

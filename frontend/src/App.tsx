@@ -649,6 +649,7 @@ export default function App() {
       forecast: activeLiveEval.forecast ?? stock.forecast,
       wave_trend: activeLiveEval.wave_trend ?? stock.wave_trend,
       fund_metrics: activeLiveEval.fund_metrics ?? stock.fund_metrics,
+      academic_factors: activeLiveEval.academic_factors ?? stock.academic_factors,
       verdict: activeLiveEval.verdict ?? stock.verdict,
       long_plan: activeLiveEval.long_plan ?? stock.long_plan,
     };
@@ -1345,7 +1346,7 @@ export default function App() {
               setEditor({
                 stock,
                 presetStop: stopLoss,
-                presetTarget: sellLow,
+                presetTarget: sellLow ?? undefined,
               })
             }
             onAnalyze={analyze}

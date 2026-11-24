@@ -14,7 +14,7 @@ from . import operators as op
 from .calendar import NY, bar_end, calendar, latest_expected_end
 from .models import RuleSettings
 
-RULE_VERSION = "fusion-1.1.0"
+RULE_VERSION = "fusion-2.0.0"
 FEATURE_COLUMNS = [
     "ma20",
     "ma50",
@@ -36,9 +36,6 @@ FEATURE_COLUMNS = [
     "volume_score",
     "score",
     "return_1",
-    "zscore20",
-    "rank20",
-    "corr20",
 ]
 
 
@@ -132,21 +129,31 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
                 baseline = v.groupby(slots).transform(lambda x: x.shift(1).rolling(20, min_periods=10).mean())
             rvol = v / baseline.replace(0, np.nan)
             values["rvol"] = rvol
-            t1 = op.clip((values["ema20"] - values["ema50"]) / atr)
-            t2 = op.clip(op.delta(values["ema20"], 5) / atr)
-            t3 = np.sign(c - values["ma200"])
+            t1 = op.clip((values["ema20"] - values["ema50"]) / (1.5 * atr))
+            t2 = op.clip((values["ema50"] - values["ma200"]) / (3.0 * atr))
+            t3 = op.clip((c - values["ma200"]) / (3.0 * atr))
             trend = (t1 + t2 + t3) / 3
-            momentum = ((values["rsi"] - 50) / 50 + op.clip(values["macd_hist"] / atr)) / 2
+
+            m_macd = op.clip(values["macd_hist"] / atr)
+            m_rsi = op.clip((values["rsi"] - 50) / 35)
+            m_ts60 = op.clip(op.delta(c, 60) / (atr * math.sqrt(60)))
+            momentum = 0.50 * m_ts60 + 0.30 * m_macd + 0.20 * m_rsi
+
             ret = op.returns(c)
-            quantity = np.sign(ret) * op.clip(rvol - 1, 0, 1)
+            atr_pct = (atr / c).replace(0, np.nan)
+            signed_flow = op.clip(ret / atr_pct, -1, 1) * op.clip(rvol, 0.5, 2.5)
+            flow_num = op.mean(signed_flow, 10)
+            flow_den = op.mean(signed_flow.abs(), 10)
+            volume_raw = (flow_num / flow_den.replace(0, np.nan)).where(
+                flow_den > 0, np.where(flow_den.notna(), 0.0, np.nan)
+            )
+            quantity = op.clip(volume_raw, -1, 1)
+
             values.update(
                 trend=(trend + 1) * 50,
                 momentum=(momentum + 1) * 50,
                 volume_score=(quantity + 1) * 50,
                 return_1=ret,
-                zscore20=op.zscore(c, 20),
-                rank20=op.ts_rank(c, 20),
-                corr20=op.corr(ret, op.delta(v), 20),
             )
             values["score"] = (
                 rules.trend_weight * values["trend"]
@@ -250,8 +257,8 @@ def summarize(
     if score is not None:
         evidence = [
             f"收盘 {price:.2f} / 200期均线 {indicators['ma200']:.2f}；EMA20 {indicators['ema20']:.2f} / EMA50 {indicators['ema50']:.2f}",
-            f"RSI14 {rsi:.1f}（中点50）；MACD柱 {indicators['macd_hist']:+.3f}（基准0）",
-            f"成交量为历史基准的 {indicators['rvol']:.2f} 倍，本期收盘涨跌 {indicators['return_1']:+.2%}",
+            f"60日动量与MACD净协同，RSI14 {rsi:.1f}（中点50）；MACD柱 {indicators['macd_hist']:+.3f}",
+            f"10日平滑量价协同，当日成交量为均量 {indicators['rvol']:.2f} 倍（涨跌 {indicators['return_1']:+.2%}）",
         ]
         for i, value in enumerate(dimensions.values()):
             direction = "支持走强" if value >= 60 else "支持走弱" if value <= 40 else "未达方向确认阈值"

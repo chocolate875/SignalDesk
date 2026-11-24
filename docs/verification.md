@@ -1,5 +1,21 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 Phase 0–4 学术因子升级、`fusion-2.0.0` 规则降噪浓缩与 16:9 界面全链路验收
+
+- **Phase 0 本机因果回放实证基准（`75` 只非杠杆美股 / `9,307` 观测 / `138` 截面）。**
+  - 新建严格因果评测脚本 [factor_eval.py](../signaldesk/factor_eval.py)（只读读取 `live-fwd-v3` 与 `macro-live-fwd-v3` `SPY` 基准，严禁读取账户与持仓表），实证结果归档于 [research.md](./research.md)：
+    - 原短窗口指标高度共线：`zscore20 <-> rank20` Spearman 达 `0.947`，`rsi14 <-> zscore20` 达 `0.866`，`macd_hist_atr <-> zscore20` 达 `0.724`；
+    - 原 30% 权重单日量价分 `volume_v1_1d` 未来 5/20/60d RankIC 全负（`-0.0087 / -0.0103 / -0.0029`），升级为 10 日平滑资金顺向度 `volume_v2_flow10` 后 20/60d RankIC 转正至 `+0.0309 (ICIR +0.173) / +0.0294`；
+    - 新学术因子 `residual_mom_z`（扣 `SPY` Beta 不扣自身 Alpha，剔除近 21 日）5/20/60d RankIC 全正（`+0.0272 / +0.0458 / +0.0309`），`neg_info_discreteness` 5/20d 为正（`+0.0209 / +0.0131`），`overnight_20d_pct` 20d 达 `+0.0423`；
+    - 近 60 日峰值 `2.5×ATR14` 移动保护（`4,656` 样本）将 20d 平均最大回撤由 `-10.59%` 压至 `-8.63%`、60d 平均最大回撤由 `-19.03%` 压至 `-10.21%`（仅作盈利保护参考，不替代固定长期失效价）。
+- **Phase 1–3 后端引擎升级与风险预算闭环。**
+  - 新建 [factors.py](../signaldesk/factors.py) 实现 `compute_academic_factors()` 与 `compute_yang_zhang_hv()`；升级 [indicators.py](../signaldesk/indicators.py) 至 `RULE_VERSION = "fusion-2.0.0"`（默认权重平滑迁移为 `趋势 45% / 动量 40% / 量价 15%`，移除 `zscore20 / rank20 / corr20`）；[providers.py](../signaldesk/providers.py) 零额外请求追加 `TurnoverRate` 与 `TotalMarketValue`；[instruments.py](../signaldesk/instruments.py) 优先采用 Yang-Zhang 波动率；[extended_hours.py](../signaldesk/extended_hours.py) 新增 `tug_of_war` 日夜拉锯拆解与高开低走防追高预警；[forecast.py](../signaldesk/forecast.py) 去重 20 日均线/布林中轨锚点、消除 `RSI/MA20 偏离` 二次扣分、新增 `MAX5` 彩票过热护栏及顶层 `risk_budget`（含 `suggested_exposure_ratio` 与 `trailing_stop`）；[security.py](../signaldesk/security.py) 白名单扩展脱敏学术字段且零持仓隐私泄露；[service.py](../signaldesk/service.py) 消除 `verdict.headline` 多分数冲突并支持 `live-eval` 全链路试算联动。
+- **Phase 4 前端浓缩升级、自动化测试与双分辨率实盘验收（`http://127.0.0.1:8765/`）。**
+  - 更新 [types.ts](../frontend/src/types.ts)、[App.tsx](../frontend/src/App.tsx)、[StockInspector.tsx](../frontend/src/StockInspector.tsx)、[WaveTrendSection.tsx](../frontend/src/WaveTrendSection.tsx)、[Settings.tsx](../frontend/src/Settings.tsx)、[GuidePopover.tsx](../frontend/src/GuidePopover.tsx)、[inspectorModules.ts](../frontend/src/inspectorModules.ts) 与 [style.css](../frontend/src/style.css)（全量 `281` 条 `font-size` 最小值 `12.0px`，`bad = 0`）。
+  - 新增 [test_academic_factors.py](../tests/test_academic_factors.py)（5 项因果/慢牛vs脉冲/日夜拉锯/Yang-Zhang+宏观风险预算/脱敏隔离测试）；后端 `ruff check signaldesk tests` 全通过，`pytest -q` **104 项全部通过**，前端 `tsc -b && vite build` 零错误通过（产物 `index-DWwJOYUJ.js`、`index-D3dNbbfp.css`）。
+  - **`1440×810` 与 `1280×720` 双分辨率浏览器终验**：
+    - `NVDA` 评级卡渲染 `敞口 0.20x` 胶囊，底部操作行弹性折行无竖压、零右侧裁切；波浪计数默认折叠在二级 `<details>` 内；盘外动态呈现 `近20日 隔夜 +15.0% · 盘中 -33.5% 高开低走特征`；长期计划价位呈现 `60日峰值 $243.37 · 移动保护 $210.31` 且一键「采纳保护」准确预填弹窗；「结构评分与学术因子」2 列×3 行网格完整展示 6 项核心学术因子无省略截断，展开抽屉显示 `近60日偏度 / 相对SPY Beta / Amihud冲击`；估值注脚展示 `总市值 $3.98T · 换手率 3.35%`；切换「最新试算 ↔ 收盘确认」全模块实时联动，全程控制台 **0 errors**，`.error-fallback = 0`。
+
 ## 2026-11-24 网页品牌图标补齐与右侧研判栏模块化自定义排序重构
 
 - **网页图标（Favicon）补齐与静态路由修复。**

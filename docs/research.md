@@ -126,3 +126,16 @@
 - 数据口径：[Chicago Fed NFCI](https://www.chicagofed.org/research/data/nfci/current-data)、[FRED](https://fred.stlouisfed.org/)、[Fed H.4.1](https://www.federalreserve.gov/releases/h41/)、[纽约联储收益率曲线衰退概率](https://www.newyorkfed.org/research/capital_markets/ycfaq)、[财政部收益率 XML](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)。
 
 文献结论来自公开摘要与检索综述，卷期页码以出版方页面为准。
+
+## Phase 0 实证因子评测与规则降噪验证（2026-11-24）
+
+通过 `signaldesk/factor_eval.py` 对本机 `live-fwd-v3` 分区中 **75 只非杠杆美股**（排除 11 只杠杆/反向 ETF）的历史前复权日线执行严格因果截面检验（共 **9,307** 条样本、**138** 个 5 日间隔截面，严格仅使用 `<= t` 已确认 K 线对比未来 5/20/60 交易日表现）：
+
+1. **旧短周期指标高度共线冗余（实证支持精简做减法）**：
+   - 截面平均 Spearman 相关系数：`zscore20 <-> rank20` 达 **`0.947`**，`rsi14 <-> zscore20` 达 **`0.866`**，`rsi14 <-> rank20` 达 **`0.846`**，`macd_hist_atr <-> zscore20` 达 **`0.724`**。多个 14–20 日震荡指标高度共线，因此从 `fusion-2.0.0` `FEATURE_COLUMNS` 中移除未参与决策的 `zscore20` / `rank20` / `corr20`。
+   - 原权重 30% 的单日量价分 `volume_v1_1d` 在未来 5 / 20 / 60 日的 RankIC 全为负（**`-0.0087` / `-0.0103` / `-0.0029`**），改为 10 日平滑量价顺向度 `volume_v2_flow10` 后 20 日 / 60 日 RankIC 转正至 **`+0.0309`（ICIR +0.173）/ `+0.0294`**，并将权重压降至 `15%`（45% 趋势 / 40% 动量 / 15% 量价）。
+2. **新学术因子的正交增益与分工定位**：
+   - `residual_mom_z`（vs SPY 残差动量）在 5/20/60 日 RankIC 稳定为正（**`+0.0272` / `+0.0458` / `+0.0309`**，20 日 ICIR `+0.202`）；`neg_info_discreteness`（趋势连续度 `-ID`）在 5/20 日为正（**`+0.0209` / `+0.0131`**）；`overnight_20d_pct` 在 20 日达 **`+0.0423`**。
+   - 在成长与科技股占比偏高的实盘样本池内，`neg_max5_21d`、`neg_downside_beta`、`neg_yang_zhang_hv60` 与裸上涨收益呈负相关（说明高弹性资产牛市涨幅更高，但左尾与回撤风险也同步放大）。实证支持 Moreira & Muir (2017) 与 Bali et al. (2011) 的分工：**趋势质量因子用于评估方向延续性，而 MAX5、下行贝塔与 Yang-Zhang 波动率用于独立风控护栏与参考敞口缩放（`risk_budget`），两者正交互不压制**。
+3. **动态移动保护位回撤对比（4,656 个样本）**：
+   - 20 日窗口平均最大回撤从固定持有的 **`-10.59%`** 缩窄至 `2.5×ATR` 移动止损的 **`-8.63%`**；60 日窗口平均最大回撤从 **`-19.03%`** 大幅降至 **`-10.21%`**。但机械窄止损在震荡行情会拉低均值收益（60 日 `13.28% -> 4.57%`），印证 Kaminski & Lo (2014) 结论——因此系统仅将其作为客观盈利回撤保护线展示与参考，不替代长期核心失效价。

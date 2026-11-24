@@ -288,6 +288,8 @@ def compute_fund_metrics(frame: pd.DataFrame | None, summary: dict) -> dict:
         "max_drawdown_pct": None,
         "hv20_pct": None,
         "hv60_pct": None,
+        "yang_zhang_hv20_pct": None,
+        "yang_zhang_hv60_pct": None,
         "ma200_gap_pct": None,
         "return_20d_pct": None,
         "return_60d_pct": None,
@@ -328,18 +330,30 @@ def compute_fund_metrics(frame: pd.DataFrame | None, summary: dict) -> dict:
         if mdd is not None:
             max_drawdown_pct = round(mdd, 2)
 
-    # 历史年化波动率（对数收益率标准差 × sqrt(252)）
+    # 历史年化波动率：优先采用包含隔夜跳空的 Yang-Zhang (2000) 无偏估计，缺少开盘价时回退对数收盘标准差
+    from .factors import compute_yang_zhang_hv
+
+    has_open = "open" in win.columns and np.isfinite(win["open"].to_numpy(dtype=float)).all() and (
+        win["open"].to_numpy(dtype=float) > 0
+    ).all()
+    opens = win["open"].to_numpy(dtype=float) if has_open else None
+    yz20_pct = compute_yang_zhang_hv(opens, highs, lows, closes, 20) if opens is not None else None
+    yz60_pct = compute_yang_zhang_hv(opens, highs, lows, closes, 60) if opens is not None else None
+
     log_rets = np.diff(np.log(closes))
-    hv20_pct = None
+    close_hv20_pct = None
     if len(log_rets) >= 20:
         v20 = finite(float(np.std(log_rets[-20:], ddof=1) * math.sqrt(252.0) * 100.0))
         if v20 is not None:
-            hv20_pct = round(v20, 1)
-    hv60_pct = None
+            close_hv20_pct = round(v20, 1)
+    close_hv60_pct = None
     if len(log_rets) >= 60:
         v60 = finite(float(np.std(log_rets[-60:], ddof=1) * math.sqrt(252.0) * 100.0))
         if v60 is not None:
-            hv60_pct = round(v60, 1)
+            close_hv60_pct = round(v60, 1)
+
+    hv20_pct = yz20_pct if yz20_pct is not None else close_hv20_pct
+    hv60_pct = yz60_pct if yz60_pct is not None else close_hv60_pct
 
     indicators = (summary or {}).get("indicators") or {}
     ma200 = finite(indicators.get("ma200"))
@@ -367,6 +381,8 @@ def compute_fund_metrics(frame: pd.DataFrame | None, summary: dict) -> dict:
         "max_drawdown_pct": max_drawdown_pct,
         "hv20_pct": hv20_pct,
         "hv60_pct": hv60_pct,
+        "yang_zhang_hv20_pct": yz20_pct,
+        "yang_zhang_hv60_pct": yz60_pct,
         "ma200_gap_pct": ma200_gap_pct,
         "return_20d_pct": period_return(20),
         "return_60d_pct": period_return(60),

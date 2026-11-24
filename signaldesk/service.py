@@ -12,6 +12,7 @@ from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
 from .events import EventEngine
 from .extended_hours import summarize_extended_hours
+from .factors import compute_academic_factors
 from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
 from .instruments import classify_instrument, compute_fund_metrics
@@ -21,7 +22,7 @@ from .macro import (
     demo_fred_bundle,
     fetch_fred_bundle,
 )
-from .models import Allocation, Settings, utcnow
+from .models import Allocation, RuleSettings, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed, probe_fastest_broker_domain
 from .research import fetch_curve, research_context
@@ -36,6 +37,18 @@ class Monitor:
         self.vault = Vault(store.directory)
         self.oauth = BrokerOAuth(self.vault)
         self.settings = Settings.model_validate(store.get("settings", {}))
+        # 一次性平滑迁移旧默认规则权重（0.40/0.30/0.30 -> 0.45/0.40/0.15），用户自定义权重保留不动
+        if not store.get("migration:fusion_2_weights"):
+            cur_rules = self.settings.rules
+            if (
+                abs(cur_rules.trend_weight - 0.4) < 1e-6
+                and abs(cur_rules.momentum_weight - 0.3) < 1e-6
+                and abs(cur_rules.volume_weight - 0.3) < 1e-6
+            ):
+                self.settings.rules = RuleSettings()
+                if store.get("settings") is not None:
+                    store.set("settings", self.settings.model_dump())
+            store.set("migration:fusion_2_weights", True)
         self.engine = EventEngine(store)
         self.notifications = NotificationDispatcher(store, self.vault, self.settings.qq)
         self.notifications.delivery_enabled = self.settings.mode == "live"
@@ -45,6 +58,7 @@ class Monitor:
         self.summaries = {}
         self.wave_trends = {}
         self.fund_metrics = {}
+        self.academic_factors = {}
         self.forecast_cache = {}
         self.live_eval_cache = {}
         self.frame_lock = RLock()
@@ -153,7 +167,18 @@ class Monitor:
             frame = enrich(bars, "day", now, self.settings.rules)
             with self.frame_lock:
                 self.macro_frames[(mode, sym)] = frame
-        self.macro_cache = None
+        with self.frame_lock:
+            self.macro_cache = None
+            for key in [k for k in self.academic_factors if k[0] == mode]:
+                self.academic_factors.pop(key, None)
+
+    def _spy_frame(self, mode: str):
+        """优先获取自选池或宏观基准分区中的 SPY 已确认日线序列。"""
+        with self.frame_lock:
+            frame = self.frames.get((mode, "SPY.US", "day"))
+            if frame is None or frame.empty:
+                frame = self.macro_frames.get((mode, "SPY.US"))
+            return frame
 
     def _seed_quote_from_frame(self, symbol: str, mode: str = "live"):
         """实盘启动在首次券商报价到达前，用本机已确认日线收盘预填参考价与昨收，避免满屏「待更新」。"""
@@ -283,6 +308,10 @@ class Monitor:
             self.summaries[(mode, symbol, "day", "regular")] = summary
             self.wave_trends[(mode, symbol)] = (frame_sig, wave_trend)
             self.fund_metrics[(mode, symbol)] = (frame_sig, fund_metrics)
+            self.academic_factors.pop((mode, symbol), None)
+            if symbol == "SPY.US":
+                for key in [k for k in self.academic_factors if k[0] == mode]:
+                    self.academic_factors.pop(key, None)
             self.forecast_cache.pop((mode, symbol), None)
             self.live_eval_cache.pop((mode, symbol), None)
             if symbol in MACRO_BENCHMARK_SYMBOLS:
@@ -440,6 +469,8 @@ class Monitor:
                     "pe_ttm": 19.0 + index * 3,
                     "pb": 3.5 + index,
                     "dividend_yield_pct": index / 3,
+                    "turnover_rate_pct": round(1.2 + index * 0.4, 2),
+                    "market_cap": float((800 - index * 80) * 1_000_000_000),
                     "fetched_at": summary["as_of"],
                 }
         macro_data = macro if macro is not None else self.macro_regime()
@@ -501,8 +532,42 @@ class Monitor:
             with self.frame_lock:
                 self.fund_metrics[(mode, allocation.symbol)] = (frame_sig, fund_metrics)
 
+        spy_frame = self._spy_frame(mode)
+        factor_sig = (
+            frame_sig,
+            id(spy_frame) if spy_frame is not None else 0,
+            len(spy_frame) if spy_frame is not None else 0,
+            is_fund,
+            bool(instrument.get("is_leveraged")),
+            valuation.get("turnover_rate_pct"),
+            valuation.get("market_cap"),
+        )
+        with self.frame_lock:
+            cached_af = self.academic_factors.get((mode, allocation.symbol))
+        if cached_af is not None and cached_af[0] == factor_sig:
+            factors = cached_af[1]
+        else:
+            factors = compute_academic_factors(
+                frame,
+                spy_frame=spy_frame,
+                valuation=valuation,
+                is_fund=is_fund,
+                is_leveraged=bool(instrument.get("is_leveraged")),
+            )
+            with self.frame_lock:
+                self.academic_factors[(mode, allocation.symbol)] = (factor_sig, factors)
+
+        self._append_academic_risks(summary, factors, is_fund=is_fund)
+
+        macro_red = (macro_data.get("risk_gauge") or {}).get("red_count")
+        wt_trend = (wave_trend or {}).get("trend") or {}
         forecast_sig = (
             frame_sig,
+            factor_sig,
+            macro_red,
+            wt_trend.get("direction"),
+            wt_trend.get("breakout_level"),
+            wt_trend.get("invalidation_level"),
             summary.get("valid"),
             summary.get("confirmed_price_available"),
             summary.get("score"),
@@ -521,6 +586,7 @@ class Monitor:
             research["curve"].get("ten_year"),
             research["curve"].get("ten_change_bp"),
             research.get("yield_gap_pp"),
+            research.get("real_yield_gap_pp"),
         )
         if cached_fc is not None and cached_fc[0] == forecast_sig:
             forecast = cached_fc[1]
@@ -532,6 +598,9 @@ class Monitor:
                 long_plan,
                 instrument=instrument,
                 fund_metrics=fund_metrics,
+                factors=factors,
+                wave_trend=wave_trend,
+                macro=macro_data,
             )
             with self.frame_lock:
                 self.forecast_cache[(mode, allocation.symbol)] = (forecast_sig, forecast)
@@ -543,6 +612,8 @@ class Monitor:
             long_plan,
             instrument=instrument,
             fund_metrics=fund_metrics,
+            factors=factors,
+            forecast=forecast,
         )
         extended_hours = summarize_extended_hours(
             quote,
@@ -552,6 +623,7 @@ class Monitor:
             forecast,
             now,
             demo=mode == "demo",
+            factors=factors,
         )
         result = {
             **allocation.model_dump(),
@@ -559,6 +631,7 @@ class Monitor:
             "reconciled": allocation.reconciled,
             "instrument": instrument,
             "fund_metrics": fund_metrics,
+            "academic_factors": factors,
             "quote": quote,
             "extended_hours": extended_hours,
             "summaries": summaries,
@@ -583,6 +656,29 @@ class Monitor:
         return result
 
     @staticmethod
+    def _append_academic_risks(summary: dict, factors: dict | None, is_fund: bool) -> None:
+        """将高确定性实证尾部与流动性风险补充到 summary['risks']（不重复追加）。"""
+        if not factors or not factors.get("available"):
+            return
+        extra_risks: list[str] = []
+        if not is_fund and factors.get("lottery_overheated"):
+            max5 = factors.get("max5_21d_pct")
+            extra_risks.append(
+                f"近月单日急涨过热（MAX5 {max5:.1f}%）"
+                if max5 is not None
+                else "近月单日急涨过热（MAX5 偏高）"
+            )
+        downside_beta = factors.get("downside_beta")
+        if not is_fund and downside_beta is not None and downside_beta >= 1.5:
+            extra_risks.append(f"大盘下跌敏感度高（下行Beta {downside_beta:.2f}）")
+        if factors.get("illiquid_flag"):
+            extra_risks.append("流动性偏弱（冲击成本偏高）")
+        risks = summary.setdefault("risks", [])
+        for item in extra_risks:
+            if item not in risks:
+                risks.append(item)
+
+    @staticmethod
     def _build_verdict(
         allocation: Allocation,
         summary: dict,
@@ -590,6 +686,8 @@ class Monitor:
         long_plan: dict,
         instrument: dict | None = None,
         fund_metrics: dict | None = None,
+        factors: dict | None = None,
+        forecast: dict | None = None,
     ) -> dict:
         close = long_plan.get("close")
         stop = long_plan.get("stop")
@@ -828,77 +926,97 @@ class Monitor:
         elif is_inverse and not held:
             action, tone, priority = "对冲观察", "warning", 7
             action_meaning = "反向做空杠杆 ETF 仅适合短期对冲或波段交易，长期持有存在每日再平衡损耗"
-            headline = f"{type_label}日线评分 {score:.1f} 分（{val_brief}），仅适合作为短期做空对冲工具，不按长期多头配置评估。"
+            headline = f"{type_label}当前呈{tech_status}（{val_brief}），仅适合作为短期做空对冲工具，不按长期多头配置评估。"
             next_step = "仅在明确看空对应标的指数或对冲组合回撤时短线使用，并严格设定止盈止损位。"
-        elif held and (state == "weak" or len(risks) >= 2):
-            action, tone, priority = "转弱警惕", "warning", 4
-            action_meaning = "持仓标的当前日线结构走弱或技术风险提示较多，需关注回撤防守"
-            risk_brief = "；".join(risks[:2]) if risks else f"日线评分 {score:.1f} 分偏弱"
-            headline = f"日线评分 {score:.1f} 分，需关注：{risk_brief}（{val_brief}）。"
-            next_step = (
-                f"重点盯住失效价 ${stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。"
-                if stop is not None and stop_dist is not None
-                else (
-                    "高波动基金建议尽快设置止损防守位并控制杠杆仓位。"
-                    if is_leveraged
-                    else "建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。"
-                )
-            )
-        elif watch_only and state == "strong" and not risks:
-            action, tone, priority = "关注买点", "positive", 5
-            action_meaning = "观察标的日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
-            headline = f"日线评分 {score:.1f} 分（结构偏强），无额外技术风险，当前 {val_brief}。"
-            next_step = (
-                f"结合趋势通道与资金节奏，对照预设观察价（目标 ${target:.2f}）评估入场或分批定投节奏。"
-                if target is not None
-                else (
-                    "可结合回撤分位与美债利率环境分批关注回踩买点；杠杆类产品须严设止损。"
-                    if is_fund
-                    else "可结合估值水平设定目标入场或观察价位，或点击生成 Codex 总结作进一步复核。"
-                )
-            )
-        elif held and state == "strong" and not risks:
-            action, tone, priority = "趋势向好", "positive", 6
-            action_meaning = "持仓标的处于上升趋势且无明显技术风险，可顺势持有跟踪"
-            headline = f"日线评分 {score:.1f} 分（结构偏强），趋势与动能健康，当前 {val_brief}。"
-            next_step = (
-                f"继续按计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。"
-                if target is not None and target_dist is not None
-                else (
-                    "趋势结构良好，留意回撤分位与美债利率变动；杠杆产品建议动态上移移动止损。"
-                    if is_fund
-                    else "趋势结构良好，可继续持有并定期检查估值与国债利率变化。"
-                )
-            )
-        elif held:
-            action, tone, priority = "持有观察", "neutral", 7
-            action_meaning = "持仓标的日线结构中性平稳，继续按既定计划跟踪即可"
-            extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
-            headline = f"日线评分 {score:.1f} 分，{extra}，当前 {val_brief}。"
-            next_step = (
-                f"维持计划跟踪：失效价 ${stop:.2f} / 目标价 ${target:.2f}。"
-                if stop is not None and target is not None
-                else "建议补齐计划失效价与目标价，后续收盘按计划复核即可。"
-            )
         else:
-            if state == "weak":
-                action, tone, priority = "弱势观望", "warning", 8
-                action_meaning = "观察标的当前日线走弱或处于空头区，暂不急于介入"
-                headline = f"观察标的日线评分 {score:.1f} 分偏弱，暂不急于介入（{val_brief}）。"
+            fac = factors or {}
+            res_mom = fac.get("residual_mom_z")
+            id_label = fac.get("id_label")
+            traits: list[str] = []
+            if res_mom is not None and not is_inverse:
+                if res_mom >= 0.4:
+                    traits.append("显著跑赢大盘")
+                elif res_mom <= -0.4:
+                    traits.append("相对大盘走弱")
+            if id_label and id_label != "节奏均衡":
+                traits.append(str(id_label))
+            trait_suffix = f"（{' · '.join(traits)}）" if traits else ""
+            rb = (forecast or {}).get("risk_budget") or {}
+            exp_note = (
+                f" 当前波动下参考敞口 {rb['suggested_exposure_ratio']:.2f}x。"
+                if rb.get("available") and rb.get("suggested_exposure_ratio") is not None
+                else ""
+            )
+
+            if held and (state == "weak" or len(risks) >= 2):
+                action, tone, priority = "转弱警惕", "warning", 4
+                action_meaning = "持仓标的当前日线结构走弱或技术风险提示较多，需关注回撤防守"
+                risk_brief = "；".join(risks[:2]) if risks else "趋势与动能走弱"
+                headline = f"持仓需关注：{risk_brief}（{val_brief}）。"
                 next_step = (
-                    "等待指数重新站稳均线且回撤企稳后再评估定投或波段介入节奏。"
-                    if is_fund
-                    else "等待日线重新站稳均线且评分回升至中性以上后再跟踪。"
+                    f"重点盯住失效价 ${stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。{exp_note}"
+                    if stop is not None and stop_dist is not None
+                    else (
+                        f"高波动基金建议尽快设置止损防守位并控制杠杆仓位。{exp_note}"
+                        if is_leveraged
+                        else f"建议补充计划失效价并观察后续日线能否止跌走强，必要时使用 Codex 手动复核。{exp_note}"
+                    )
+                )
+            elif watch_only and state == "strong" and not risks:
+                action, tone, priority = "关注买点", "positive", 5
+                action_meaning = "观察标的日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
+                headline = f"趋势与动能结构偏强{trait_suffix}，无额外技术风险（{val_brief}）。"
+                next_step = (
+                    f"结合趋势通道与参考买点区间（目标 ${target:.2f}）评估分批介入节奏。{exp_note}"
+                    if target is not None
+                    else (
+                        f"可结合回撤分位与美债利率环境分批关注回踩买点；杠杆类产品须严设止损。{exp_note}"
+                        if is_fund
+                        else f"可结合估值水平与参考买点设定观察计划，或点击生成 Codex 总结复核。{exp_note}"
+                    )
+                )
+            elif held and state == "strong" and not risks:
+                action, tone, priority = "趋势向好", "positive", 6
+                action_meaning = "持仓标的处于上升趋势且无明显技术风险，可顺势持有跟踪"
+                headline = f"多头结构完整{trait_suffix}，趋势与量价健康（{val_brief}）。"
+                next_step = (
+                    f"继续按计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。{exp_note}"
+                    if target is not None and target_dist is not None
+                    else (
+                        f"趋势结构良好，留意回撤分位与美债利率变动；可参考移动保护位防范回吐。{exp_note}"
+                        if is_fund
+                        else f"趋势结构良好，可继续持有并跟踪动态移动保护位与估值变化。{exp_note}"
+                    )
+                )
+            elif held:
+                action, tone, priority = "持有观察", "neutral", 7
+                action_meaning = "持仓标的日线结构中性平稳，继续按既定计划跟踪即可"
+                extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
+                headline = f"日线结构中性平稳{trait_suffix}，{extra}（{val_brief}）。"
+                next_step = (
+                    f"维持计划跟踪：失效价 ${stop:.2f} / 目标价 ${target:.2f}。{exp_note}"
+                    if stop is not None and target is not None
+                    else f"建议补齐计划失效价与目标价，后续收盘按计划复核即可。{exp_note}"
                 )
             else:
-                action, tone, priority = "震荡观望", "neutral", 8
-                action_meaning = "观察标的走势中性震荡，等待趋势方向或回踩买点更清晰"
-                headline = f"观察标的日线评分 {score:.1f} 分，整体平稳（{val_brief}）。"
-                next_step = (
-                    "持续跟踪回撤分位、趋势通道与美债利率变化；需要时可手动触发 Codex 总结。"
-                    if is_fund
-                    else "持续跟踪后续收盘评分变化及估值性价比；需要时可手动触发 Codex 总结。"
-                )
+                if state == "weak":
+                    action, tone, priority = "弱势观望", "warning", 8
+                    action_meaning = "观察标的当前日线走弱或处于空头区，暂不急于介入"
+                    headline = f"观察标的趋势结构偏弱{trait_suffix}，暂不急于介入（{val_brief}）。"
+                    next_step = (
+                        "等待指数重新站稳均线且回撤企稳后再评估定投或波段介入节奏。"
+                        if is_fund
+                        else "等待日线重新站稳均线且动量企稳回升后再跟踪。"
+                    )
+                else:
+                    action, tone, priority = "震荡观望", "neutral", 8
+                    action_meaning = "观察标的走势中性震荡，等待趋势方向或回踩买点更清晰"
+                    headline = f"观察标的走势中性震荡{trait_suffix}（{val_brief}）。"
+                    next_step = (
+                        "持续跟踪回撤分位、趋势通道与美债利率变化；需要时可手动触发 Codex 总结。"
+                        if is_fund
+                        else "持续跟踪趋势方向演变及估值性价比；需要时可手动触发 Codex 总结。"
+                    )
 
         return {
             "action": action,
@@ -1178,6 +1296,7 @@ class Monitor:
         if prov_bar is None:
             return {"available": False, "reason": "当前最新报价已反映在最近已确认收盘日线中"}
 
+        macro_data = self.macro_regime()
         cache_sig = (
             id(frame),
             basis_kind,
@@ -1190,6 +1309,7 @@ class Monitor:
             stock["long_plan"].get("target"),
             allocation.broker_quantity,
             (stock.get("primary") or {}).get("rule_version", ""),
+            (macro_data.get("risk_gauge") or {}).get("red_count"),
         )
         with self.frame_lock:
             cached = self.live_eval_cache.get((mode, symbol))
@@ -1226,9 +1346,19 @@ class Monitor:
             "target_distance_percent": ((prov_close / target - 1) * 100) if prov_close and target else None,
         }
         instrument = stock["instrument"]
+        is_fund = bool(instrument.get("is_fund"))
         research = stock["research"]
+        valuation = self.valuations.get(symbol, {}) if mode == "live" else (research.get("valuation") or {})
         prov_wave_trend = compute_wave_trend(prov_frame, prov_summary)
         prov_fund_metrics = compute_fund_metrics(prov_frame, prov_summary)
+        prov_factors = compute_academic_factors(
+            prov_frame,
+            spy_frame=self._spy_frame(mode),
+            valuation=valuation,
+            is_fund=is_fund,
+            is_leveraged=bool(instrument.get("is_leveraged")),
+        )
+        self._append_academic_risks(prov_summary, prov_factors, is_fund=is_fund)
         prov_forecast = compute_forecast(
             prov_frame,
             prov_summary,
@@ -1236,6 +1366,9 @@ class Monitor:
             prov_long_plan,
             instrument=instrument,
             fund_metrics=prov_fund_metrics,
+            factors=prov_factors,
+            wave_trend=prov_wave_trend,
+            macro=macro_data,
         )
         prov_verdict = self._build_verdict(
             allocation,
@@ -1244,6 +1377,8 @@ class Monitor:
             prov_long_plan,
             instrument=instrument,
             fund_metrics=prov_fund_metrics,
+            factors=prov_factors,
+            forecast=prov_forecast,
         )
 
         # 提取当日试算 K 线完整指标行，便于在试算口径下同步在 K 线图延续均线/布林/MACD/RSI
@@ -1294,6 +1429,7 @@ class Monitor:
             "prev_rating_label": base_rating.get("label") or "",
             "wave_trend": prov_wave_trend,
             "fund_metrics": prov_fund_metrics,
+            "academic_factors": prov_factors,
             "verdict": prov_verdict,
             "long_plan": prov_long_plan,
             "live_row": live_row,
@@ -1567,6 +1703,9 @@ class Monitor:
                     frame = await asyncio.to_thread(enrich, all_bars, "day", now, self.settings.rules)
                     with self.frame_lock:
                         self.macro_frames[("live", sym)] = frame
+                        if sym == "SPY.US":
+                            for key in [k for k in self.academic_factors if k[0] == "live"]:
+                                self.academic_factors.pop(key, None)
                     updated = True
                 self.macro_benchmark_retry_at[sym] = time.monotonic() + 3600
             except asyncio.CancelledError:

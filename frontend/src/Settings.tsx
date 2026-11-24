@@ -586,6 +586,26 @@ export default function SettingsPanel({
                         </span>
                       ))}
                     </div>
+                    <div className="setting-row">
+                      <div>
+                        <b>学术升级推荐权重（fusion-2.0.0）</b>
+                        <small>
+                          趋势 45% + 动量 40% + 10日平滑量价 15%（降低单日成交噪音）
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => {
+                          patch("rules", "trend_weight", 0.45);
+                          patch("rules", "momentum_weight", 0.4);
+                          patch("rules", "volume_weight", 0.15);
+                          notify("已预填推荐权重，请点击右下角「保存设置」生效");
+                        }}
+                      >
+                        恢复推荐权重
+                      </button>
+                    </div>
                     <p className="muted">
                       权重之和必须为1。指标仅使用已确认K线；缺失值和未完成窗口不会被补零。
                     </p>

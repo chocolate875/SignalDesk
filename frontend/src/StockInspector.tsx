@@ -35,6 +35,7 @@ import {
   labels,
   ticker,
   time,
+  type AcademicFactors,
   type Analysis,
   type Dashboard,
   type EvalMode,
@@ -77,9 +78,11 @@ const scoreTone = (score: number | null | undefined, state?: string) =>
 function PlanRangeBar({
   stock,
   onEditPlan,
+  onAdoptTrailingStop,
 }: {
   stock: Stock;
   onEditPlan: () => void;
+  onAdoptTrailingStop?: (stopLoss: number) => void;
 }) {
   const stop = stock.long_plan?.stop ?? null;
   const target = stock.long_plan?.target ?? null;
@@ -91,6 +94,13 @@ function PlanRangeBar({
 
   const stopDist = stock.long_plan?.stop_distance_percent;
   const targetDist = stock.long_plan?.target_distance_percent;
+  const rb = stock.forecast?.risk_budget;
+  const canAdoptTrailing = Boolean(
+    rb?.available &&
+      rb.trailing_stop != null &&
+      onAdoptTrailingStop &&
+      (stop == null || rb.trailing_stop > stop),
+  );
 
   const points = [stop, cost, close, target].filter(
     (v): v is number => v != null && Number.isFinite(v),
@@ -223,6 +233,29 @@ function PlanRangeBar({
           </button>
         </div>
       )}
+
+      {rb?.available && rb.trailing_stop != null && (
+        <div
+          className={`trailing-stop-strip ${rb.trailing_breached ? "breached" : ""}`}
+          title="近60日峰值减去2.5×ATR14的客观移动保护位（防盈利回吐参考）"
+        >
+          <span>
+            60日峰值 <b>${fmt(rb.peak_60d, 2)}</b> · 移动保护{" "}
+            <b>${fmt(rb.trailing_stop, 2)}</b>
+            {rb.trailing_breached && <em>（已跌破）</em>}
+          </span>
+          {canAdoptTrailing && (
+            <button
+              type="button"
+              className="trailing-adopt-btn"
+              onClick={() => onAdoptTrailingStop!(rb.trailing_stop!)}
+              title="将移动保护价预填为计划失效价"
+            >
+              采纳保护
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -282,6 +315,8 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
     .map((k) => ext.sessions?.[k])
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
 
+  const tug = ext.tug_of_war;
+
   return (
     <section
       className={`insp-card ext-card-compact tone-${tone}`}
@@ -292,6 +327,34 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
         <span className={`verdict-chip tone-${tone}`}>{shortTag}</span>
       </div>
       <p className="ext-concise-line">{conclusion}</p>
+      {tug?.available && (
+        <div
+          className={`ext-tug-strip ${tug.state === "night_pump_day_dump" ? "warn" : ""}`}
+          title={tug.warning || "近20日隔夜(昨收→今开)与盘中(今开→今收)累计表现拆解"}
+        >
+          <span>
+            近20日 隔夜{" "}
+            <b
+              className={
+                (tug.overnight_20d_pct ?? 0) >= 0 ? "quote-up" : "quote-down"
+              }
+            >
+              {(tug.overnight_20d_pct ?? 0) >= 0 ? "+" : ""}
+              {fmt(tug.overnight_20d_pct, 1)}%
+            </b>{" "}
+            · 盘中{" "}
+            <b
+              className={
+                (tug.intraday_20d_pct ?? 0) >= 0 ? "quote-up" : "quote-down"
+              }
+            >
+              {(tug.intraday_20d_pct ?? 0) >= 0 ? "+" : ""}
+              {fmt(tug.intraday_20d_pct, 1)}%
+            </b>
+          </span>
+          {tug.label && <em>{tug.label}</em>}
+        </div>
+      )}
       {isLive && ext.triggers.length > 1 && (
         <p className="ext-concise-sub">{ext.triggers[1]}</p>
       )}
@@ -353,12 +416,13 @@ function ForecastCard({
   onApplyForecastLevels,
 }: {
   stock: Stock;
-  onApplyForecastLevels: (stopLoss: number, sellLow: number) => void;
+  onApplyForecastLevels: (stopLoss: number, sellLow?: number | null) => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const forecast = stock.forecast;
   const rating = forecast?.rating;
   const levels = forecast?.levels;
+  const rb = forecast?.risk_budget;
   const available = Boolean(
     forecast && levels?.available && rating?.available,
   );
@@ -424,6 +488,11 @@ function ForecastCard({
             >
               <span className="source-pill">{levels!.position_label}</span>
               <span className="muted-tag">置信度 {rating!.confidence}</span>
+              {rb?.available && rb.suggested_exposure_ratio != null && (
+                <span className="exposure-pill" title={rb.note}>
+                  敞口 {fmt(rb.suggested_exposure_ratio, 2)}x
+                </span>
+              )}
               {guardrailCount > 0 && (
                 <button
                   type="button"
@@ -513,20 +582,22 @@ function ForecastCard({
   );
 }
 
-/** 日线结构评分独立模块：一级展示总分与三维进度条，二级收纳注脚与原始技术指标 */
+/** 日线结构评分与学术因子模块：一级展示总分、三维进度条与 2×3 学术因子微网格，二级收纳维度解读与辅助指标 */
 function DailyScoreCard({
   activeSummary,
   dimensionNotes,
   isLiveEvalView,
+  academicFactors,
 }: {
   activeSummary: Summary | null;
   dimensionNotes: Record<string, string>;
   isLiveEvalView: boolean;
+  academicFactors?: AcademicFactors | null;
 }) {
   return (
     <section className="insp-card">
       <div className="insp-card-head">
-        <h3>日线结构评分</h3>
+        <h3>结构评分与学术因子</h3>
         <span className="muted-tag">
           {isLiveEvalView
             ? "实时试算 · 未收盘"
@@ -593,9 +664,113 @@ function DailyScoreCard({
         })}
       </div>
 
+      {academicFactors?.available && (
+        <div className="acad-grid" aria-label="核心学术因子面板">
+          <div
+            className="acad-cell"
+            title="Blitz 残差动量（剔除SPY Beta，不含6–12月自身截距）：正值越强代表慢牛特质超额收益越稳健"
+          >
+            <span>残差动量</span>
+            <strong
+              className={
+                academicFactors.residual_mom_z == null
+                  ? ""
+                  : academicFactors.residual_mom_z >= 0.4
+                    ? "positive"
+                    : academicFactors.residual_mom_z <= -0.5
+                      ? "amber-text"
+                      : ""
+              }
+            >
+              {academicFactors.residual_mom_z != null
+                ? `${academicFactors.residual_mom_z >= 0 ? "+" : ""}${fmt(academicFactors.residual_mom_z, 2)}`
+                : "—"}
+            </strong>
+          </div>
+          <div
+            className="acad-cell"
+            title={`Da-Gurun-Warachka 信息离散度 FIP（当前 ID=${fmt(academicFactors.info_discreteness, 2)}）：负值代表高频小碎步持续上涨，正值多由单日脉冲驱动`}
+          >
+            <span>趋势连续度</span>
+            <strong
+              className={
+                academicFactors.info_discreteness == null
+                  ? ""
+                  : academicFactors.info_discreteness <= -0.05
+                    ? "positive"
+                    : academicFactors.info_discreteness >= 0.1
+                      ? "amber-text"
+                      : ""
+              }
+            >
+              {academicFactors.id_label ?? "—"}
+              {academicFactors.info_discreteness != null
+                ? ` (${fmt(academicFactors.info_discreteness, 2)})`
+                : ""}
+            </strong>
+          </div>
+          <div
+            className="acad-cell"
+            title={`George-Hwang 52周高点比：现价 / 近一年最高价 ($${fmt(academicFactors.high_52w, 2)})，越高越贴近主升强趋势锚点`}
+          >
+            <span>52W高点比</span>
+            <strong>
+              {academicFactors.high_52w_ratio != null
+                ? `${fmt(academicFactors.high_52w_ratio * 100, 1)}%`
+                : "—"}
+            </strong>
+          </div>
+          <div
+            className="acad-cell"
+            title={`Yang-Zhang 60日年化波动率（20日 ${fmt(academicFactors.yang_zhang_hv20_pct, 1)}%）：融合隔夜跳空与日内振幅的高效真实波动估计`}
+          >
+            <span>Yang-Zhang波动</span>
+            <strong
+              className={
+                academicFactors.yang_zhang_hv60_pct != null &&
+                academicFactors.yang_zhang_hv60_pct >= 55
+                  ? "amber-text"
+                  : ""
+              }
+            >
+              {academicFactors.yang_zhang_hv60_pct != null
+                ? `${fmt(academicFactors.yang_zhang_hv60_pct, 1)}%`
+                : "—"}
+            </strong>
+          </div>
+          <div
+            className="acad-cell"
+            title="Lettau 等下行 Beta（SPY 下跌日条件敏感度）：高于 1.35 说明大盘下跌时倾向放大回撤"
+          >
+            <span>下行Beta</span>
+            <strong
+              className={
+                academicFactors.downside_beta != null &&
+                academicFactors.downside_beta >= 1.35
+                  ? "amber-text"
+                  : ""
+              }
+            >
+              {fmt(academicFactors.downside_beta, 2)}
+            </strong>
+          </div>
+          <div
+            className={`acad-cell ${academicFactors.lottery_overheated ? "warn" : ""}`}
+            title="Bali-Cakici 近21日最大5日均值单日涨幅 MAX5：极端偏高往往对应散户彩票追涨，短期容易回吐"
+          >
+            <span>近月MAX5</span>
+            <strong className={academicFactors.lottery_overheated ? "amber-text" : ""}>
+              {academicFactors.max5_21d_pct != null
+                ? `${fmt(academicFactors.max5_21d_pct, 1)}%`
+                : "—"}
+            </strong>
+          </div>
+        </div>
+      )}
+
       <details className="raw-indicators">
         <summary>
-          <span>展开维度解读与原始技术指标</span>
+          <span>展开维度解读与技术明细</span>
           <ChevronDown size={15} />
         </summary>
         <div className="dim-notes-drawer">
@@ -634,24 +809,6 @@ function DailyScoreCard({
               2,
               "当日成交量 ÷ 近20日均量：> 1.5 为显著放量，< 0.7 为明显缩量",
             ],
-            [
-              "20日 Z-score",
-              "zscore20",
-              2,
-              "收盘价偏离20日均线的标准差倍数：> +2 短期偏热，< -2 短期超跌偏离",
-            ],
-            [
-              "20日时序排名",
-              "rank20",
-              2,
-              "收盘价在近20个交易日中的相对百分位（0–1）：越接近 1 越靠近20日高点",
-            ],
-            [
-              "20日量价相关",
-              "corr20",
-              2,
-              "近20日涨跌幅与成交量变化的相关系数（-1 到 +1）：正值代表放量上涨、缩量回调的健康量价配合",
-            ],
           ].map(([label, key, digits, tip]) => (
             <div key={String(key)} title={String(tip)}>
               <dt>{label}</dt>
@@ -663,10 +820,30 @@ function DailyScoreCard({
               </dd>
             </div>
           ))}
+          <div title="近60日收益率已实现偏度：正偏极端暴涨后多现均值回归，微负或温和正偏更利于稳健延续">
+            <dt>近60日偏度</dt>
+            <dd>{fmt(academicFactors?.realized_skew_60d, 2)}</dd>
+          </div>
+          <div title="近120日相对标普500 SPY 的系统性 Beta 敏感度">
+            <dt>相对SPY Beta</dt>
+            <dd>{fmt(academicFactors?.beta_spy, 2)}</dd>
+          </div>
+          <div title="近20日 Amihud 非流动性冲击（越小代表大资金进出越顺畅）">
+            <dt>Amihud冲击</dt>
+            <dd>{fmt(academicFactors?.amihud_20d, 3)}</dd>
+          </div>
         </dl>
       </details>
     </section>
   );
+}
+
+function formatMarketCap(cap: number | null | undefined): string | null {
+  if (cap == null || !Number.isFinite(cap) || cap <= 0) return null;
+  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}T`;
+  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(1)}B`;
+  if (cap >= 1e6) return `$${(cap / 1e6).toFixed(0)}M`;
+  return `$${cap.toFixed(0)}`;
 }
 
 /** 估值与资产特征独立模块：个股自动展示估值与美债对照，ETF 自动展示基金与指数特征 */
@@ -832,15 +1009,23 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
           </strong>
         </div>
       </div>
-      <p className="val-footnote">
-        盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%
-        {stock.research?.real_yield_gap_pp != null &&
-        stock.research?.real_ten_year != null
-          ? ` · 实际利率利差（减 10Y TIPS ${fmt(stock.research.real_ten_year, 2)}%）${stock.research.real_yield_gap_pp >= 0 ? "+" : ""}${fmt(stock.research.real_yield_gap_pp, 2)}pp`
-          : ""}
-        （取数 {time(stock.research?.valuation?.fetched_at)}
-        ）。名义与实际利差仅作收益率水平参照，非预期回报。
-      </p>
+      {(() => {
+        const capText = formatMarketCap(stock.research?.valuation?.market_cap);
+        const turnPct = stock.research?.valuation?.turnover_rate_pct;
+        return (
+          <p className="val-footnote">
+            盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%
+            {stock.research?.real_yield_gap_pp != null &&
+            stock.research?.real_ten_year != null
+              ? ` · 实际利率利差（减 10Y TIPS ${fmt(stock.research.real_ten_year, 2)}%）${stock.research.real_yield_gap_pp >= 0 ? "+" : ""}${fmt(stock.research.real_yield_gap_pp, 2)}pp`
+              : ""}
+            {capText ? ` · 总市值 ${capText}` : ""}
+            {turnPct != null ? ` · 换手率 ${fmt(turnPct, 2)}%` : ""}
+            （取数 {time(stock.research?.valuation?.fetched_at)}
+            ）。名义与实际利差仅作收益率水平参照，非预期回报。
+          </p>
+        );
+      })()}
     </section>
   );
 }
@@ -1086,7 +1271,7 @@ export default function StockInspector({
   status: string;
   cooldownMinutes: number;
   onEditPlan: () => void;
-  onApplyForecastLevels: (stopLoss: number, sellLow: number) => void;
+  onApplyForecastLevels: (stopLoss: number, sellLow?: number | null) => void;
   onAnalyze: () => void;
   onPreview: () => void;
   onSelectSymbol: (symbol: string) => void;
@@ -1163,13 +1348,20 @@ export default function StockInspector({
       case "extended_hours":
         return hasExtendedHours ? <ExtendedHoursCard stock={stock} /> : null;
       case "plan_range":
-        return <PlanRangeBar stock={stock} onEditPlan={onEditPlan} />;
+        return (
+          <PlanRangeBar
+            stock={stock}
+            onEditPlan={onEditPlan}
+            onAdoptTrailingStop={(s) => onApplyForecastLevels(s, null)}
+          />
+        );
       case "daily_score":
         return (
           <DailyScoreCard
             activeSummary={activeSummary}
             dimensionNotes={dimensionNotes}
             isLiveEvalView={isLiveEvalView}
+            academicFactors={stock.academic_factors}
           />
         );
       case "valuation_profile":

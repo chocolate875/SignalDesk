@@ -73,10 +73,55 @@ export type FundMetrics = {
   max_drawdown_pct: number | null;
   hv20_pct: number | null;
   hv60_pct: number | null;
+  yang_zhang_hv20_pct?: number | null;
+  yang_zhang_hv60_pct?: number | null;
   ma200_gap_pct: number | null;
   return_20d_pct: number | null;
   return_60d_pct: number | null;
   return_252d_pct: number | null;
+};
+export type TugOfWarSummary = {
+  available: boolean;
+  overnight_20d_pct: number | null;
+  intraday_20d_pct: number | null;
+  overnight_60d_pct?: number | null;
+  intraday_60d_pct?: number | null;
+  state: string | null;
+  label: string | null;
+  warning: string;
+};
+export type AcademicFactors = {
+  available: boolean;
+  window_days: number;
+  yang_zhang_hv20_pct: number | null;
+  yang_zhang_hv60_pct: number | null;
+  high_52w: number | null;
+  low_52w?: number | null;
+  high_52w_ratio: number | null;
+  drawdown_52w_pct: number | null;
+  residual_mom_z: number | null;
+  residual_mom_window: string | null;
+  alpha_vs_spy_60d_pct: number | null;
+  beta_spy: number | null;
+  info_discreteness: number | null;
+  id_label: string | null;
+  overnight_20d_pct: number | null;
+  intraday_20d_pct: number | null;
+  overnight_60d_pct?: number | null;
+  intraday_60d_pct?: number | null;
+  tug_of_war_state: string | null;
+  tug_of_war_label: string | null;
+  tug_of_war_warning: string;
+  max5_21d_pct: number | null;
+  lottery_overheated: boolean;
+  downside_beta: number | null;
+  realized_skew_60d: number | null;
+  amihud_20d: number | null;
+  avg_dollar_vol_20d?: number | null;
+  illiquid_flag: boolean;
+  turnover_rate_pct: number | null;
+  market_cap: number | null;
+  high_turnover_flag: boolean;
 };
 export type ExtendedSessionQuote = {
   session: "overnight" | "pre" | "post" | string;
@@ -117,6 +162,7 @@ export type ExtendedHoursSummary = {
   headline: string;
   triggers: string[];
   sessions: Record<string, ExtendedSessionQuote>;
+  tug_of_war?: TugOfWarSummary;
   disclaimer: string;
 };
 export type Stock = {
@@ -125,6 +171,7 @@ export type Stock = {
   sleeves: string[];
   instrument?: InstrumentInfo;
   fund_metrics?: FundMetrics;
+  academic_factors?: AcademicFactors;
   extended_hours?: ExtendedHoursSummary;
   long_quantity: number;
   short_quantity: number;
@@ -165,6 +212,8 @@ export type Stock = {
       pe_ttm?: number | null;
       pb?: number | null;
       dividend_yield_pct?: number | null;
+      turnover_rate_pct?: number | null;
+      market_cap?: number | null;
       fetched_at?: string;
       source: string;
       fresh: boolean;
@@ -305,9 +354,24 @@ export type PriceLevels = {
   sell_anchors: string[];
   stop_anchor: string;
 };
+export type RiskBudget = {
+  available: boolean;
+  yz_hv_pct: number | null;
+  vol_scale: number | null;
+  macro_red_count: number | null;
+  macro_multiplier: number | null;
+  macro_label: string;
+  suggested_exposure_ratio: number | null;
+  trailing_stop: number | null;
+  peak_60d: number | null;
+  trailing_drawdown_pct: number | null;
+  trailing_breached: boolean;
+  note: string;
+};
 export type StockForecast = {
   levels: PriceLevels;
   rating: StockRating;
+  risk_budget?: RiskBudget;
 };
 export type Signal = {
   id: string;
@@ -454,6 +518,7 @@ export type LiveEvaluation = {
   prev_rating_label?: string;
   wave_trend?: WaveTrend | null;
   fund_metrics?: FundMetrics | null;
+  academic_factors?: AcademicFactors | null;
   verdict?: Verdict | null;
   long_plan?: Stock["long_plan"] | null;
   live_row?: ChartRow | null;

@@ -79,9 +79,9 @@ class Allocation(StrictModel):
 
 
 class RuleSettings(StrictModel):
-    trend_weight: float = Field(default=0.4, ge=0, le=1)
-    momentum_weight: float = Field(default=0.3, ge=0, le=1)
-    volume_weight: float = Field(default=0.3, ge=0, le=1)
+    trend_weight: float = Field(default=0.45, ge=0, le=1)
+    momentum_weight: float = Field(default=0.40, ge=0, le=1)
+    volume_weight: float = Field(default=0.15, ge=0, le=1)
     strong_threshold: float = Field(default=70, gt=50, le=100)
     weak_threshold: float = Field(default=30, ge=0, lt=50)
     cooldown_minutes: int = Field(default=30, ge=1, le=1440)

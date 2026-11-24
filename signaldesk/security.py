@@ -146,6 +146,8 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
     wt = stock.get("wave_trend", {})
     wt_trend = wt.get("trend", {})
     wt_wave = wt.get("wave", {})
+    academic_factors = stock.get("academic_factors") or {}
+    risk_budget = forecast.get("risk_budget") or {}
     raw_val = research.get("valuation", {})
     safe_valuation = (
         {
@@ -154,6 +156,8 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
             "pe_ttm": None,
             "pb": None,
             "dividend_yield_pct": raw_val.get("dividend_yield_pct"),
+            "turnover_rate_pct": None,
+            "market_cap": None,
             "fetched_at": raw_val.get("fetched_at"),
             "fresh": raw_val.get("fresh"),
             "refresh_failed": raw_val.get("refresh_failed"),
@@ -168,6 +172,8 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
                     "pe_ttm",
                     "pb",
                     "dividend_yield_pct",
+                    "turnover_rate_pct",
+                    "market_cap",
                     "fetched_at",
                     "fresh",
                     "refresh_failed",
@@ -235,8 +241,60 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
                     "risk_reward_ratio",
                 )
             },
+            "risk_budget": {
+                k: risk_budget.get(k)
+                for k in (
+                    "available",
+                    "yz_hv_pct",
+                    "vol_scale",
+                    "macro_red_count",
+                    "macro_multiplier",
+                    "macro_label",
+                    "suggested_exposure_ratio",
+                    "trailing_stop",
+                    "peak_60d",
+                    "trailing_drawdown_pct",
+                    "trailing_breached",
+                )
+            }
+            if risk_budget
+            else {},
         }
         if forecast
+        else {},
+        "academic_factors": {
+            k: academic_factors.get(k)
+            for k in (
+                "available",
+                "window_days",
+                "yang_zhang_hv20_pct",
+                "yang_zhang_hv60_pct",
+                "high_52w",
+                "high_52w_ratio",
+                "drawdown_52w_pct",
+                "residual_mom_z",
+                "residual_mom_window",
+                "alpha_vs_spy_60d_pct",
+                "beta_spy",
+                "info_discreteness",
+                "id_label",
+                "overnight_20d_pct",
+                "intraday_20d_pct",
+                "tug_of_war_state",
+                "tug_of_war_label",
+                "tug_of_war_warning",
+                "max5_21d_pct",
+                "lottery_overheated",
+                "downside_beta",
+                "realized_skew_60d",
+                "amihud_20d",
+                "illiquid_flag",
+                "turnover_rate_pct",
+                "market_cap",
+                "high_turnover_flag",
+            )
+        }
+        if academic_factors
         else {},
         "wave_trend": {
             "available": wt.get("available"),
@@ -350,6 +408,7 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
                     "alert_level",
                     "headline",
                     "triggers",
+                    "tug_of_war",
                 )
             }
             if stock.get("extended_hours")

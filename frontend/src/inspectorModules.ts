@@ -32,23 +32,23 @@ export const INSPECTOR_MODULES: readonly InspectorModuleMeta[] = [
   {
     id: "wave_trend",
     title: "波浪与趋势分析",
-    desc: "平行趋势通道、波浪拐点、失效位与斐波那契测算",
+    desc: "趋势方向、突破/失效边界、平行通道与波浪折叠参考",
   },
   {
     id: "extended_hours",
     title: "盘外动态",
-    desc: "夜盘 / 盘前 / 盘后异动结论与三段明细",
+    desc: "夜盘 / 盘前 / 盘后异动结论与近20日日夜拉锯",
     conditional: true,
   },
   {
     id: "plan_range",
     title: "长期计划价位",
-    desc: "个人失效价、持仓成本与目标观察价区间进度",
+    desc: "个人失效价、持仓成本、目标价与60日峰值移动保护",
   },
   {
     id: "daily_score",
-    title: "日线结构评分",
-    desc: "趋势 / 动量 / 量价三维得分与原始技术指标",
+    title: "结构评分与学术因子",
+    desc: "趋势/动量/量价得分与残差动量、ID、Yang-Zhang 等因子",
   },
   {
     id: "valuation_profile",

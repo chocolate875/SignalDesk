@@ -98,7 +98,10 @@ def test_reference_sma_ema_bollinger_and_score(daily_bars):
     assert last.atr == pytest.approx(atr)
     volumes = np.array([b["volume"] for b in daily_bars])
     assert last.rvol == pytest.approx(volumes[-1] / volumes[-21:-1].mean())
-    assert last.score == pytest.approx(0.4 * last.trend + 0.3 * last.momentum + 0.3 * last.volume_score)
+    assert 0.0 <= last.trend <= 100.0
+    assert 0.0 <= last.momentum <= 100.0
+    assert 0.0 <= last.volume_score <= 100.0
+    assert last.score == pytest.approx(0.45 * last.trend + 0.40 * last.momentum + 0.15 * last.volume_score)
     assert frame.iloc[:199].score.isna().all()
     assert frame.iloc[:13].atr.isna().all()
 
@@ -107,7 +110,7 @@ def test_no_future_leakage_and_unconfirmed_bar(daily_bars):
     now = datetime(2028, 1, 1, tzinfo=timezone.utc)
     full = enrich(daily_bars, "day", now, RuleSettings())
     prefix = enrich(daily_bars[:260], "day", now, RuleSettings())
-    columns = ["score", "ema20", "rsi", "rvol", "zscore20", "rank20", "corr20"]
+    columns = ["score", "ema20", "rsi", "rvol", "trend", "momentum", "volume_score"]
     pd.testing.assert_frame_equal(full.loc[:259, columns], prefix[columns])
     changed = [dict(b) for b in daily_bars]
     changed[-1]["confirmed"] = False
