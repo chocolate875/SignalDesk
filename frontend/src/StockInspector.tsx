@@ -1,5 +1,7 @@
 import {
+  ArrowDown,
   ArrowDownRight,
+  ArrowUp,
   ArrowUpRight,
   Bell,
   Bot,
@@ -8,16 +10,26 @@ import {
   CircleDot,
   Eye,
   Gauge,
+  GripVertical,
   LoaderCircle,
   LockKeyhole,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   TriangleAlert,
+  X,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import WaveTrendCard from "./WaveTrendSection";
+import {
+  DEFAULT_INSPECTOR_ORDER,
+  INSPECTOR_MODULE_MAP,
+  useInspectorLayout,
+  type InspectorLayoutConfig,
+  type InspectorModuleId,
+} from "./inspectorModules";
 import {
   fmt,
   labels,
@@ -501,6 +513,539 @@ function ForecastCard({
   );
 }
 
+/** 日线结构评分独立模块：一级展示总分与三维进度条，二级收纳注脚与原始技术指标 */
+function DailyScoreCard({
+  activeSummary,
+  dimensionNotes,
+  isLiveEvalView,
+}: {
+  activeSummary: Summary | null;
+  dimensionNotes: Record<string, string>;
+  isLiveEvalView: boolean;
+}) {
+  return (
+    <section className="insp-card">
+      <div className="insp-card-head">
+        <h3>日线结构评分</h3>
+        <span className="muted-tag">
+          {isLiveEvalView
+            ? "实时试算 · 未收盘"
+            : activeSummary?.as_of
+              ? time(activeSummary.as_of, "America/New_York").slice(0, 10)
+              : "待更新"}
+        </span>
+      </div>
+      <div className="insp-score-row">
+        <div
+          className={`insp-score-big ${scoreTone(activeSummary?.score, activeSummary?.state)}`}
+        >
+          {fmt(activeSummary?.score, 1)}
+          <small>/100</small>
+        </div>
+        <span
+          className={`state-badge ${scoreTone(activeSummary?.score, activeSummary?.state)}`}
+        >
+          {labels[activeSummary?.state ?? "unavailable"]}
+        </span>
+      </div>
+
+      <div className="dim-list">
+        {Object.entries(dimensionNames).map(([key, label]) => {
+          const val = activeSummary?.dimensions?.[key];
+          const contrib = activeSummary?.contributions?.[key];
+          const delta = activeSummary?.contribution_changes?.[key];
+          const weight = activeSummary?.weights?.[key];
+          const note =
+            dimensionNotes[key] ??
+            activeSummary?.evidence?.[
+              Object.keys(dimensionNames).indexOf(key)
+            ] ??
+            "暂无有效比较";
+          return (
+            <div className="dim-item" key={key} title={note}>
+              <div className="dim-top">
+                <span className="dim-label">
+                  <i style={{ background: dimensionColors[key] }} />
+                  {label}
+                </span>
+                <span className="dim-vals">
+                  <b>{fmt(val, 1)}</b>
+                  <small>
+                    {weight != null
+                      ? `×${fmt(weight * 100, 0)}% = ${fmt(contrib, 1)}`
+                      : ""}
+                    {delta != null
+                      ? ` (${delta >= 0 ? "+" : ""}${fmt(delta, 1)})`
+                      : ""}
+                  </small>
+                </span>
+              </div>
+              <div className="dim-bar">
+                <i
+                  style={{
+                    width: `${Math.max(0, Math.min(100, val ?? 0))}%`,
+                    background: dimensionColors[key],
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <details className="raw-indicators">
+        <summary>
+          <span>展开维度解读与原始技术指标</span>
+          <ChevronDown size={15} />
+        </summary>
+        <div className="dim-notes-drawer">
+          {Object.entries(dimensionNames).map(([key, label]) => {
+            const note =
+              dimensionNotes[key] ??
+              activeSummary?.evidence?.[
+                Object.keys(dimensionNames).indexOf(key)
+              ] ??
+              "暂无有效比较";
+            return (
+              <p key={key}>
+                <b>{label}：</b>
+                {note}
+              </p>
+            );
+          })}
+        </div>
+        <dl>
+          {[
+            [
+              "RSI14",
+              "rsi",
+              2,
+              "14日相对强弱指标（0–100）：> 70 超买防追高，< 30 超卖留意企稳，50 为多空分界",
+            ],
+            [
+              "ATR14",
+              "atr",
+              2,
+              "14日平均真实波幅（美元）：衡量该股日常正常波动幅度，用于测算合理止损与买卖区间",
+            ],
+            [
+              "相对量能 RVOL",
+              "rvol",
+              2,
+              "当日成交量 ÷ 近20日均量：> 1.5 为显著放量，< 0.7 为明显缩量",
+            ],
+            [
+              "20日 Z-score",
+              "zscore20",
+              2,
+              "收盘价偏离20日均线的标准差倍数：> +2 短期偏热，< -2 短期超跌偏离",
+            ],
+            [
+              "20日时序排名",
+              "rank20",
+              2,
+              "收盘价在近20个交易日中的相对百分位（0–1）：越接近 1 越靠近20日高点",
+            ],
+            [
+              "20日量价相关",
+              "corr20",
+              2,
+              "近20日涨跌幅与成交量变化的相关系数（-1 到 +1）：正值代表放量上涨、缩量回调的健康量价配合",
+            ],
+          ].map(([label, key, digits, tip]) => (
+            <div key={String(key)} title={String(tip)}>
+              <dt>{label}</dt>
+              <dd>
+                {fmt(
+                  activeSummary?.indicators?.[String(key)],
+                  Number(digits),
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+    </section>
+  );
+}
+
+/** 估值与资产特征独立模块：个股自动展示估值与美债对照，ETF 自动展示基金与指数特征 */
+function ValuationOrFundCard({ stock }: { stock: Stock }) {
+  if (stock.instrument?.is_fund) {
+    return (
+      <section className="insp-card fund-profile-card">
+        <div className="insp-card-head">
+          <h3>基金与指数特征</h3>
+          <span
+            className={`verdict-chip tone-${
+              stock.instrument.is_leveraged ? "warning" : "neutral"
+            }`}
+          >
+            {stock.instrument.type_label}
+          </span>
+        </div>
+        {stock.instrument.benchmark && (
+          <p className="fund-benchmark">{stock.instrument.benchmark}</p>
+        )}
+        <div className="val-grid">
+          <div
+            className="val-cell"
+            title={
+              stock.fund_metrics?.high_52w != null &&
+              stock.fund_metrics?.low_52w != null
+                ? `近${stock.fund_metrics.window_days}日区间：$${fmt(stock.fund_metrics.low_52w, 2)} – $${fmt(stock.fund_metrics.high_52w, 2)}`
+                : "最新收盘距近1年（252交易日）高点的回撤幅度"
+            }
+          >
+            <small>距52周高点回撤</small>
+            <strong
+              className={
+                stock.fund_metrics?.drawdown_from_high_pct == null
+                  ? ""
+                  : stock.fund_metrics.drawdown_from_high_pct <= -20
+                    ? "amber-text"
+                    : "positive"
+              }
+            >
+              {fmt(stock.fund_metrics?.drawdown_from_high_pct, 1)}
+              <em>%</em>
+            </strong>
+          </div>
+          <div
+            className="val-cell"
+            title="0% 为近1年最低点，100% 为近1年最高点，衡量当前所处价格分位"
+          >
+            <small>近1年价格分位</small>
+            <strong>
+              {fmt(stock.fund_metrics?.range_position_pct, 0)}
+              <em>%</em>
+            </strong>
+          </div>
+          <div
+            className="val-cell"
+            title={
+              stock.fund_metrics?.hv20_pct != null
+                ? `近20日年化波动率 ${fmt(stock.fund_metrics.hv20_pct, 1)}%`
+                : "近60个交易日收益率年化波动率，数值越高波动与杠杆损耗越大"
+            }
+          >
+            <small>60日年化波动率</small>
+            <strong
+              className={
+                stock.fund_metrics?.hv60_pct != null &&
+                stock.fund_metrics.hv60_pct >= 50
+                  ? "amber-text"
+                  : ""
+              }
+            >
+              {fmt(stock.fund_metrics?.hv60_pct, 1)}
+              <em>%</em>
+            </strong>
+          </div>
+          <div
+            className="val-cell"
+            title={
+              stock.fund_metrics?.return_60d_pct != null
+                ? `近20日 ${fmt(stock.fund_metrics.return_20d_pct, 1)}% · 近60日 ${fmt(stock.fund_metrics.return_60d_pct, 1)}%`
+                : "近1年窗口内从阶段高点到低点的最大回撤幅度"
+            }
+          >
+            <small>近1年最大回撤</small>
+            <strong>
+              {fmt(stock.fund_metrics?.max_drawdown_pct, 1)}
+              <em>%</em>
+            </strong>
+          </div>
+        </div>
+        {stock.instrument.is_leveraged && stock.instrument.risk_notice && (
+          <div className="fund-risk-banner">
+            <TriangleAlert size={14} />
+            <span>{stock.instrument.risk_notice}</span>
+          </div>
+        )}
+        <p className="val-footnote">
+          {stock.research?.valuation?.dividend_yield_pct != null
+            ? `派息率 TTM ${fmt(stock.research.valuation.dividend_yield_pct, 2)}%`
+            : "派息率暂无"}
+          {stock.fund_metrics?.ma200_gap_pct != null
+            ? ` · 相对年线 ${stock.fund_metrics.ma200_gap_pct >= 0 ? "+" : ""}${fmt(stock.fund_metrics.ma200_gap_pct, 1)}%`
+            : ""}
+          。
+          {stock.instrument.is_leveraged
+            ? "杠杆/反向基金派息多含现金利息或结构分配，不按公司盈利评估。"
+            : "指数/行业/商品基金不采用易失真的基金主体 PE/PB 口径。"}
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="insp-card">
+      <div className="insp-card-head">
+        <h3>估值与美债对照</h3>
+        <span
+          className={`fresh-tag ${stock.research?.valuation?.fresh ? "ok" : "stale"}`}
+        >
+          {stock.research?.valuation?.source ?? "券商"} ·{" "}
+          {stock.research?.valuation?.fresh ? "有效" : "待更新"}
+        </span>
+      </div>
+      <div className="val-grid">
+        <div className="val-cell">
+          <small>滚动市盈率 PE</small>
+          <strong>
+            {fmt(stock.research?.valuation?.pe_ttm, 1)}
+            <em>倍</em>
+          </strong>
+        </div>
+        <div className="val-cell">
+          <small>市净率 PB</small>
+          <strong>
+            {fmt(stock.research?.valuation?.pb, 2)}
+            <em>倍</em>
+          </strong>
+        </div>
+        <div className="val-cell">
+          <small>股息率 TTM</small>
+          <strong>
+            {fmt(stock.research?.valuation?.dividend_yield_pct, 2)}
+            <em>%</em>
+          </strong>
+        </div>
+        <div className="val-cell">
+          <small>盈利收益率 − 10Y美债</small>
+          <strong
+            className={
+              stock.research?.yield_gap_pp == null
+                ? ""
+                : stock.research.yield_gap_pp >= 0
+                  ? "positive"
+                  : "amber-text"
+            }
+          >
+            {stock.research?.yield_gap_pp != null &&
+            stock.research.yield_gap_pp >= 0
+              ? "+"
+              : ""}
+            {fmt(stock.research?.yield_gap_pp, 2)}
+            <em>pp</em>
+          </strong>
+        </div>
+      </div>
+      <p className="val-footnote">
+        盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%
+        {stock.research?.real_yield_gap_pp != null &&
+        stock.research?.real_ten_year != null
+          ? ` · 实际利率利差（减 10Y TIPS ${fmt(stock.research.real_ten_year, 2)}%）${stock.research.real_yield_gap_pp >= 0 ? "+" : ""}${fmt(stock.research.real_yield_gap_pp, 2)}pp`
+          : ""}
+        （取数 {time(stock.research?.valuation?.fetched_at)}
+        ）。名义与实际利差仅作收益率水平参照，非预期回报。
+      </p>
+    </section>
+  );
+}
+
+/** 独立风险检查模块 */
+function RiskCheckCard({ activeSummary }: { activeSummary: Summary | null }) {
+  return (
+    <section className="insp-card">
+      <div className="insp-card-head">
+        <h3>
+          <ShieldCheck size={15} />
+          独立风险检查
+        </h3>
+      </div>
+      <div className="risk-list">
+        {activeSummary?.risks?.length ? (
+          activeSummary.risks.map((r) => (
+            <div className="risk-item warn" key={r}>
+              <TriangleAlert size={15} />
+              <span>{r}</span>
+            </div>
+          ))
+        ) : (
+          <div className="risk-item ok">
+            <Check size={15} />
+            <span>
+              {activeSummary?.valid
+                ? "当前规则未标记额外技术风险"
+                : "基础日线或指标数据待补齐"}
+            </span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** 右侧研判模块的自定义显隐与拖拽/按钮排序面板 */
+function InspectorModuleManager({
+  layout,
+  hasExtendedHours,
+  onToggle,
+  onMove,
+  onReorder,
+  onReset,
+  onClose,
+}: {
+  layout: InspectorLayoutConfig;
+  hasExtendedHours: boolean;
+  onToggle: (id: InspectorModuleId) => void;
+  onMove: (id: InspectorModuleId, delta: -1 | 1) => void;
+  onReorder: (fromId: InspectorModuleId, toId: InspectorModuleId) => void;
+  onReset: () => void;
+  onClose: () => void;
+}) {
+  const [draggingId, setDraggingId] = useState<InspectorModuleId | null>(null);
+  const [dragOverId, setDragOverId] = useState<InspectorModuleId | null>(null);
+
+  const isDefault =
+    layout.hidden.length === 0 &&
+    layout.order.every((id, idx) => id === DEFAULT_INSPECTOR_ORDER[idx]);
+
+  return (
+    <section
+      className="insp-card module-mgr-card"
+      aria-label="自定义右侧模块顺序与显示"
+    >
+      <div className="mod-mgr-head">
+        <div>
+          <h3>自定义右侧模块</h3>
+          <small>拖拽手柄或点箭头调序，开关控制显示</small>
+        </div>
+        <button
+          type="button"
+          className="legend-close-btn"
+          onClick={onClose}
+          aria-label="收起模块自定义面板"
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      <div className="mod-mgr-list" role="list">
+        {layout.order.map((id, idx) => {
+          const meta = INSPECTOR_MODULE_MAP[id];
+          if (!meta) return null;
+          const visible = !layout.hidden.includes(id);
+          const isDragging = draggingId === id;
+          const isDragOver = dragOverId === id && draggingId !== id;
+          return (
+            <div
+              key={id}
+              role="listitem"
+              data-config-module-id={id}
+              draggable
+              className={`mod-mgr-row ${visible ? "" : "is-hidden"} ${
+                isDragging ? "dragging" : ""
+              } ${isDragOver ? "drag-over" : ""}`}
+              onDragStart={(e) => {
+                setDraggingId(id);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", id);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (dragOverId !== id) setDragOverId(id);
+              }}
+              onDragLeave={() => {
+                if (dragOverId === id) setDragOverId(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const fromId =
+                  draggingId ||
+                  (e.dataTransfer.getData("text/plain") as InspectorModuleId);
+                if (fromId && fromId !== id) {
+                  onReorder(fromId, id);
+                }
+                setDraggingId(null);
+                setDragOverId(null);
+              }}
+              onDragEnd={() => {
+                setDraggingId(null);
+                setDragOverId(null);
+              }}
+            >
+              <span
+                className="mod-mgr-grip"
+                title="按住拖拽调整模块顺序"
+                aria-hidden="true"
+              >
+                <GripVertical size={14} />
+              </span>
+
+              <button
+                type="button"
+                role="switch"
+                aria-checked={visible}
+                aria-label={`${visible ? "隐藏" : "显示"} ${meta.title}`}
+                className={`mod-switch ${visible ? "on" : ""}`}
+                onClick={() => onToggle(id)}
+              >
+                <span className="mod-switch-thumb" />
+              </button>
+
+              <div className="mod-mgr-info" title={meta.desc}>
+                <span className="mod-mgr-title">
+                  {meta.title}
+                  {id === "extended_hours" && !hasExtendedHours && (
+                    <em>当前无数据</em>
+                  )}
+                </span>
+                <small>{meta.desc}</small>
+              </div>
+
+              <div className="mod-mgr-order-btns">
+                <button
+                  type="button"
+                  className="mod-order-btn"
+                  disabled={idx === 0}
+                  onClick={() => onMove(id, -1)}
+                  aria-label={`上移 ${meta.title}`}
+                  title="上移一位"
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="mod-order-btn"
+                  disabled={idx === layout.order.length - 1}
+                  onClick={() => onMove(id, 1)}
+                  aria-label={`下移 ${meta.title}`}
+                  title="下移一位"
+                >
+                  <ArrowDown size={13} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mod-mgr-foot">
+        <button
+          type="button"
+          className="text-btn"
+          disabled={isDefault}
+          onClick={onReset}
+        >
+          <RotateCcw size={13} />
+          恢复默认
+        </button>
+        <button
+          type="button"
+          className="button secondary mod-mgr-done-btn"
+          onClick={onClose}
+        >
+          完成
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function StockInspector({
   tab,
   onTabChange,
@@ -551,6 +1096,15 @@ export default function StockInspector({
   const [eventFilter, setEventFilter] = useState<"all" | "current" | "risk">(
     "all",
   );
+  const [managerOpen, setManagerOpen] = useState(false);
+  const {
+    layout,
+    toggle: toggleModule,
+    move: moveModule,
+    reorder: reorderModule,
+    reset: resetModules,
+    showAll: showAllModules,
+  } = useInspectorLayout();
 
   const visibleEvents = events.filter((e) => {
     if (eventFilter === "current" && stock) return e.symbol === stock.symbol;
@@ -567,6 +1121,63 @@ export default function StockInspector({
   const isLiveEvalView = evalMode === "live" && hasLiveEval;
   const liveScoreDelta = liveEval?.score_delta;
   const liveRatingLabel = liveEval?.forecast?.rating?.label ?? "";
+
+  const hasExtendedHours = Boolean(
+    stock?.extended_hours?.available && stock?.extended_hours?.price != null,
+  );
+  const hiddenSet = useMemo(() => new Set(layout.hidden), [layout.hidden]);
+  const enabledCount = layout.order.length - layout.hidden.length;
+
+  const liveEvalBtnTitle = (() => {
+    if (!hasLiveEval || !liveEval) {
+      return liveEval?.reason || "当前暂无更新的未收盘行情可试算";
+    }
+    const parts = [`按最新价 $${fmt(liveEval.price, 2)} 临时试算指标、买卖点与波浪`];
+    if (liveScoreDelta != null) {
+      parts.push(
+        `日线分 ${liveScoreDelta >= 0 ? "+" : ""}${fmt(liveScoreDelta, 1)}`,
+      );
+    }
+    if (
+      liveEval.rating_changed &&
+      liveEval.prev_rating_label &&
+      liveRatingLabel
+    ) {
+      parts.push(`${liveEval.prev_rating_label}→${liveRatingLabel}`);
+    }
+    return parts.join(" · ");
+  })();
+
+  const renderModule = (id: InspectorModuleId): ReactNode => {
+    if (!stock) return null;
+    switch (id) {
+      case "forecast":
+        return (
+          <ForecastCard
+            stock={stock}
+            onApplyForecastLevels={onApplyForecastLevels}
+          />
+        );
+      case "wave_trend":
+        return <WaveTrendCard stock={stock} />;
+      case "extended_hours":
+        return hasExtendedHours ? <ExtendedHoursCard stock={stock} /> : null;
+      case "plan_range":
+        return <PlanRangeBar stock={stock} onEditPlan={onEditPlan} />;
+      case "daily_score":
+        return (
+          <DailyScoreCard
+            activeSummary={activeSummary}
+            dimensionNotes={dimensionNotes}
+            isLiveEvalView={isLiveEvalView}
+          />
+        );
+      case "valuation_profile":
+        return <ValuationOrFundCard stock={stock} />;
+      case "risk_check":
+        return <RiskCheckCard activeSummary={activeSummary} />;
+    }
+  };
 
   return (
     <aside className="inspector-panel" aria-label="个股研判与工具">
@@ -608,13 +1219,15 @@ export default function StockInspector({
       <div className="inspector-body">
         {tab === "summary" && stock && (
           <>
-            {mode === "live" && onEvalModeChange && (
-              <section
-                className="insp-card eval-mode-card"
-                aria-label="评估口径切换"
-              >
-                <div className="eval-mode-top">
-                  <div className="eval-mode-seg" role="group" aria-label="指标评估口径">
+            {/* 顶部超紧凑控制栏：左置双口径切换，右置模块显示与排序入口 */}
+            <div className="inspector-ctrl-bar" aria-label="研判口径与模块布局">
+              {mode === "live" && onEvalModeChange ? (
+                <div className="inspector-ctrl-left">
+                  <div
+                    className="eval-mode-seg compact"
+                    role="group"
+                    aria-label="指标评估口径"
+                  >
                     <button
                       type="button"
                       className={!isLiveEvalView ? "active" : ""}
@@ -628,437 +1241,125 @@ export default function StockInspector({
                       className={isLiveEvalView ? "live-active" : ""}
                       disabled={!hasLiveEval}
                       onClick={() => onEvalModeChange("live")}
-                      title={
-                        hasLiveEval
-                          ? "把当前最新未收盘行情临时纳入同一套规则引擎，实时试算指标、评级、买卖点与波浪"
-                          : liveEval?.reason || "当前暂无更新的未收盘行情可试算"
-                      }
+                      title={liveEvalBtnTitle}
                     >
                       {hasLiveEval && <span className="eval-live-dot" />}
-                      最新行情试算
+                      最新试算
                     </button>
                   </div>
                   {isLiveEvalView && onRefreshLiveEval && (
                     <button
                       type="button"
-                      className="eval-refresh-btn"
+                      className="eval-refresh-btn icon-only"
                       disabled={liveEvalBusy}
                       onClick={onRefreshLiveEval}
+                      aria-label="按最新报价重新试算"
                       title="按当前最新报价立即重新试算"
                     >
                       <RefreshCw
-                        size={12}
+                        size={13}
                         className={liveEvalBusy ? "spin" : ""}
                       />
-                      重算
                     </button>
                   )}
                 </div>
-
-                {isLiveEvalView && liveEval ? (
-                  <div
-                    className="eval-mode-banner"
-                    title={
-                      liveEval.disclaimer ||
-                      "未收盘临时预览，仅作盘中决策参考；正式复核与告警仍按收盘确认日线执行。"
-                    }
-                  >
-                    <div className="eval-mode-banner-head">
-                      <span>
-                        {liveEval.basis_label || "盘中试算"} · $
-                        {fmt(liveEval.price, 2)}
-                        {liveEval.change_pct != null
-                          ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 1)}%)`
-                          : ""}
-                      </span>
-                      {liveScoreDelta != null && (
-                        <span className="eval-mode-delta">
-                          评分 {liveScoreDelta >= 0 ? "+" : ""}
-                          {fmt(liveScoreDelta, 1)}
-                        </span>
-                      )}
-                      {liveEval.rating_changed &&
-                        liveEval.prev_rating_label &&
-                        liveRatingLabel && (
-                          <span className="eval-mode-delta">
-                            {liveEval.prev_rating_label}→{liveRatingLabel}
-                          </span>
-                        )}
-                    </div>
-                  </div>
-                ) : hasLiveEval && liveEval ? (
-                  <div className="eval-mode-hint">
-                    <span>
-                      按最新价（${fmt(liveEval.price, 2)}）：
-                      {liveScoreDelta != null
-                        ? `日线分 ${liveScoreDelta >= 0 ? "+" : ""}${fmt(liveScoreDelta, 1)}`
-                        : "可试算"}
-                      {liveEval.rating_changed &&
-                      liveEval.prev_rating_label &&
-                      liveRatingLabel
-                        ? ` · ${liveEval.prev_rating_label}→${liveRatingLabel}`
-                        : ""}
-                    </span>
-                  </div>
-                ) : null}
-              </section>
-            )}
-
-            {stock.extended_hours?.is_live_session && (
-              <ExtendedHoursCard stock={stock} />
-            )}
-
-            <ForecastCard
-              stock={stock}
-              onApplyForecastLevels={onApplyForecastLevels}
-            />
-
-            {!stock.extended_hours?.is_live_session && (
-              <ExtendedHoursCard stock={stock} />
-            )}
-
-            <WaveTrendCard stock={stock} />
-
-            <PlanRangeBar stock={stock} onEditPlan={onEditPlan} />
-
-            <section className="insp-card">
-              <div className="insp-card-head">
-                <h3>日线结构评分</h3>
-                <span className="muted-tag">
-                  {isLiveEvalView
-                    ? "实时试算 · 未收盘"
-                    : activeSummary?.as_of
-                      ? time(activeSummary.as_of, "America/New_York").slice(0, 10)
-                      : "待更新"}
+              ) : (
+                <span className="inspector-ctrl-label">
+                  研判模块 {enabledCount}/{layout.order.length}
                 </span>
-              </div>
-              <div className="insp-score-row">
-                <div
-                  className={`insp-score-big ${scoreTone(activeSummary?.score, activeSummary?.state)}`}
-                >
-                  {fmt(activeSummary?.score, 1)}
-                  <small>/100</small>
-                </div>
-                <span
-                  className={`state-badge ${scoreTone(activeSummary?.score, activeSummary?.state)}`}
-                >
-                  {labels[activeSummary?.state ?? "unavailable"]}
-                </span>
-              </div>
+              )}
 
-              <div className="dim-list">
-                {Object.entries(dimensionNames).map(([key, label]) => {
-                  const val = activeSummary?.dimensions?.[key];
-                  const contrib = activeSummary?.contributions?.[key];
-                  const delta = activeSummary?.contribution_changes?.[key];
-                  const weight = activeSummary?.weights?.[key];
-                  const note =
-                    dimensionNotes[key] ??
-                    activeSummary?.evidence?.[
-                      Object.keys(dimensionNames).indexOf(key)
-                    ] ??
-                    "暂无有效比较";
-                  return (
-                    <div className="dim-item" key={key} title={note}>
-                      <div className="dim-top">
-                        <span className="dim-label">
-                          <i style={{ background: dimensionColors[key] }} />
-                          {label}
-                        </span>
-                        <span className="dim-vals">
-                          <b>{fmt(val, 1)}</b>
-                          <small>
-                            {weight != null
-                              ? `×${fmt(weight * 100, 0)}% = ${fmt(contrib, 1)}`
-                              : ""}
-                            {delta != null
-                              ? ` (${delta >= 0 ? "+" : ""}${fmt(delta, 1)})`
-                              : ""}
-                          </small>
-                        </span>
-                      </div>
-                      <div className="dim-bar">
-                        <i
-                          style={{
-                            width: `${Math.max(0, Math.min(100, val ?? 0))}%`,
-                            background: dimensionColors[key],
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <details className="raw-indicators">
-                <summary>
-                  <span>展开维度解读与原始技术指标</span>
-                  <ChevronDown size={15} />
-                </summary>
-                <div className="dim-notes-drawer">
-                  {Object.entries(dimensionNames).map(([key, label]) => {
-                    const note =
-                      dimensionNotes[key] ??
-                      activeSummary?.evidence?.[
-                        Object.keys(dimensionNames).indexOf(key)
-                      ] ??
-                      "暂无有效比较";
-                    return (
-                      <p key={key}>
-                        <b>{label}：</b>
-                        {note}
-                      </p>
-                    );
-                  })}
-                </div>
-                <dl>
-                  {[
-                    [
-                      "RSI14",
-                      "rsi",
-                      2,
-                      "14日相对强弱指标（0–100）：> 70 超买防追高，< 30 超卖留意企稳，50 为多空分界",
-                    ],
-                    [
-                      "ATR14",
-                      "atr",
-                      2,
-                      "14日平均真实波幅（美元）：衡量该股日常正常波动幅度，用于测算合理止损与买卖区间",
-                    ],
-                    [
-                      "相对量能 RVOL",
-                      "rvol",
-                      2,
-                      "当日成交量 ÷ 近20日均量：> 1.5 为显著放量，< 0.7 为明显缩量",
-                    ],
-                    [
-                      "20日 Z-score",
-                      "zscore20",
-                      2,
-                      "收盘价偏离20日均线的标准差倍数：> +2 短期偏热，< -2 短期超跌偏离",
-                    ],
-                    [
-                      "20日时序排名",
-                      "rank20",
-                      2,
-                      "收盘价在近20个交易日中的相对百分位（0–1）：越接近 1 越靠近20日高点",
-                    ],
-                    [
-                      "20日量价相关",
-                      "corr20",
-                      2,
-                      "近20日涨跌幅与成交量变化的相关系数（-1 到 +1）：正值代表放量上涨、缩量回调的健康量价配合",
-                    ],
-                  ].map(([label, key, digits, tip]) => (
-                    <div key={String(key)} title={String(tip)}>
-                      <dt>{label}</dt>
-                      <dd>
-                        {fmt(
-                          activeSummary?.indicators?.[String(key)],
-                          Number(digits),
-                        )}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </details>
-            </section>
-
-            {stock.instrument?.is_fund ? (
-              <section className="insp-card fund-profile-card">
-                <div className="insp-card-head">
-                  <h3>基金与指数特征</h3>
-                  <span
-                    className={`verdict-chip tone-${
-                      stock.instrument.is_leveraged ? "warning" : "neutral"
-                    }`}
-                  >
-                    {stock.instrument.type_label}
-                  </span>
-                </div>
-                {stock.instrument.benchmark && (
-                  <p className="fund-benchmark">{stock.instrument.benchmark}</p>
+              <button
+                type="button"
+                className={`module-mgr-btn ${managerOpen ? "active" : ""}`}
+                onClick={() => setManagerOpen((v) => !v)}
+                aria-expanded={managerOpen}
+                aria-label="自定义右侧模块显示与顺序"
+                title="自定义右侧各功能模块是否显示及上下顺序"
+              >
+                <SlidersHorizontal size={13} />
+                <span>模块</span>
+                {layout.hidden.length > 0 && (
+                  <em className="mod-count-pill">
+                    {enabledCount}/{layout.order.length}
+                  </em>
                 )}
-                <div className="val-grid">
-                  <div
-                    className="val-cell"
-                    title={
-                      stock.fund_metrics?.high_52w != null &&
-                      stock.fund_metrics?.low_52w != null
-                        ? `近${stock.fund_metrics.window_days}日区间：$${fmt(stock.fund_metrics.low_52w, 2)} – $${fmt(stock.fund_metrics.high_52w, 2)}`
-                        : "最新收盘距近1年（252交易日）高点的回撤幅度"
-                    }
-                  >
-                    <small>距52周高点回撤</small>
-                    <strong
-                      className={
-                        stock.fund_metrics?.drawdown_from_high_pct == null
-                          ? ""
-                          : stock.fund_metrics.drawdown_from_high_pct <= -20
-                            ? "amber-text"
-                            : "positive"
-                      }
-                    >
-                      {fmt(stock.fund_metrics?.drawdown_from_high_pct, 1)}
-                      <em>%</em>
-                    </strong>
-                  </div>
-                  <div
-                    className="val-cell"
-                    title="0% 为近1年最低点，100% 为近1年最高点，衡量当前所处价格分位"
-                  >
-                    <small>近1年价格分位</small>
-                    <strong>
-                      {fmt(stock.fund_metrics?.range_position_pct, 0)}
-                      <em>%</em>
-                    </strong>
-                  </div>
-                  <div
-                    className="val-cell"
-                    title={
-                      stock.fund_metrics?.hv20_pct != null
-                        ? `近20日年化波动率 ${fmt(stock.fund_metrics.hv20_pct, 1)}%`
-                        : "近60个交易日收益率年化波动率，数值越高波动与杠杆损耗越大"
-                    }
-                  >
-                    <small>60日年化波动率</small>
-                    <strong
-                      className={
-                        stock.fund_metrics?.hv60_pct != null &&
-                        stock.fund_metrics.hv60_pct >= 50
-                          ? "amber-text"
-                          : ""
-                      }
-                    >
-                      {fmt(stock.fund_metrics?.hv60_pct, 1)}
-                      <em>%</em>
-                    </strong>
-                  </div>
-                  <div
-                    className="val-cell"
-                    title={
-                      stock.fund_metrics?.return_60d_pct != null
-                        ? `近20日 ${fmt(stock.fund_metrics.return_20d_pct, 1)}% · 近60日 ${fmt(stock.fund_metrics.return_60d_pct, 1)}%`
-                        : "近1年窗口内从阶段高点到低点的最大回撤幅度"
-                    }
-                  >
-                    <small>近1年最大回撤</small>
-                    <strong>
-                      {fmt(stock.fund_metrics?.max_drawdown_pct, 1)}
-                      <em>%</em>
-                    </strong>
-                  </div>
-                </div>
-                {stock.instrument.is_leveraged &&
-                  stock.instrument.risk_notice && (
-                    <div className="fund-risk-banner">
-                      <TriangleAlert size={14} />
-                      <span>{stock.instrument.risk_notice}</span>
-                    </div>
+              </button>
+            </div>
+
+            {isLiveEvalView && liveEval && (
+              <div
+                className="eval-mode-banner"
+                title={
+                  liveEval.disclaimer ||
+                  "未收盘临时预览，仅作盘中决策参考；正式复核与告警仍按收盘确认日线执行。"
+                }
+              >
+                <div className="eval-mode-banner-head">
+                  <span>
+                    {liveEval.basis_label || "盘中试算"} · $
+                    {fmt(liveEval.price, 2)}
+                    {liveEval.change_pct != null
+                      ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 1)}%)`
+                      : ""}
+                  </span>
+                  {liveScoreDelta != null && (
+                    <span className="eval-mode-delta">
+                      评分 {liveScoreDelta >= 0 ? "+" : ""}
+                      {fmt(liveScoreDelta, 1)}
+                    </span>
                   )}
-                <p className="val-footnote">
-                  {stock.research?.valuation?.dividend_yield_pct != null
-                    ? `派息率 TTM ${fmt(stock.research.valuation.dividend_yield_pct, 2)}%`
-                    : "派息率暂无"}
-                  {stock.fund_metrics?.ma200_gap_pct != null
-                    ? ` · 相对年线 ${stock.fund_metrics.ma200_gap_pct >= 0 ? "+" : ""}${fmt(stock.fund_metrics.ma200_gap_pct, 1)}%`
-                    : ""}
-                  。{stock.instrument.is_leveraged
-                    ? "杠杆/反向基金派息多含现金利息或结构分配，不按公司盈利评估。"
-                    : "指数/行业/商品基金不采用易失真的基金主体 PE/PB 口径。"}
-                </p>
+                  {liveEval.rating_changed &&
+                    liveEval.prev_rating_label &&
+                    liveRatingLabel && (
+                      <span className="eval-mode-delta">
+                        {liveEval.prev_rating_label}→{liveRatingLabel}
+                      </span>
+                    )}
+                </div>
+              </div>
+            )}
+
+            {managerOpen && (
+              <InspectorModuleManager
+                layout={layout}
+                hasExtendedHours={hasExtendedHours}
+                onToggle={toggleModule}
+                onMove={moveModule}
+                onReorder={reorderModule}
+                onReset={resetModules}
+                onClose={() => setManagerOpen(false)}
+              />
+            )}
+
+            {enabledCount === 0 ? (
+              <section className="insp-card inspector-empty-modules">
+                <b>已隐藏全部研判模块</b>
+                <p>可在上方「模块」面板重新勾选需要展示的功能模块。</p>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={showAllModules}
+                >
+                  全部显示
+                </button>
               </section>
             ) : (
-              <section className="insp-card">
-                <div className="insp-card-head">
-                  <h3>估值与美债对照</h3>
-                  <span
-                    className={`fresh-tag ${stock.research?.valuation?.fresh ? "ok" : "stale"}`}
+              layout.order.map((moduleId) => {
+                if (hiddenSet.has(moduleId)) return null;
+                const node = renderModule(moduleId);
+                if (!node) return null;
+                return (
+                  <div
+                    key={moduleId}
+                    className="insp-module-slot"
+                    data-module-id={moduleId}
                   >
-                    {stock.research?.valuation?.source ?? "券商"} ·{" "}
-                    {stock.research?.valuation?.fresh ? "有效" : "待更新"}
-                  </span>
-                </div>
-                <div className="val-grid">
-                  <div className="val-cell">
-                    <small>滚动市盈率 PE</small>
-                    <strong>
-                      {fmt(stock.research?.valuation?.pe_ttm, 1)}
-                      <em>倍</em>
-                    </strong>
+                    {node}
                   </div>
-                  <div className="val-cell">
-                    <small>市净率 PB</small>
-                    <strong>
-                      {fmt(stock.research?.valuation?.pb, 2)}
-                      <em>倍</em>
-                    </strong>
-                  </div>
-                  <div className="val-cell">
-                    <small>股息率 TTM</small>
-                    <strong>
-                      {fmt(stock.research?.valuation?.dividend_yield_pct, 2)}
-                      <em>%</em>
-                    </strong>
-                  </div>
-                  <div className="val-cell">
-                    <small>盈利收益率 − 10Y美债</small>
-                    <strong
-                      className={
-                        stock.research?.yield_gap_pp == null
-                          ? ""
-                          : stock.research.yield_gap_pp >= 0
-                            ? "positive"
-                            : "amber-text"
-                      }
-                    >
-                      {stock.research?.yield_gap_pp != null &&
-                      stock.research.yield_gap_pp >= 0
-                        ? "+"
-                        : ""}
-                      {fmt(stock.research?.yield_gap_pp, 2)}
-                      <em>pp</em>
-                    </strong>
-                  </div>
-                </div>
-                <p className="val-footnote">
-                  盈利收益率 {fmt(stock.research?.earnings_yield_pct, 2)}%
-                  {stock.research?.real_yield_gap_pp != null &&
-                  stock.research?.real_ten_year != null
-                    ? ` · 实际利率利差（减 10Y TIPS ${fmt(stock.research.real_ten_year, 2)}%）${stock.research.real_yield_gap_pp >= 0 ? "+" : ""}${fmt(stock.research.real_yield_gap_pp, 2)}pp`
-                    : ""}
-                  （取数 {time(stock.research?.valuation?.fetched_at)}）。名义与实际利差仅作收益率水平参照，非预期回报。
-                </p>
-              </section>
+                );
+              })
             )}
-
-            <section className="insp-card">
-              <div className="insp-card-head">
-                <h3>
-                  <ShieldCheck size={15} />
-                  独立风险检查
-                </h3>
-              </div>
-              <div className="risk-list">
-                {activeSummary?.risks?.length ? (
-                  activeSummary.risks.map((r) => (
-                    <div className="risk-item warn" key={r}>
-                      <TriangleAlert size={15} />
-                      <span>{r}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="risk-item ok">
-                    <Check size={15} />
-                    <span>
-                      {activeSummary?.valid
-                        ? "当前规则未标记额外技术风险"
-                        : "基础日线或指标数据待补齐"}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </section>
           </>
         )}
 

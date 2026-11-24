@@ -5777,6 +5777,317 @@ p {
   padding: 6px 8px;
 }
 
+/* ==================== 右侧模块化控制栏与自定义排序面板 ==================== */
+.inspector-ctrl-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 32px;
+  flex-shrink: 0;
+}
+
+.inspector-ctrl-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.inspector-ctrl-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.eval-mode-seg.compact {
+  flex: 0 0 auto;
+  background: var(--panel);
+  padding: 2px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--line);
+}
+
+.eval-mode-seg.compact button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.eval-refresh-btn.icon-only {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--radius-buttons);
+}
+
+.module-mgr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.module-mgr-btn:hover,
+.module-mgr-btn.active {
+  border-color: var(--soft-blue-bd);
+  background: var(--soft-blue-bg);
+  color: var(--accent);
+}
+
+.mod-count-pill {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: var(--radius-badges);
+  background: var(--soft-blue-bg);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.insp-module-slot {
+  display: block;
+}
+
+.module-mgr-card {
+  border-color: var(--soft-blue-bd);
+  background: var(--panel);
+  padding: 10px 11px;
+  gap: 8px;
+}
+
+.mod-mgr-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mod-mgr-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mod-mgr-head small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mod-mgr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.mod-mgr-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 7px;
+  border-radius: var(--radius-buttons);
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+  transition:
+    border-color 140ms ease-out,
+    background 140ms ease-out,
+    opacity 140ms ease-out;
+}
+
+.mod-mgr-row:hover {
+  border-color: var(--line-strong);
+}
+
+.mod-mgr-row.is-hidden {
+  opacity: 0.62;
+  background: var(--bg);
+}
+
+.mod-mgr-row.dragging {
+  opacity: 0.4;
+}
+
+.mod-mgr-row.drag-over {
+  border-color: var(--accent);
+  box-shadow: inset 0 2px 0 0 var(--accent);
+  background: var(--soft-blue-bg);
+}
+
+.mod-mgr-grip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.mod-mgr-grip:active {
+  cursor: grabbing;
+}
+
+.mod-switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--line);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.mod-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.mod-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+  transition: transform 150ms ease-out;
+}
+
+.mod-switch.on .mod-switch-thumb {
+  transform: translateX(14px);
+}
+
+.mod-mgr-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.mod-mgr-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mod-mgr-title em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.mod-mgr-info small {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mod-mgr-order-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.mod-order-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--sub);
+  cursor: pointer;
+}
+
+.mod-order-btn:hover:not(:disabled) {
+  border-color: var(--soft-blue-bd);
+  background: var(--soft-blue-bg);
+  color: var(--accent);
+}
+
+.mod-order-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mod-mgr-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.mod-mgr-foot .text-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mod-mgr-done-btn {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.inspector-empty-modules {
+  align-items: center;
+  text-align: center;
+  padding: 20px 14px;
+  gap: 8px;
+}
+
+.inspector-empty-modules b {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.inspector-empty-modules p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sub);
+}
+
 /* ==================== Responsive Breakpoints ==================== */
 @media (max-width: 1440px) {
   .clock-chip {

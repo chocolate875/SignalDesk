@@ -320,10 +320,26 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
     if (frontend / "assets").exists():
         app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
 
+    # 网页标签图标静态白名单，避免浏览器请求 /favicon.* 被 SPA 兜底成 index.html
+    icon_files = {
+        "favicon.svg": "image/svg+xml",
+        "favicon.ico": "image/x-icon",
+        "apple-touch-icon.png": "image/png",
+    }
+
     @app.get("/{path:path}")
     async def index(path: str):
         if path.startswith("api/"):
             raise HTTPException(404, "接口不存在")
+        if path in icon_files:
+            icon_path = frontend / path
+            if not icon_path.exists():
+                raise HTTPException(404, "图标资源不存在")
+            return FileResponse(
+                icon_path,
+                media_type=icon_files[path],
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
         if not (frontend / "index.html").exists():
             return JSONResponse({"detail": "请先在frontend运行npm ci和npm run build"}, status_code=503)
         return FileResponse(

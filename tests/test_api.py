@@ -141,3 +141,17 @@ def test_forecast_levels_rating_and_safe_snapshot_privacy(client):
     assert "broker_quantity" not in str(preview)
     assert "cost_price" not in str(preview)
     assert "net_assets" not in str(preview)
+
+
+def test_favicon_routes_return_icon_media_types(client):
+    """验证网页图标路由返回真实图标类型，不会被 SPA 兜底成 text/html。"""
+    expected = {
+        "/favicon.svg": "image/svg+xml",
+        "/favicon.ico": "image/x-icon",
+        "/apple-touch-icon.png": "image/png",
+    }
+    for path, mime in expected.items():
+        res = client.get(path)
+        assert res.status_code == 200, f"{path} 返回了非 200 状态码：{res.status_code}"
+        assert res.headers["content-type"].startswith(mime)
+        assert len(res.content) > 64

@@ -1,5 +1,22 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 网页品牌图标补齐与右侧研判栏模块化自定义排序重构
+
+- **网页图标（Favicon）补齐与静态路由修复。**
+  - 新增与 SignalDesk 品牌视觉一致的多格式图标：[favicon.svg](../frontend/public/favicon.svg)（矢量深蓝渐变圆角 + 上升信号脉搏线 + 翠绿信号点）、[favicon.ico](../frontend/public/favicon.ico)（16/32/48px 多尺寸超采样抗锯齿）与 [apple-touch-icon.png](../frontend/public/apple-touch-icon.png)（180×180px）。
+  - 在 [index.html](../frontend/index.html) 补全 `icon (svg/ico)`、`apple-touch-icon` 与 `theme-color` 声明；在 [app.py](../signaldesk/app.py) 的 SPA 兜底路由前增加图标静态白名单，避免浏览器请求 `/favicon.*` 被兜底返回 `text/html`。
+- **右侧研判栏全面模块化与自定义显隐/排序。**
+  - 新建 [inspectorModules.ts](../frontend/src/inspectorModules.ts) 建立 7 大研判模块注册表（`forecast`、`wave_trend`、`extended_hours`、`plan_range`、`daily_score`、`valuation_profile`、`risk_check`）、本地持久化 Hook（`localStorage` 键 `signaldesk:inspector-layout:v1`，带非法数据自动清洗与新模块补齐）及显隐/上下移/拖拽重排/恢复默认纯函数。
+  - 重构 [StockInspector.tsx](../frontend/src/StockInspector.tsx)：将原内联大区块全部抽离为独立模块组件（`DailyScoreCard`、`ValuationOrFundCard`、`RiskCheckCard` 等），默认按 **`买卖点位评级 → 波浪与趋势分析 → 盘外动态 → 长期计划价位 → 日线结构评分 → 估值与资产特征 → 独立风险检查`** 置顶排布；顶部改为 `32px` 单行控制栏（左侧紧凑双口径切换 `收盘确认 | 最新试算`，右侧 `模块` 自定义入口），点击展开 `InspectorModuleManager` 支持**拖拽排序、上/下移箭头微调、拨动开关显隐、隐藏数角标提示与一键恢复默认**。
+  - 更新 [style.css](../frontend/src/style.css) 新增控制栏、开关、拖拽落点高亮及空态引导样式，全量 `275` 条 CSS `font-size` 最小值保持 `12.0px`（`bad = 0`）。
+- **自动化测试与实盘浏览器端到端验收（`http://127.0.0.1:8765/`）。**
+  - 在 [test_api.py](../tests/test_api.py) 新增 `test_favicon_routes_return_icon_media_types`；后端全量 `pytest -q` **99 项全部通过**，`ruff check signaldesk tests` 全通过，前端 `tsc -b && vite build` 零错误通过（产物 `index-CSO5TDmU.js`、`index-oo_w2t_2.css`）。
+  - 重启本地实盘服务并完成双分辨率浏览器端到端验收：
+    - **图标响应**：`/favicon.svg`（`image/svg+xml`, `1511B`）、`/favicon.ico`（`image/x-icon`, `6616B`）、`/apple-touch-icon.png`（`image/png`, `19405B`）均返回 HTTP `200`；
+    - **`1440×810` 默认首屏**：`.inspector-ctrl-bar` 仅 `32px` 高，首屏无需滚动即完整呈现「买卖评级与点位预测」（`forecast`, `y=162`）与「波浪与趋势结构」（`wave_trend`, `y=493.8`，直览趋势结论与 3 条波浪拐点明细）；
+    - **自定义显隐、调序与刷新持久化**：隐藏 `extended_hours` 与 `plan_range` 并上移 `wave_trend` 后，顶部实时亮出 `模块 5/7`、列表顺序即刻变为 `wave_trend → forecast → daily_score → valuation_profile → risk_check`；刷新页面后配置 100% 持久保持；点击「恢复默认」精确还原 7 模块默认排序；
+    - **`1280×720` 与双口径回归**：整页无水平溢出，`.inspector-ctrl-bar` 单行无折行，切换「最新试算 ↔ 收盘确认」实时联动无异常，全程控制台 **0 errors**，`.error-fallback = 0`。
+
 ## 2026-11-24 16:9 界面视野减负、顶栏精简与二级菜单收纳重构
 
 - **16:9 拥挤痛点诊断（覆盖 `1440×810` 与 `1280×720`）。**
