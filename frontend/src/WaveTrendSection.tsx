@@ -364,7 +364,7 @@ function WaveTrendGuideModal({
         </div>
 
         <footer className="modal-footer">
-          <span>严格因果计算 · 仅用已确认日线</span>
+          <span>{wt.disclaimer || "严格因果计算 · 仅作历史结构复核参考"}</span>
           <button type="button" className="button primary" onClick={onClose}>
             知道了
           </button>
@@ -413,7 +413,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
               aria-label="查看波浪理论参数与说明"
             >
               <HelpCircle size={13} />
-              <span>详解与参数</span>
+              <span>说明</span>
             </button>
           )}
         </div>
@@ -585,11 +585,9 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
             onClick={() => setGuideOpen(true)}
           >
             <BookOpen size={14} />
-            <span>查看通道分位、斜率、铁律校验与指标说明</span>
+            <span>查看通道分位、斜率、铁律校验与说明</span>
             <ChevronRight size={14} />
           </button>
-
-          <p className="forecast-disclaimer">{wt.disclaimer}</p>
         </>
       )}
 

@@ -4,9 +4,12 @@ import {
   ArrowRight,
   Bell,
   Bot,
+  ChevronDown,
   CircleDot,
   Clock3,
+  Compass,
   Moon,
+  MoreHorizontal,
   Plus,
   Settings2,
   SlidersHorizontal,
@@ -269,6 +272,150 @@ function AllocationEditor({
   );
 }
 
+/** 顶栏右侧「更多 / 偏好」二级菜单：收纳低频控制、连接状态与京/纽双时钟，保持 16:9 顶栏清爽 */
+function TopbarMoreMenu({
+  connected,
+  statusDetail,
+  bjClock,
+  nyClock,
+  reverse,
+  theme,
+  onToggleReverse,
+  onToggleTheme,
+  onOpenDeliveries,
+  onOpenMacro,
+}: {
+  connected: boolean;
+  statusDetail?: string;
+  bjClock: string;
+  nyClock: string;
+  reverse: boolean;
+  theme: string;
+  onToggleReverse: () => void;
+  onToggleTheme: () => void;
+  onOpenDeliveries: () => void;
+  onOpenMacro: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="topbar-menu-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className={`top-btn top-more-btn ${open ? "active" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title="更多工具、配色主题、通知记录与双时钟"
+      >
+        <MoreHorizontal size={16} />
+        <span>更多</span>
+        <ChevronDown size={13} />
+      </button>
+
+      {open && (
+        <div className="topbar-dropdown" role="menu" aria-label="顶栏二级菜单">
+          <div className="topbar-dd-status">
+            <div className={`topbar-dd-conn ${connected ? "online" : "offline"}`}>
+              {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
+              <b>{connected ? "实时流已连接" : "正在重连服务"}</b>
+            </div>
+            <div className="topbar-dd-clocks">
+              <Clock3 size={13} />
+              <span>北京 {bjClock}</span>
+              <span className="sep">/</span>
+              <span>纽约 {nyClock}</span>
+            </div>
+            {statusDetail && <small className="topbar-dd-note">{statusDetail}</small>}
+          </div>
+
+          <div className="topbar-dd-sep" />
+
+          <button
+            type="button"
+            role="menuitem"
+            className="topbar-dd-item"
+            onClick={() => {
+              onToggleReverse();
+              setOpen(false);
+            }}
+          >
+            <span>涨跌配色</span>
+            <em>{reverse ? "红涨绿跌" : "绿涨红跌"}</em>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="topbar-dd-item"
+            onClick={() => {
+              onToggleTheme();
+              setOpen(false);
+            }}
+          >
+            <span className="topbar-dd-ico">
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+              外观主题
+            </span>
+            <em>{theme === "dark" ? "切至浅色" : "切至深色"}</em>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="topbar-dd-item"
+            onClick={() => {
+              setOpen(false);
+              onOpenDeliveries();
+            }}
+          >
+            <span className="topbar-dd-ico">
+              <Bell size={14} />
+              通知投递记录
+            </span>
+            <em>查看</em>
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            className="topbar-dd-item"
+            onClick={() => {
+              setOpen(false);
+              onOpenMacro();
+            }}
+          >
+            <span className="topbar-dd-ico">
+              <Compass size={14} />
+              市场大势与美债全景
+            </span>
+            <em>打开</em>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [connected, setConnected] = useState(false);
@@ -300,7 +447,12 @@ export default function App() {
   const [evalMode, setEvalMode] = useState<EvalMode>("confirmed");
   const [liveEval, setLiveEval] = useState<LiveEvaluation | null>(null);
   const [liveEvalBusy, setLiveEvalBusy] = useState(false);
+  const [verdictExpanded, setVerdictExpanded] = useState(false);
   const lastLiveEvalAtRef = useRef<number>(0);
+
+  useEffect(() => {
+    setVerdictExpanded(false);
+  }, [selected]);
 
   const notify = (s: string) => setToast(s);
 
@@ -645,34 +797,40 @@ export default function App() {
         <div className="topbar-left">
           <div className="brand-mark">
             <span className="brand-badge">
-              <Activity size={19} />
+              <Activity size={17} />
             </span>
             <b>SignalDesk</b>
           </div>
           <button
             type="button"
-            className={`mode-badge ${data?.mode === "live" ? "live" : "demo"}`}
+            className={`status-pill-merged ${
+              !connected
+                ? "offline"
+                : data?.mode === "live"
+                  ? "live"
+                  : "demo"
+            }`}
             onClick={() => setSettings(true)}
-            title="点击切换实盘/演示或修改接入设置"
+            title={`北京 ${bjClock} / 纽约 ${nyClock}${data?.detail ? ` · ${data.detail}` : ""}（点击修改接入设置）`}
           >
-            <i />
-            {data?.mode === "live" ? "实盘只读" : "演示工作区"}
-          </button>
-          <div className="market-status-chip">
             <span
-              className={`session-dot ${data?.market?.session === "regular" ? "open" : ""}`}
+              className={`session-dot ${
+                !connected
+                  ? "offline"
+                  : data?.market?.session === "regular"
+                    ? "open"
+                    : ""
+              }`}
             />
             <span>
-              {data?.market?.label ?? "连接中"}
-              {data?.market?.early_close ? " · 提前收盘" : ""}
+              {!connected
+                ? "重连中"
+                : data?.mode === "live"
+                  ? `实盘 · ${data?.market?.label ?? "同步中"}`
+                  : "演示工作区"}
+              {connected && data?.market?.early_close ? " · 提前收" : ""}
             </span>
-          </div>
-          <div className="clock-chip" title="北京时间 / 纽约时间">
-            <Clock3 size={14} />
-            <span>京 {bjClock}</span>
-            <span className="sep">/</span>
-            <span>纽 {nyClock}</span>
-          </div>
+          </button>
         </div>
 
         <div className="topbar-macro-group">
@@ -688,46 +846,24 @@ export default function App() {
         </div>
 
         <div className="topbar-right">
-          <span
-            className={`conn-pill ${connected ? "online" : "offline"}`}
-            title={data?.detail}
-          >
-            {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            <span>{connected ? "已连接" : "重连中"}</span>
-          </span>
-          <button
-            type="button"
-            className="top-btn"
-            onClick={async () => {
+          <TopbarMoreMenu
+            connected={connected}
+            statusDetail={data?.detail}
+            bjClock={bjClock}
+            nyClock={nyClock}
+            reverse={reverse}
+            theme={theme}
+            onToggleReverse={() => setReverse(!reverse)}
+            onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+            onOpenDeliveries={async () => {
               try {
                 setDeliveries(await api("/deliveries"));
               } catch (e: any) {
                 notify(e.message);
               }
             }}
-          >
-            <Bell size={15} />
-            <span>通知记录</span>
-          </button>
-          <button
-            type="button"
-            className="top-btn"
-            onClick={() => setReverse(!reverse)}
-            title="切换涨跌配色习惯"
-          >
-            <span className="color-swap">
-              {reverse ? "红涨绿跌" : "绿涨红跌"}
-            </span>
-          </button>
-          <button
-            type="button"
-            className="top-icon-btn"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            aria-label="切换明暗主题"
-            title={theme === "dark" ? "切换浅色主题" : "切换深色主题"}
-          >
-            {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
-          </button>
+            onOpenMacro={() => setMacroOpen(true)}
+          />
           <button
             type="button"
             className="button primary top-settings-btn"
@@ -784,7 +920,7 @@ export default function App() {
                     title={stock.favorite ? "取消收藏" : "加入收藏"}
                   >
                     <Star
-                      size={20}
+                      size={18}
                       fill={stock.favorite ? "currentColor" : "none"}
                     />
                   </button>
@@ -812,11 +948,15 @@ export default function App() {
                         </span>
                       )}
                       {stock.broker_quantity > 0 && (
-                        <span className="tag-chip held">
-                          持仓 {fmt(stock.broker_quantity, 0)} 股
-                          {stock.weight_percent != null
-                            ? ` · 占比 ${fmt(stock.weight_percent, 1)}%`
-                            : ""}
+                        <span
+                          className="tag-chip held"
+                          title={
+                            stock.weight_percent != null
+                              ? `持仓 ${fmt(stock.broker_quantity, 0)} 股 · 仓位占比 ${fmt(stock.weight_percent, 1)}%`
+                              : `持仓 ${fmt(stock.broker_quantity, 0)} 股`
+                          }
+                        >
+                          持仓 {fmt(stock.broker_quantity, 0)}
                         </span>
                       )}
                       {stock.pnl_percent != null && (
@@ -845,13 +985,17 @@ export default function App() {
                           stock.broker_quantity > 0 ||
                           stock.pnl_percent != null ||
                           Boolean(stock.instrument?.is_fund);
-                        const maxGroups = hasExtraBadge ? 1 : 2;
-                        const shown = groups.slice(0, maxGroups);
+                        if (hasExtraBadge || !groups.length) return null;
+                        const shown = groups.slice(0, 1);
                         const hiddenCount = groups.length - shown.length;
                         return (
                           <>
                             {shown.map((g) => (
-                              <span className="tag-chip group" key={g}>
+                              <span
+                                className="tag-chip group"
+                                key={g}
+                                title={groups.join(" · ")}
+                              >
                                 {g}
                               </span>
                             ))}
@@ -890,16 +1034,16 @@ export default function App() {
                       className="button secondary"
                       onClick={() => setEditor({ stock })}
                     >
-                      <SlidersHorizontal size={15} />
-                      编辑计划
+                      <SlidersHorizontal size={14} />
+                      计划
                     </button>
                     <button
                       type="button"
                       className="button primary"
                       onClick={() => setInspectorTab("codex")}
                     >
-                      <Bot size={15} />
-                      Codex 总结
+                      <Bot size={14} />
+                      Codex
                     </button>
                     {canDeleteSelected && (
                       <button
@@ -909,7 +1053,7 @@ export default function App() {
                         title="移出本地观察"
                         aria-label="移出本地观察"
                       >
-                        <Trash2 size={16} />
+                        <Trash2 size={15} />
                       </button>
                     )}
                   </div>
@@ -917,7 +1061,9 @@ export default function App() {
               </div>
 
               {verdict && (
-                <div className={`verdict-banner tone-${verdict.tone}`}>
+                <div
+                  className={`verdict-banner compact tone-${verdict.tone} ${verdictExpanded ? "expanded" : ""}`}
+                >
                   <div className="verdict-main">
                     <div className="verdict-badges">
                       <span
@@ -940,28 +1086,48 @@ export default function App() {
                           className="verdict-live-tag"
                           title="当前结论、点位、评级与波浪已按最新未收盘行情临时试算预览"
                         >
-                          实时试算 · 未收盘
+                          实时试算
                         </span>
                       )}
                     </div>
-                    <div className="verdict-copy">
+                    <p
+                      className="verdict-headline single-line"
+                      title={`${verdict.headline} 下一步：${verdict.next_step}`}
+                    >
+                      {verdict.headline}
+                    </p>
+                    <button
+                      type="button"
+                      className={`verdict-expand-btn ${verdictExpanded ? "open" : ""}`}
+                      onClick={() => setVerdictExpanded((v) => !v)}
+                      aria-expanded={verdictExpanded}
+                      title="展开或收起完整研判建议与三维度支柱详情"
+                    >
+                      <span>{verdictExpanded ? "收起" : "详情"}</span>
+                      <ChevronDown size={13} />
+                    </button>
+                  </div>
+
+                  {verdictExpanded && (
+                    <div className="verdict-drawer">
                       <p className="verdict-headline">{verdict.headline}</p>
                       <p className="verdict-next">
                         下一步：{verdict.next_step}
                       </p>
-                    </div>
-                  </div>
-                  <div className="verdict-pillars">
-                    {(verdict.pillars ?? []).map((p) => (
-                      <div className="pillar-box" key={p.key}>
-                        <div className="pillar-top">
-                          <span>{p.label}</span>
-                          <b className={`tone-text-${p.tone}`}>{p.status}</b>
-                        </div>
-                        <small>{p.detail}</small>
+                      <div className="verdict-pillars">
+                        {(verdict.pillars ?? []).map((p) => (
+                          <div className="pillar-box" key={p.key}>
+                            <div className="pillar-top">
+                              <span>{p.label}</span>
+                              <b className={`tone-text-${p.tone}`}>{p.status}</b>
+                            </div>
+                            <small>{p.detail}</small>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  )}
+
                   {activeForecast?.levels?.available && (
                     <div className="forecast-strip">
                       <div className="forecast-strip-item">

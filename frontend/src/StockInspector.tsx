@@ -343,12 +343,14 @@ function ForecastCard({
   stock: Stock;
   onApplyForecastLevels: (stopLoss: number, sellLow: number) => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const forecast = stock.forecast;
   const rating = forecast?.rating;
   const levels = forecast?.levels;
   const available = Boolean(
     forecast && levels?.available && rating?.available,
   );
+  const guardrailCount = rating?.guardrails?.length ?? 0;
 
   return (
     <section className="insp-card forecast-card">
@@ -369,9 +371,6 @@ function ForecastCard({
               rating?.summary ||
               "已确认日线窗口或波动率数据不足，暂不生成点位预测。"}
           </p>
-          {rating?.disclaimer && (
-            <p className="forecast-disclaimer">{rating.disclaimer}</p>
-          )}
         </div>
       ) : (
         <>
@@ -413,6 +412,17 @@ function ForecastCard({
             >
               <span className="source-pill">{levels!.position_label}</span>
               <span className="muted-tag">置信度 {rating!.confidence}</span>
+              {guardrailCount > 0 && (
+                <button
+                  type="button"
+                  className="guardrail-pill-btn"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                  title={rating!.guardrails.join("；")}
+                >
+                  <TriangleAlert size={12} />
+                  <span>风控警示 {guardrailCount}</span>
+                </button>
+              )}
             </div>
             {levels!.stop_loss != null && levels!.sell_low != null && (
               <button
@@ -423,51 +433,68 @@ function ForecastCard({
                 }
                 title="将参考止损与参考卖点预填到个人计划价"
               >
-                采纳为计划价
+                采纳计划价
               </button>
             )}
           </div>
 
-          <div className="forecast-anchors">
-            <div>
-              <b>买入支撑：</b>
-              <span>{levels!.buy_anchors.join(" · ")}</span>
-            </div>
-            <div>
-              <b>卖出压力：</b>
-              <span>{levels!.sell_anchors.join(" · ")}</span>
-            </div>
-            <div>
-              <b>防守依据：</b>
-              <span>{levels!.stop_anchor}</span>
-            </div>
-          </div>
+          <details
+            className="insp-sub-details"
+            open={detailsOpen}
+            onToggle={(e) => setDetailsOpen(e.currentTarget.open)}
+          >
+            <summary>
+              <span>
+                {detailsOpen
+                  ? "收起评分拆解、点位依据与警示"
+                  : "点位依据、评分拆解与风控说明"}
+              </span>
+              <ChevronDown size={14} />
+            </summary>
 
-          {rating!.guardrails.length > 0 && (
-            <div className="forecast-guardrails">
-              {rating!.guardrails.map((g, i) => (
-                <div key={i}>
-                  <TriangleAlert size={14} />
-                  <span>{g}</span>
+            <div className="insp-sub-body">
+              {guardrailCount > 0 && (
+                <div className="forecast-guardrails">
+                  {rating!.guardrails.map((g, i) => (
+                    <div key={i}>
+                      <TriangleAlert size={14} />
+                      <span>{g}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          <div className="rating-factors">
-            {rating!.factors.map((f) => (
-              <div className="rating-factor-row" key={f.key}>
-                <div className="rf-head">
-                  <span>{f.label}</span>
-                  <em>{fmt(f.weight * 100, 0)}%</em>
-                  <b>{f.score != null ? `${fmt(f.score, 1)}分` : "暂缺"}</b>
+              <div className="forecast-anchors">
+                <div>
+                  <b>买入支撑：</b>
+                  <span>{levels!.buy_anchors.join(" · ")}</span>
                 </div>
-                <small>{f.detail}</small>
+                <div>
+                  <b>卖出压力：</b>
+                  <span>{levels!.sell_anchors.join(" · ")}</span>
+                </div>
+                <div>
+                  <b>防守依据：</b>
+                  <span>{levels!.stop_anchor}</span>
+                </div>
               </div>
-            ))}
-          </div>
 
-          <p className="forecast-disclaimer">{rating!.disclaimer}</p>
+              <div className="rating-factors">
+                {rating!.factors.map((f) => (
+                  <div className="rating-factor-row" key={f.key}>
+                    <div className="rf-head">
+                      <span>{f.label}</span>
+                      <em>{fmt(f.weight * 100, 0)}%</em>
+                      <b>{f.score != null ? `${fmt(f.score, 1)}分` : "暂缺"}</b>
+                    </div>
+                    <small>{f.detail}</small>
+                  </div>
+                ))}
+              </div>
+
+              <p className="forecast-disclaimer">{rating!.disclaimer}</p>
+            </div>
+          </details>
         </>
       )}
     </section>
@@ -629,18 +656,24 @@ export default function StockInspector({
                 </div>
 
                 {isLiveEvalView && liveEval ? (
-                  <div className="eval-mode-banner">
+                  <div
+                    className="eval-mode-banner"
+                    title={
+                      liveEval.disclaimer ||
+                      "未收盘临时预览，仅作盘中决策参考；正式复核与告警仍按收盘确认日线执行。"
+                    }
+                  >
                     <div className="eval-mode-banner-head">
                       <span>
-                        {liveEval.basis_label || "盘中实时试算"} · $
+                        {liveEval.basis_label || "盘中试算"} · $
                         {fmt(liveEval.price, 2)}
                         {liveEval.change_pct != null
-                          ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 2)}%)`
+                          ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 1)}%)`
                           : ""}
                       </span>
                       {liveScoreDelta != null && (
                         <span className="eval-mode-delta">
-                          日线分 {liveScoreDelta >= 0 ? "+" : ""}
+                          评分 {liveScoreDelta >= 0 ? "+" : ""}
                           {fmt(liveScoreDelta, 1)}
                         </span>
                       )}
@@ -648,26 +681,22 @@ export default function StockInspector({
                         liveEval.prev_rating_label &&
                         liveRatingLabel && (
                           <span className="eval-mode-delta">
-                            {liveEval.prev_rating_label} → {liveRatingLabel}
+                            {liveEval.prev_rating_label}→{liveRatingLabel}
                           </span>
                         )}
                     </div>
-                    <span className="eval-mode-note">
-                      未收盘临时预览，仅作盘中决策参考；正式复核与告警仍按收盘确认日线执行。
-                    </span>
                   </div>
                 ) : hasLiveEval && liveEval ? (
                   <div className="eval-mode-hint">
                     <span>
-                      {liveEval.basis_label || "实时试算"}（$
-                      {fmt(liveEval.price, 2)}）：
+                      按最新价（${fmt(liveEval.price, 2)}）：
                       {liveScoreDelta != null
                         ? `日线分 ${liveScoreDelta >= 0 ? "+" : ""}${fmt(liveScoreDelta, 1)}`
-                        : "已就绪"}
+                        : "可试算"}
                       {liveEval.rating_changed &&
                       liveEval.prev_rating_label &&
                       liveRatingLabel
-                        ? ` · 评级 ${liveEval.prev_rating_label} → ${liveRatingLabel}`
+                        ? ` · ${liveEval.prev_rating_label}→${liveRatingLabel}`
                         : ""}
                     </span>
                   </div>
@@ -730,7 +759,7 @@ export default function StockInspector({
                     ] ??
                     "暂无有效比较";
                   return (
-                    <div className="dim-item" key={key}>
+                    <div className="dim-item" key={key} title={note}>
                       <div className="dim-top">
                         <span className="dim-label">
                           <i style={{ background: dimensionColors[key] }} />
@@ -756,7 +785,6 @@ export default function StockInspector({
                           }}
                         />
                       </div>
-                      <p className="dim-note">{note}</p>
                     </div>
                   );
                 })}
@@ -764,9 +792,25 @@ export default function StockInspector({
 
               <details className="raw-indicators">
                 <summary>
-                  <span>展开原始技术指标与算子</span>
+                  <span>展开维度解读与原始技术指标</span>
                   <ChevronDown size={15} />
                 </summary>
+                <div className="dim-notes-drawer">
+                  {Object.entries(dimensionNames).map(([key, label]) => {
+                    const note =
+                      dimensionNotes[key] ??
+                      activeSummary?.evidence?.[
+                        Object.keys(dimensionNames).indexOf(key)
+                      ] ??
+                      "暂无有效比较";
+                    return (
+                      <p key={key}>
+                        <b>{label}：</b>
+                        {note}
+                      </p>
+                    );
+                  })}
+                </div>
                 <dl>
                   {[
                     [

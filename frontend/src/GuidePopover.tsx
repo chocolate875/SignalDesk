@@ -94,38 +94,20 @@ export function MacroStripWithGuide({
       <button
         ref={btnRef}
         type="button"
-        className={`macro-strip ${open ? "active" : ""}`}
+        className={`macro-strip compact ${open ? "active" : ""}`}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-label="查看美债收益率看板含义说明"
-        title={`点击查看美债利率解读 · 来源：${curve?.source ?? "等待数据"} · 观察日：${curve?.as_of ?? "暂无"}`}
+        title={`美债2Y ${fmt(curve?.two_year, 2)}% · 10Y ${fmt(curve?.ten_year, 2)}% · 10Y-2Y ${curve?.spread_bp != null && curve.spread_bp >= 0 ? "+" : ""}${fmt(curve?.spread_bp, 0)}bp · 点击查看完整六项利率解读`}
       >
         <span>
-          美债2Y <b>{fmt(curve?.two_year, 2)}%</b>
-        </span>
-        <span>
-          10Y <b>{fmt(curve?.ten_year, 2)}%</b>
-        </span>
-        <span>
-          10Y-2Y{" "}
-          <b>
-            {curve?.spread_bp != null && curve.spread_bp >= 0 ? "+" : ""}
-            {fmt(curve?.spread_bp, 0)}bp
-          </b>
-        </span>
-        <span>
-          10Y近21日{" "}
-          <b>
-            {curve?.ten_change_bp != null && curve.ten_change_bp >= 0
-              ? "+"
-              : ""}
-            {fmt(curve?.ten_change_bp, 0)}bp
-          </b>
+          美债10Y <b>{fmt(curve?.ten_year, 2)}%</b>
         </span>
         {(curve?.refresh_failed || (curve?.as_of && !curve.fresh)) && (
-          <em className="macro-warn">
-            {curve?.refresh_failed ? "更新失败" : "利率已过期"}
-          </em>
+          <span
+            className="macro-warn-dot"
+            title={curve?.refresh_failed ? "美债利率更新失败" : "美债利率已过期"}
+          />
         )}
         <HelpCircle size={13} className="macro-help-ico" />
       </button>
