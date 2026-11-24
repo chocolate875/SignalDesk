@@ -1,111 +1,150 @@
 # SignalDesk
 
-本机美股长期持仓与自选股桌面看盘工具。默认采用清晰克制的「企业简洁风」亮色三栏工作台（支持一键切换深色与红绿涨跌配色），集成美国国债利率、个股估值、已确认日线 K 线、确定性研判结论以及手动触发的 Codex 长期计划总结。
+本地优先（Local-First）的美股长期持仓与自选股桌面复核工作台。默认采用克制清晰的「企业简洁风」16:9 三栏布局（支持深浅色与红绿涨跌切换），集成宏观流动性与美国国债曲线、个股估值 / ETF 专属特征、前复权日线与实时试算、严格因果学术因子（`fusion-2.0.0`）、动态风险预算以及手动触发的**本地官方多 Agent 长期复核（Google Antigravity CLI 官方 ACP / OpenAI Codex CLI 官方 exec）**。
 
-默认打开完全合成的演示行情与示例持仓。没有自动下单、做空或期权执行接口。技术评分与综合研判描述客观结构与计划状态，不代表上涨概率或投资建议。
+默认启动完全合成的演示行情与示例持仓，开箱即用。系统**严格只读**，不含任何自动下单、撤单、做空或期权交易执行接口；所有评分、点位与风险预算均描述客观价格结构与历史波动特征，不构成投资建议。
 
-## 界面概览与操作
+---
 
-- **三栏桌面看盘工作台**：针对 16:9 桌面屏幕优化，顶栏新增「大势 · 四象限 / 红灯数」紧凑入口（点击展开居中「市场大势与宏观流动性全景面板」，含「流动性方向 × 指数趋势」四象限矩阵、下行风险红灯水位、六分项指示灯与「口径与学术依据」二级说明）及美债收益率看板（点击展开含 `3M`/`2Y`/`10Y`、`10Y-3M`、NY Fed 12M 衰退概率与 `10Y TIPS` 实际利率的实时大白话解读）；左侧行情栏支持 `★ 收藏`、`持仓`、`自选股`（按长桥自选分组筛选）与 `全部` 切换，内置「标签说明」随时查看大白话状态标签含义（`跌破止损`、`亏损警示`、`触及目标`、`对冲观察`、`关注买点`、`弱势观望`、`震荡观望` 等），提供清晰不重叠的 4 项排序（`买卖评级` 默认、`风险预警`、`今日涨幅`、`今日跌幅`）及一键同步账号自选；中间集成标的抬头（自动过滤 `all`/`us`/`全部` 等冗余默认分组，并对 ETF/基金展示资产类别徽章）、一眼可读的「综合研判结论条」（行动标签 + 5 级买卖评级 + 参考买点/卖点/止损与盈亏比速览 + 三支柱）与默认关闭 RSI、留足主图空间的联动日线 K 线图（工具栏内置 `? 指标` 二级分类说明菜单，分「均线与布林」「MACD与RSI」「波浪与趋势」「点位与评分」四栏通俗解释）；右侧收拢为「综合研判」「Codex 总结」「提醒动态」三个标签页。
-- **宏观水位与「市场大势」引擎（`macro-1.0.0`）**：新增 `signaldesk/macro.py`，免 API Key 拉取 14 条 FRED 公开宏观序列（联储资产负债表 H.4.1、TGA、ON RRP、银行准备金、SOFR/IORB、NFCI/ANFCI、高收益债 OAS 与 BAA10Y、VIX、广义美元、10Y TIPS 实际利率与 `T10Y3M`），结合美国财政部 `3M/2Y/10Y` 曲线与独立缓存的 6 只全市场基准 ETF（`SPY`/`QQQ`/`RSP`/`IWM`/`HYG`/`IEF`，不污染用户自选列表），严格按官方发布时间对齐与因果滚动 10 年分位计算，输出六分项指示灯、四象限环境底色与红灯下行风险水位；当前第一阶段仅作市场整体风险环境展示与脱敏背景透传，不输出 0–100 黑箱大势总分，不自动干预个股评级。
-- **夜盘、盘前与盘后独立行情融合（`ext-1.0.0`）**：启用 LongPort 只读 `enable_overnight=True` 并独立采集夜盘、盘前与盘后报价及实时推送（`signaldesk/extended_hours.py`），在中栏结论条、左侧「盘外异动」排序与右侧精简「盘外动态」结论卡（一句结论 + 默认折叠三段明细，盘中不抢占买卖评级首屏）展示实时跳空幅度、盘外成交额与带 `$100万` 流动性门控的跳空/关键价前置预警，并透传至脱敏 Codex 快照；同时在常规盘中时段于 K 线图末尾以半透明虚线与 `盘中` 胶囊实时渲染**当日盘中 K 线**，**均严格不混入正式收盘日线指标、波浪结构与 5 级买卖评级**。
-- **个股与 ETF/指数基金分流分析**：通过 `signaldesk/instruments.py` 自动识别宽基指数 ETF（`QQQ`/`SPY`/`DIA`）、行业主题 ETF（`SOXX`/`XME`/`COPX`）、商品/债基 ETF（`GLD`/`SLV`/`USO`/`TLT`）及杠杆/反向 ETF（`TQQQ`/`SOXL`/`SQQQ`/`SOXS` 等）。对 ETF/基金自动停用易失真的券商主体 PE/PB 与「亏损警示」，改用严格因果的「52 周高点回撤 + 近 1 年价格分位 + 60 日年化波动率 + 近 1 年最大回撤 + 美债利率环境」专属评估与右侧「基金与指数特征」卡片；对反向做空杠杆 ETF 启用「对冲观察」与评级封顶护栏，对正向高倍杠杆 ETF 明确提示每日再平衡波动损耗；同时在前端加入全局/局部 React `ErrorBoundary`、WebSocket 变更去重推送、后端衍生指标缓存与 `index.html` 禁缓存头，消除看盘运行中的突发白屏与事件循环阻塞。
-- **波浪理论与趋势通道可视化**：新增 `signaldesk/wave_trend.py` 严格因果引擎，在 K 线主图上直接叠加**平行趋势通道**（上/中/下轨虚线）、**波浪折线与胶囊标号**（`起 / 1浪–5浪 / A浪–C浪` 或道氏 `高抬 / 低抬 / 高低 / 低低`，已确认用实线、进行中末端用虚线与 `*` 区分）以及主图顶栏波浪趋势摘要徽章；K 线工具栏支持通过「波浪」与「点位」开关自由切换（默认关闭 RSI，需要时可随时打开），右侧「波浪与趋势结构」卡片同步展示波浪定位、通道分位、突破确认/防守位、道氏结构、均线排列、斐波那契测算与大白话交易参考。
-- **买卖点位预测与 5 级评级**：基于连续已确认日线、ATR14 波动率、均线/布林/20日及60日高低点/枢轴与斐波那契 1.618 扩展位因果测算参考买点区间、参考卖点区间与防守止损价，并结合四因子权重与三条风控护栏输出 `强烈买入 / 建议买入 / 中性观望 / 谨慎减持 / 建议卖出` 五级评级（数据不足时诚实提示 `暂不评级`）。K 线工具栏支持通过「点位」按钮开关预测买卖点虚线参考线（左侧标注避免遮挡右侧最新 K 线与波浪标号），右侧「买卖评级与点位预测」卡片支持一键「采纳为计划价」（预填至编辑弹窗后由用户确认保存）。
-- **本机收藏与计划价**：对任意持仓或自选标的点击 `★` 即可加入本地收藏；点击「编辑计划」可设置长期失效价、目标价与底仓股数，并在 K 线图与进度条中直观联动。
+## 核心特性
 
-## 立即使用
+- **16:9 精简三栏看盘与右侧模块化定制**：
+  - **紧凑顶栏**：浓缩运行状态、「大势 · 四象限 / 红灯数」全景入口、「美债 10Y」速览胶囊（点击展开 `3M/2Y/10Y`、NY Fed 12M 衰退概率与 `10Y TIPS` 实际利率解读）以及「更多」二级控制菜单。
+  - **左栏自选与收藏**：支持长桥美股自选分组只读同步、本机 `★ 收藏`、4 维清晰排序（`买卖评级` / `风险预警` / `今日涨幅` / `今日跌幅`）与大白话行动标签图例。
+  - **中栏 K 线与双口径联动**：前复权日线（`ForwardAdjust` 自动平滑拆股/合股跳空并具备除权漂移自愈）叠加平行趋势通道、因果波浪折线与参考买卖点虚线；常规盘中实时渲染当日未收盘 K 线；支持一键切换 **「收盘确认（正式基准） ↔ 最新行情试算（盘中/盘外实时重算预览，零数据库污染）」**。
+  - **右栏可自定义研判面板**：7 大独立研判模块（`买卖点位评级`、`波浪与趋势分析`、`盘外动态`、`长期计划价位`、`结构评分与学术因子`、`估值与资产特征`、`独立风险检查`）支持自由拖拽排序与显隐开关。
+- **`fusion-2.0.0` 降噪规则与严格因果学术因子（`factors.py`）**：
+  - 经本地多股横截面因果回放验证，剔除短周期高共线冗余指标，采用 `45% 连续趋势 + 40% 多周期动量 + 15% 10日平滑资金顺向度`；
+  - 零付费数据源计算 6 组核心学术因子：**残差动量信息比**（vs `SPY` 扣 Beta 不扣自身 Alpha）、**FIP 信息离散度**（区分连续慢牛 vs 单日脉冲）、**52 周高点锚定比**、**Yang-Zhang 无偏波动率**（计入隔夜跳空）、**下行 Beta** 与 **近月 `MAX5` 彩票过热护栏**，辅以 60 日已实现偏度、`Amihud` 流动性冲击与换手率/总市值。
+- **宏观水位（`macro-1.0.0`）、盘外动态（`ext-1.0.0`）与动态风险预算**：
+  - 免 Key 拉取 14 条公开 FRED 宏观序列（按官方发布时间严格对齐）与 6 只全市场基准 ETF，合成六分项指示灯与四象限底色；
+  - 融合夜盘 / 盘前 / 盘后独立行情、`$100万` 流动性门控及**近 20 日隔夜 vs 日内拉锯诊断**（对历史「高开低走」标的在盘外急涨时主动提示防追高）；
+  - 基于目标波动率与宏观红灯水位给出纯参考性的**建议敞口系数（`suggested_exposure_ratio`）**与**近 60 日峰值 `2.5×ATR14` 移动保护位（`trailing_stop`）**。
+- **个股与 ETF / 指数基金智能分流（`instruments.py`）**：
+  - 自动识别宽基、行业、商品及杠杆/反向 ETF，停用易失真的基金主体 PE/PB，改用近 1 年高点回撤、价格分位、Yang-Zhang 波动率与美债变动评估，并对反向/高倍杠杆 ETF 施加专属复利损耗风控护栏。
+- **多 Agent 官方本地协议长期复核（`agent_bridge.py` / `codex_bridge.py`）**：
+  - **仅支持官方原生协议，拒绝一切非官方第三方包装器**，且强制纯手动触发、零副作用只读隔离运行：
+    - **Google Antigravity CLI**：通过官方 [Agent 客户端协议 (ACP)](https://antigravity.google/docs/cli/acp/)（`agy acp`，JSON-RPC 2.0 over `stdio`）通信，握手关闭文件读写与终端能力并自动拒绝一切工具权限请求；
+    - **OpenAI Codex CLI**：通过官方 `codex exec --output-schema` 最小目录只读权限运行；
+  - 发送前可通过「查看脱敏预览」逐字核对白名单 JSON（绝不含账户标识、持仓股数、成本价、金额或流水）。
 
-Git 仓库根目录是 `Finance\SignalDesk`。从 `Finance` 目录执行 Git 操作或运行本文的命令前，请先执行 `Set-Location .\SignalDesk`。
+---
 
-在 Windows 双击 [Start-SignalDesk.cmd](Start-SignalDesk.cmd)。首次启动会安装依赖并构建看板，服务就绪后打开 `http://127.0.0.1:8765`。重复启动会打开同一实例的看板。
+## 仓库目录结构
 
-双击 [Stop-SignalDesk.cmd](Stop-SignalDesk.cmd) 可退出托盘并停止后台监控。脚本等待服务清理完毕，已经停止时也可以重复执行。若设置了 `SIGNALDESK_DATA_DIR`，启动和停止时请使用同一数据目录。升级前已运行的旧版服务，首次请从原托盘退出，或在其无界面控制台按 `Ctrl+C`。
-
-- 首次运行在设置中主动展示“登录后自动启动”；默认关闭，可随时修改。
-- 关闭浏览器后继续后台监控。托盘菜单中的“退出并停止监控”与结束脚本均可停止服务。
-- 默认端口被占用时，可运行 `.\Start-SignalDesk.cmd --port 8877`。只需托盘时可加 `--background`，停止时无需指定端口。
-- 演示模式不会自动向QQ或Codex发送事件。可以手动使用合成快照测试Codex分析。
-- 监控依赖电脑开机联网；关机、睡眠及断网期间无法实时提醒，恢复后补数据并保留缺口状态。
-
-如需从Git新检出后安装：Python 3.12+、uv、Node.js 20.19+/22+。
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
-.\Start-SignalDesk.cmd
+```text
+SignalDesk/
+├── signaldesk/              # Python 后端核心包（FastAPI + 因果量化引擎 + 多 Agent 桥接）
+│   ├── desktop.py           # 桌面托盘与无界面服务入口（CLI: signaldesk）
+│   ├── launcher.py          # Windows 单实例启停与健康探测守护器
+│   ├── app.py               # FastAPI 路由、WebSocket 推送与本地会话安全校验
+│   ├── service.py           # 核心监控服务 Monitor、缓存协同与实时试算引擎
+│   ├── models.py            # StrictModel 数据契约与配置模型
+│   ├── security.py          # DPAPI/Fernet 加密凭据库与 safe_snapshot 脱敏白名单
+│   ├── storage.py           # SQLite WAL 持久化存储
+│   ├── providers.py         # LongPort 只读行情/持仓/自选接口与双网关测速回退
+│   ├── indicators.py        # fusion-2.0.0 技术指标与三维平滑结构评分
+│   ├── factors.py           # 严格因果学术因子引擎（残差动量 / FIP / Yang-Zhang / MAX5 等）
+│   ├── factor_eval.py       # 多股横截面因果回放评测工具（CLI: signaldesk-eval）
+│   ├── forecast.py          # 去重锚点买卖区间、正交四维 5 级评级与 risk_budget
+│   ├── wave_trend.py        # 因果 ZigZag 拐点、平行趋势通道与波浪校验
+│   ├── instruments.py       # 个股 vs ETF/杠杆基金分类与基金特征计算
+│   ├── extended_hours.py    # ext-1.0.0 夜盘/盘前/盘后独立行情与日夜拉锯预警
+│   ├── macro.py             # macro-1.0.0 FRED 宏观流动性六分项与四象限引擎
+│   ├── research.py          # 美国财政部国债收益率曲线与名义/实际股债利差
+│   ├── agent_bridge.py      # OfficialAgentBridge 协议、Antigravity ACP 客户端与 AgentHub
+│   ├── codex_bridge.py      # OpenAI Codex CLI 官方 codex exec 桥接器
+│   ├── events.py            # 事件状态机与冷却去重
+│   ├── notifications.py     # 桌面通知与 QQ 官方机器人出站通知通道
+│   └── replay.py            # 历史 CSV/JSON 离线回放工具（CLI: signaldesk-replay）
+├── frontend/                # React 19 + TypeScript + Vite 6 + ECharts 6 前端工程
+│   ├── public/              # 多尺寸品牌图标（favicon.svg / .ico / apple-touch-icon.png）
+│   ├── src/                 # 前端组件、模块化右栏配置与企业简洁风样式
+│   └── package.json         # 前端依赖声明（由 package-lock.json 锁定）
+├── tests/                   # 108 项后端因果性、安全隔离、API 与多 Agent 协议单元测试
+├── scripts/
+│   └── setup.ps1            # 一键初始化 uv 锁定环境并构建前端静态资源
+├── docs/
+│   ├── signals.md           # 算子、fusion-2.0.0 公式、学术因子、宏观与多 Agent 口径字典
+│   ├── research.md          # 量化文献调研与本机 75 股 / 9,307 截面因果回放实证报告
+│   ├── research_todo.md     # 学术精简与高有效指标分阶段实施清单（已全部完成）
+│   └── verification.md      # 历次自动化测试与双分辨率实盘验收记录
+├── AGENTS.md                # 协作者与 AI 智能体架构交接规范及工程红线
+├── TODO.md                  # 里程碑归档与下一阶段路线图（选股推荐工作台等）
+├── .env.example             # 可选本机环境变量说明模板
+├── .python-version          # Python 解释器版本锁定（3.12）
+├── pyproject.toml           # Python 项目元数据、依赖与命令入口定义
+├── uv.lock                  # uv 精确跨平台依赖锁文件
+├── Start-SignalDesk.cmd     # Windows 一键启动脚本
+└── Stop-SignalDesk.cmd      # Windows 一键停止脚本
 ```
 
-前端编译后由本机Python服务提供，日常运行无需Node服务；所有字体、图表和页面资源本机加载。
+---
 
-## 接入顺序
+## 环境管理与快速开始（基于 `uv`）
 
-### 1. 长桥行情与持仓
+本项目采用 **[uv](https://docs.astral.sh/uv/)** 管理 Python `3.12+` 虚拟环境与精确依赖锁（`uv.lock`），前端由 Node.js `20.19+ / 22+`（`npm ci`）构建静态产物，日常运行仅需本机 Python 进程。
 
-在「设置 → 长桥数据」选择默认的 **OAuth 2.0（推荐）**，点击「登录长桥」。SignalDesk 首次使用时向长桥注册本机客户端，在新标签页打开官网。确认账户读取与自选股权限后，回到看板，看到「已保存长桥 OAuth 授权」即可在「运行方式」选择「实盘」并保存。若浏览器拦截新标签页，点击「打开本次授权页」。[长桥官方认证说明](https://open.longbridge.com/zh-CN/docs/getting-started#认证方式)
+### Windows 一键启动
 
-账户读取使用 `account.read`。长桥将自选股读写合并在 `watchlist` 权限内，SignalDesk 仅调用其中的读取接口。程序使用本机看板地址接收回调，访问令牌与刷新令牌写入加密凭据库，实盘运行时自动续期。若长桥提示授权失效，点击「重新登录长桥」。
+1. 从仓库克隆或进入 `SignalDesk` 目录后，直接双击 [Start-SignalDesk.cmd](Start-SignalDesk.cmd)（首次运行会自动调用 [scripts/setup.ps1](scripts/setup.ps1) 执行 `uv sync --frozen` 与前端构建，就绪后自动打开 `http://127.0.0.1:8765`）。
+2. 需要退出托盘并停止后台监控时，双击 [Stop-SignalDesk.cmd](Stop-SignalDesk.cmd)。
+3. 如需手动执行完整初始化：
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+   .\Start-SignalDesk.cmd
+   ```
 
-已有 API Key 会继续使用，直到 OAuth 授权成功。需要手动配置时，选择「API Key（兼容）」和原凭据签发网站，再填写 App Key、App Secret 和 Access Token。旧版升级后运行 `uv sync --frozen`、重新构建前端并重启 SignalDesk，或运行上方安装脚本后重启。
+---
 
-程序使用官方 SDK 读取持仓、资金、自选分组（可在设置中开关只读同步，并在看板一键手动同步）、交易日历、常规时段与夜盘/盘前/盘后报价、**前复权日线**（`ForwardAdjust`，最新价与真实市场价一致并自动消除拆股/合股跳空，除权日增量检测因子漂移自动全量重对齐）和估值。建立连接时自动对同品牌 `.cn`（中国大陆加速节点）与 `.com` 网关测速择优，建连失败或断线时自动回退备用节点；连接就绪后第一时间批量拉取最新报价并订阅实时推送，再在后台低并发补齐缺失或新收盘日线（已对齐最新已完成交易日的日线不再在盘中重复拉取，跨交易日推送自动用已确认日线昨收兜底避免显示「待更新」）。右侧综合研判支持在「收盘确认（基准）」与「最新行情试算（盘中/盘外实时预览，零污染正式复核与告警）」之间一键切换。如果最近 200 根日线覆盖的交易日出现断档，程序会重新请求历史数据。同一股票的历史补数请求至少间隔一小时，期间继续接收最新日线。OpenAPI 的行情权限由券商单独配置。
+## 外部通道接入说明（全部可选）
 
-实盘每小时读取市盈率 TTM、市净率及股息率 TTM，页面标记取数时间。宏观模块每 6 小时单独读取美国财政部的 3 个月、2 年及 10 年期国债收益率与 14 条公开 FRED 宏观序列（H.4.1、NFCI、信用利差、VIX、广义美元、10Y TIPS 实际利率等），独立只读缓存 `SPY/QQQ/RSP/IWM/HYG/IEF` 基准日线用于全市场趋势与广度，并严格按官方发布时间对齐。演示模式全部使用确定性合成样例。
+### 1. 长桥（LongPort / Longbridge）只读行情与自选
+- 在看板「设置 → 长桥数据」选择默认的 **OAuth 2.0（推荐）**，点击「登录长桥」在浏览器完成只读授权（`account.read` 与只读 `watchlist`），令牌经本机系统 DPAPI 加密存储并自动续期；亦兼容手动录入 API Key。
+- 连接时自动测速优选 `.cn` / `.com` 网关，支持断线自动回退、盘前/盘后/夜盘实时报价及前复权日线自动对齐。
 
-当市盈率为正时，页面计算盈利收益率（100 / PE，单位为 %）及其与 10 年期名义美债收益率和 10 年期 TIPS 实际利率之差（百分点）。它比较两个收益率的水平，估值合理性还需结合公司盈利、现金流及行业参照。取数超过 4 天的估值或观察日期超过 7 天的利率会标为过期，并暂停跨来源比较。
+### 2. 本地官方 Agent 长期复核（Antigravity CLI / Codex CLI）
+在看板「设置 → Agent 复核」或右侧「AI 复核」面板可随时切换默认首选引擎：
+- **Google Antigravity CLI（官方 ACP 协议）**：按官方文档安装 `agy` 后，在本机终端运行一次 `agy acp --login` 完成登录（或配置 `GEMINI_API_KEY`），SignalDesk 即通过官方 `agy acp` 标准协议调用。
+- **OpenAI Codex CLI（官方非交互模式）**：安装 Codex CLI 后运行 `codex login` 登录，SignalDesk 通过 `codex exec --output-schema` 隔离只读调用。
+- 本地 CLI 执行时，脱敏分析文本会发送至对应模型服务商（Google / OpenAI）完成推理；本工具所有复核均为用户手动点击触发，后台绝不自动消耗额度。
 
-实盘持仓初始为未分类。点击股票「编辑计划」按钮分配长期数量，其他仓位保留用于数量核对。账号中的美股自选分组会只读同步到「自选股」列表；此外可对任意持仓或自选标的点亮本地「★ 收藏」，收藏状态仅保存在本机，方便集中看盘复核。旧的混合仓目标价和失效价仍归原短线计划，长期价位可以单独设置。新观察股默认归入长期研究。旧短线分类和历史会保存在本机，当前工作台仅生成长期提醒。
+### 3. QQ 官方机器人通知
+- 在「设置 → QQ官方机器人」填入官方平台 AppID、AppSecret 与绑定的 `user_openid` / `group_openid` 即可测试发送；通知内容经严格脱敏，不含持仓数量与金额。
 
-### 2. Codex
+---
 
-确保本机Codex CLI已经登录。程序读取现有模型与推理强度偏好，采用专用配置运行非交互任务，不修改全局Codex设置，也不另行切换为API计费模式。
-
-- **手动触发总结**：默认已关闭后台自动调用，仅在您点击个股的「生成 Codex 总结」按钮后才向 Codex 发送当前脱敏快照，避免意外消耗额度。
-- 个股「查看脱敏预览」可以先核对实际脱敏快照，再手动生成总结。
-- 默认单次等待600秒，适配现有较高推理强度；可在设置中调整，等待期间不阻塞监控。
-- 发送股票、已确认日线、估值与美债数据（含名义与实际利率利差）、脱敏市场大势底色（`macro_regime`）、参考买卖点位与 5 级综合评级（`forecast`）、波浪与趋势结构摘要（`wave_trend`）、长期仓位占比和计划价距离百分比；不发送账户标识、股数、实际金额、成本和流水。
-- 使用精确文件读取范围、关闭继承插件/工具/记忆/钩子，并通过标准输入发送快照。自动分析依赖本机快照；已有Longbridge插件仍可在你交互式使用Codex时补充核查。
-- 结果先展示行动意见，再列依据、风险与改变计划的条件。收盘计划状态检查用户设定的价位，Codex 独立形成长期持有、等待或复核止损/止盈的意见。超时、登录失效、额度不足及沙箱未就绪会明确显示，不降低隔离要求、不影响行情监控。
-
-Codex客户端在本机执行，**分析内容仍会发送到模型服务**。本项目不把云端分析称为本地推理。
-
-### 3. QQ官方机器人
-
-在“QQ官方机器人”设置中填写AppID、AppSecret、接收类型及与该AppID绑定的 `user_openid` 或 `group_openid`，保存后主动点击测试。
-
-OpenID不是普通QQ号/群号。可从你已有官方机器人的事件或平台调试记录取得；首版是仅出站发送适配器，不部署公网事件回调、也不托管QQ账号。若尚无目标OpenID或主动/订阅权限，需先在QQ官方平台完成配置。
-
-成功、待授权、限流、失败、结果未知分别显示，HTTP 200中的业务失败不会被当作成功。普通QQ事件30秒合并，关键风险优先；超时结果不明确时不盲目重发。目标修改后旧队列不会转发到新目标。
-
-QQ默认只发送股票、技术事件、结构分、简短说明与时间，不发送仓位和金额。微信后续可以实现同一个 `NotificationChannel` 接口，现有引擎与去重机制无需改写。
-
-## 数据与隐私
-
-- 默认运行目录：Windows `%LOCALAPPDATA%\SignalDesk`；Linux `~/.local/share/signaldesk`。可用 `SIGNALDESK_DATA_DIR` 指定其他本机目录。
-- SQLite存储行情、分类、规则、事件、投递和分析状态；敏感文件与Codex快照均不纳入Git。
-- Windows凭据使用当前用户DPAPI加密，前端无法回读。Linux实盘需要提供Fernet格式的 `SIGNALDESK_VAULT_KEY`，未配置时不会明文保存凭据；演示和无界面运行不需要该密钥。
-- 服务仅监听127.0.0.1，校验Host/Origin和本机会话，不开放局域网，不加载外部CDN、没有云端遥测，也未配置Git远程仓库。
-
-## 开发、测试和回放
+## 开发、测试与因果评测命令
 
 ```powershell
+# 同步锁定环境（含 pytest / ruff 开发工具组）
 uv sync --frozen
-.venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\ruff.exe check signaldesk tests
-cd frontend
+
+# 运行代码静态检查与全量单元测试
+uv run ruff check signaldesk tests
+uv run pytest -q
+
+# 启动无界面本机开发/实盘服务
+uv run signaldesk --headless --port 8765
+
+# 运行离线多股因果因子回放评测或单标的回放
+uv run signaldesk-eval --output .runtime\factor_eval.json
+uv run signaldesk-replay --output .runtime\replay-demo.json
+
+# 构建前端静态资源
+Set-Location frontend
 npm ci
 npm run build
 ```
 
-无界面服务：
+---
 
-```powershell
-.venv\Scripts\python.exe -m signaldesk.desktop --headless --port 8765
-```
+## 数据安全与文档索引
 
-Linux复用Python核心，先构建/复制前端资源，再运行 `python -m signaldesk.desktop --headless`。ARM64依赖可用性与实际模型调用、长桥连接性能仍须在目标开发板验证。
-
-回放及精确公式见 [算子与评分说明](docs/signals.md)。项目选型、许可证和来源见 [量化项目调研](docs/research.md)。验收记录见 [验收说明](docs/verification.md)。Python与前端分别由 `uv.lock`、`frontend/package-lock.json` 锁定版本。
-
-工程约束、UI 规范与文档/Git 连续性纪律见 [AGENTS.md](AGENTS.md)。项目区前端设计与交互工程技能位于 [.agents/skills](.agents/skills)（包含 `frontend-design`、`web-design-guidelines`、`vercel-composition-patterns`、`emil-design-eng`）。
-
-用户反馈、当前进度与下一步「选股推荐功能」规划见 [后续待办](TODO.md)。
+- **本机加密与脱敏**：运行状态与加密凭据默认位于 `%LOCALAPPDATA%\SignalDesk`（Linux 为 `~/.local/share/signaldesk`，可通过 `SIGNALDESK_DATA_DIR` 覆盖，参考 [.env.example](.env.example)）。服务仅绑定 `127.0.0.1` 并校验同源会话令牌。
+- **延伸文档**：
+  - 协作规范与模块交接字典：[AGENTS.md](AGENTS.md)
+  - 算子、公式与风控口径：[docs/signals.md](docs/signals.md)
+  - 学术文献与因果回放实证：[docs/research.md](docs/research.md)
+  - 测试与实盘验收记录：[docs/verification.md](docs/verification.md)
+  - 迭代归档与选股推荐路线图：[TODO.md](TODO.md)

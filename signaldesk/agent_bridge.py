@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from uuid import uuid4
 
 from .models import AgentProviderId, AnalysisResult, AntigravitySettings, Settings
@@ -30,6 +30,29 @@ from .storage import Store
 
 if TYPE_CHECKING:
     from .codex_bridge import CodexBridge
+
+
+@runtime_checkable
+class OfficialAgentBridge(Protocol):
+    """官方本地 Agent CLI 桥接器标准协议契约（所有引擎实现均须满足此结构化接口）。"""
+
+    provider_id: str
+    label: str
+    protocol: str
+    protocol_label: str
+    login_hint: str
+
+    def refresh_discovery(self) -> None: ...
+    def public_status(self) -> dict: ...
+    async def request(
+        self,
+        stock: dict,
+        source: str,
+        automatic: bool = False,
+        event_id: str | None = None,
+        macro: dict | None = None,
+    ) -> str | None: ...
+    async def run(self) -> None: ...
 
 _STREAM_LINE_LIMIT = 4 * 1024 * 1024
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -527,7 +550,7 @@ class AntigravityAcpBridge:
 
 
 class AgentHub:
-    """统一管理多个官方本地 Agent CLI 桥接器（严禁非官方调用方式）。"""
+    """基于 `OfficialAgentBridge` 协议注册表统一协调多个官方本地 Agent CLI。"""
 
     def __init__(
         self,
@@ -540,19 +563,22 @@ class AgentHub:
         self.settings = settings
         self.codex = codex
         self.antigravity = antigravity
+        self.providers: dict[AgentProviderId, OfficialAgentBridge] = {
+            "antigravity": antigravity,
+            "codex": codex,
+        }
 
     def update_settings(self, settings: Settings) -> None:
         self.settings = settings
         self.codex.settings = settings.codex
         self.antigravity.settings = settings.antigravity
 
-    def get_bridge(self, agent: AgentProviderId | None = None):
+    def get_bridge(self, agent: AgentProviderId | None = None) -> OfficialAgentBridge:
         chosen: AgentProviderId = agent or self.settings.default_agent
-        if chosen == "antigravity":
-            return self.antigravity
-        if chosen == "codex":
-            return self.codex
-        raise ValueError(f"不支持的 Agent 类型：{chosen}")
+        bridge = self.providers.get(chosen)
+        if bridge is None:
+            raise ValueError(f"不支持的 Agent 类型：{chosen}")
+        return bridge
 
     def public_status(self) -> dict:
         return {
@@ -560,8 +586,8 @@ class AgentHub:
             "manual_only": True,
             "official_only": True,
             "providers": {
-                "antigravity": self.antigravity.public_status(),
-                "codex": self.codex.public_status(),
+                agent_id: bridge.public_status()
+                for agent_id, bridge in self.providers.items()
             },
         }
 

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from signaldesk.agent_bridge import (
     AntigravityAcpBridge,
+    OfficialAgentBridge,
     antigravity_acp_command,
     extract_structured_result,
 )
@@ -305,6 +306,8 @@ def test_multi_agent_endpoints_and_unofficial_agent_rejection(tmp_path, monkeypa
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         client.get("/")
         monitor = app.state.monitor
+        assert isinstance(monitor.antigravity, OfficialAgentBridge)
+        assert isinstance(monitor.codex, OfficialAgentBridge)
         monitor.antigravity.executable = "synthetic-agy"
         monitor.codex.executable = "synthetic-codex"
 
