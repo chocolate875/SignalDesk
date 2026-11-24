@@ -1,5 +1,20 @@
 # V0.1.0 验收记录
 
+## 2026-11-24 多 Agent 长期复核泛化、Google Antigravity CLI 官方 ACP 接入与 Codex 官方接口核查
+
+- **官方协议合规核查（严格拒绝一切非官方调用方式）。**
+  - **OpenAI Codex CLI 核查结论**：确认现有 [codex_bridge.py](../signaldesk/codex_bridge.py) 使用的是 OpenAI 官方公开支持的非交互命令 `codex exec`（配合 `--ignore-user-config --ephemeral --skip-git-repo-check --output-schema -o` 及最小目录只读权限 `-c permissions=...`），不含任何屏幕抓取、伪终端注入或私有 API；鉴于 OpenAI 官方原生不含 `codex acp`（社区 `codex-acp` 为第三方适配器），Codex 严格保持官方原生 `codex exec` 通道。
+  - **Google Antigravity CLI 官方 ACP 接入**：依据官方文档 [Agent 客户端协议 (ACP)](https://antigravity.google/docs/cli/acp/) 新建 [agent_bridge.py](../signaldesk/agent_bridge.py)，实现标准 `AcpStdioClient`、`AntigravityAcpBridge` 与多引擎协调器 `AgentHub`：
+    - 通过官方 `agy acp` 子命令执行标准 JSON-RPC 2.0 over stdio 生命周期（`initialize` → `session/new` → `session/prompt`）并聚合 `session/update`（`agent_message_chunk`）；
+    - 协议层硬隔离：`initialize` 显式声明 `clientCapabilities = {fs: {readTextFile: false, writeTextFile: false}, terminal: false}`，`session/new` 设 `mcpServers = []`，遇到任何 `session/request_permission` 工具授权请求一律自动回复 `reject_once` / `cancelled`，遇到反向能力调用一律返回 `-32601` 拒绝；
+    - [security.py](../signaldesk/security.py) 子进程环境白名单扩展 `GEMINI_API_KEY` / `GOOGLE_API_KEY` / Vertex AI 官方认证变量，继续严格屏蔽 `LONGPORT_*`、`QQ_*` 与 `SIGNALDESK_VAULT_KEY`；
+    - [models.py](../signaldesk/models.py) 与 [app.py](../signaldesk/app.py) 限定 `AgentProviderId = Literal["codex", "antigravity"]`，任何非官方 Agent 参数一律返回 HTTP `422` 拒绝。
+- **前端多 Agent 泛化与配置面板升级。**
+  - 更新 [types.ts](../frontend/src/types.ts)、[App.tsx](../frontend/src/App.tsx)、[StockInspector.tsx](../frontend/src/StockInspector.tsx)、[Settings.tsx](../frontend/src/Settings.tsx) 与 [style.css](../frontend/src/style.css)：将入口与面板升级为「`AI 复核` / `智能体长期复核`」，支持 `Antigravity CLI (官方 ACP · agy acp)` 与 `Codex CLI (官方 · codex exec)` 双引擎切换、跨引擎已有复核结论对照、脱敏发送预览动态标注及「设置 → Agent 复核」默认首选引擎与独立超时配置；全量 `288` 条 CSS `font-size` 最小值为 `12.0px`（`bad = 0`）。
+- **自动化测试与双分辨率实盘验收（`http://127.0.0.1:8765/`）。**
+  - 新增 [test_agent_bridge.py](../tests/test_agent_bridge.py)（真实子进程 stdio ACP 握手、流式分片、思考分片隔离、`session/request_permission` 自动拒绝、超时强杀、未登录路径脱敏与非官方 Agent `422` 拦截）；全量 `ruff check signaldesk tests` 零警告，`pytest -q` **108 项全部通过**，前端 `tsc -b && vite build` 零错误通过（产物 `index-Dn5f2ae8.js`、`index-DzCbu28j.css`）。
+  - 完成 `1440×810` 与 `1280×720` 双分辨率浏览器验收：`AI 复核` 双引擎卡片切换、协议说明、`agy acp --login` 引导、「Agent 脱敏发送预览」（确认含学术因子与风险预算、零股数/成本泄露）、「设置 → Agent 复核」与「提醒动态 → 接入与通道状态」全部渲染正常，全程控制台 **0 errors**，`.error-fallback = 0`。
+
 ## 2026-11-24 Phase 0–4 学术因子升级、`fusion-2.0.0` 规则降噪浓缩与 16:9 界面全链路验收
 
 - **Phase 0 本机因果回放实证基准（`75` 只非杠杆美股 / `9,307` 观测 / `138` 截面）。**

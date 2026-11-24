@@ -134,9 +134,15 @@ export default function SettingsPanel({
       }
       const payloadSettings = {
         ...data.settings,
+        default_agent: data.settings.default_agent ?? "codex",
         codex: {
           ...data.settings.codex,
           automatic: false,
+        },
+        antigravity: {
+          enabled: true,
+          timeout_seconds: 600,
+          ...(data.settings.antigravity ?? {}),
         },
       };
       await api("/settings", {
@@ -158,7 +164,7 @@ export default function SettingsPanel({
     ["general", "运行方式", Settings2],
     ["broker", "长桥数据", KeyRound],
     ["qq", "QQ官方机器人", Send],
-    ["codex", "Codex分析", Bot],
+    ["codex", "Agent 复核", Bot],
     ["rules", "融合规则", SlidersHorizontal],
   ] as const;
   return (
@@ -507,20 +513,72 @@ export default function SettingsPanel({
                 )}
                 {tab === "codex" && (
                   <>
-                    <h3>Codex 长期计划总结</h3>
+                    <h3>本地官方 Agent 长期复核</h3>
                     <p className="muted">
-                      使用本机 Codex CLI
-                      的登录与模型设置。只有脱敏快照会进入分析输入，分析在
-                      OpenAI 服务完成。
+                      仅通过官方公开协议连接本机已安装的编码智能体 CLI（Google Antigravity 官方{" "}
+                      <code>agy acp</code> 与 OpenAI 官方 <code>codex exec</code>
+                      ），拒绝任何非官方桥接或包装器。
                     </p>
                     <div className="notice">
-                      Codex 总结已设为手动触发模式，仅在您点击「生成 Codex
-                      总结」时调用，不会在后台自动触发。
+                      所有 Agent 均强制为手动触发、只读隔离运行（ACP 关闭客户端文件读写与终端权限），仅发送白名单脱敏快照，绝不传出账户标识、股数、成本与资金流水。
                     </div>
+                    <label className="field">
+                      默认首选 Agent
+                      <select
+                        value={data.settings.default_agent ?? "codex"}
+                        onChange={(e) =>
+                          patch(null, "default_agent", e.target.value)
+                        }
+                      >
+                        <option value="antigravity">
+                          Google Antigravity CLI（官方 ACP · agy acp）
+                        </option>
+                        <option value="codex">
+                          OpenAI Codex CLI（官方非交互 · codex exec）
+                        </option>
+                      </select>
+                    </label>
+
                     <div className="setting-row">
                       <div>
-                        <b>启用 Codex 总结</b>
-                        <small>使用精确读取范围与隔离运行配置。</small>
+                        <b>启用 Google Antigravity CLI（官方 ACP）</b>
+                        <small>
+                          使用官方 Agent Client Protocol（<code>agy acp</code> JSON-RPC 2.0 over stdio）；首次登录可执行{" "}
+                          <code>agy acp --login</code> 或配置 <code>GEMINI_API_KEY</code>。
+                        </small>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={data.settings.antigravity?.enabled ?? true}
+                        onChange={(e) =>
+                          patch("antigravity", "enabled", e.target.checked)
+                        }
+                      />
+                    </div>
+                    <label className="field">
+                      Antigravity 单次超时 / 秒
+                      <input
+                        type="number"
+                        min="15"
+                        max="900"
+                        value={data.settings.antigravity?.timeout_seconds ?? 600}
+                        onChange={(e) =>
+                          patch(
+                            "antigravity",
+                            "timeout_seconds",
+                            Number(e.target.value),
+                          )
+                        }
+                      />
+                    </label>
+
+                    <div className="setting-row">
+                      <div>
+                        <b>启用 OpenAI Codex CLI（官方 codex exec）</b>
+                        <small>
+                          使用官方 <code>codex exec --output-schema</code>{" "}
+                          最小只读目录权限运行；首次登录可执行 <code>codex login</code>。
+                        </small>
                       </div>
                       <input
                         type="checkbox"
@@ -531,7 +589,7 @@ export default function SettingsPanel({
                       />
                     </div>
                     <label className="field">
-                      单次超时 / 秒
+                      Codex 单次超时 / 秒
                       <input
                         type="number"
                         min="15"
@@ -547,7 +605,7 @@ export default function SettingsPanel({
                       />
                     </label>
                     <div className="notice">
-                      发送个股估值、美债利率、日线指标、长期仓位占比及计划价距离。个股面板可先查看脱敏预览。
+                      发送脱敏个股估值、美债利率、日线结构、学术因子、风险预算及计划价距离。个股「AI 复核」面板可自由切换引擎或先查看脱敏预览。
                     </div>
                   </>
                 )}

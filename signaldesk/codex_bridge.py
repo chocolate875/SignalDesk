@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from .agent_bridge import build_analysis_prompt
 from .calendar import SH
 from .models import AnalysisResult, CodexSettings
 from .security import safe_child_environment, safe_snapshot
@@ -18,8 +19,19 @@ from .storage import Store
 
 
 def find_codex() -> str | None:
-    path = shutil.which("codex.exe" if os.name == "nt" else "codex")
-    return path
+    candidates = ["codex.exe", "codex.cmd", "codex"] if os.name == "nt" else ["codex"]
+    for name in candidates:
+        found = shutil.which(name)
+        if found:
+            return found
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            for fname in ("codex.cmd", "codex.exe"):
+                npm_bin = Path(appdata) / "npm" / fname
+                if npm_bin.is_file():
+                    return str(npm_bin)
+    return None
 
 
 def model_defaults() -> dict:
@@ -97,6 +109,12 @@ def inline_toml(value) -> str:
 
 
 class CodexBridge:
+    provider_id = "codex"
+    label = "Codex CLI"
+    protocol = "codex-exec"
+    protocol_label = "OpenAI Codex CLI (codex exec)"
+    login_hint = "codex login"
+
     def __init__(self, store: Store, settings: CodexSettings):
         self.store, self.settings = store, settings
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=30)
@@ -104,17 +122,35 @@ class CodexBridge:
         self.defaults = model_defaults()
         self.status = "ready" if self.executable else "unavailable"
         self.detail = (
-            "手动触发模式 · 点击「生成 Codex 总结」后分析" if self.executable else "未发现Codex CLI"
+            "手动触发模式 · 官方 codex exec 已就绪" if self.executable else "未发现Codex CLI"
         )
         self.process = None
 
+    def refresh_discovery(self) -> None:
+        if not self.executable:
+            self.executable = find_codex()
+            if self.executable and self.status == "unavailable":
+                self.status = "ready"
+                self.detail = "手动触发模式 · 官方 codex exec 已就绪"
+        self.defaults = model_defaults()
+
     def public_status(self):
+        self.refresh_discovery()
         today = datetime.now(SH).date().isoformat()
         return {
-            "status": self.status,
-            "detail": self.detail,
+            "id": self.provider_id,
+            "label": self.label,
+            "protocol": self.protocol,
+            "protocol_label": self.protocol_label,
+            "official": True,
+            "login_hint": self.login_hint,
+            "status": self.status if self.settings.enabled else "disabled",
+            "detail": self.detail if self.settings.enabled else "已在设置中停用 Codex 复核",
             "configured": bool(self.executable),
-            "model": self.defaults.get("model", "Codex默认模型"),
+            "model": self.defaults.get(
+                "model",
+                "Codex默认模型" if self.executable else "未检测到 Codex CLI",
+            ),
             "automatic": False,
             "manual_only": True,
             "enabled": self.settings.enabled,
@@ -133,8 +169,9 @@ class CodexBridge:
     ):
         if not self.settings.enabled:
             raise ValueError("Codex分析未启用")
+        self.refresh_discovery()
         if not self.executable:
-            raise ValueError("未发现Codex CLI，请在本机安装并登录")
+            raise ValueError("未发现Codex CLI，请在本机安装并执行 `codex login` 登录")
         now = time.time()
         if automatic:
             if not self.settings.automatic or source != "live":
@@ -149,6 +186,9 @@ class CodexBridge:
         job = {
             "id": str(uuid4()),
             "symbol": stock["symbol"],
+            "agent": self.provider_id,
+            "agent_label": self.label,
+            "protocol": self.protocol,
             "created": now,
             "status": "queued",
             "source": source,
@@ -195,25 +235,13 @@ class CodexBridge:
 
     async def _analyze(self, job: dict) -> AnalysisResult:
         directory = self.store.directory / "codex-exports" / job["id"]
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         (directory / "schema.json").write_text(
             json.dumps(AnalysisResult.model_json_schema()), encoding="utf-8"
         )
         snapshot = json.dumps(job["snapshot"], ensure_ascii=False, allow_nan=False)
         (directory / "snapshot.json").write_text(snapshot, encoding="utf-8")
-        prompt = (
-            "复核美股长期多头计划，只使用下方脱敏JSON。不要调用工具、读取其他文件、联网或执行交易。"
-            "用中文先给出继续持有、观察、等待、复核止损或分批止盈等一项意见，再给支持和反对证据。"
-            "先检查 instrument.asset_type 与 instrument.is_fund："
-            "若是上市公司个股，以市盈率、市净率、盈利收益率和利率环境讨论估值（同时参考名义股债利差 yield_gap_pp 与扣除通胀后的实际利率利差 real_yield_gap_pp；两者均不能单独充当预期回报），缺少盈利增长/现金流依据时说明局限；"
-            "若是宽基/行业/商品/杠杆 ETF 或基金，严禁将其当作单一公司讨论财报、净利润或基金主体 PE/PB，应基于追踪基准、近1年高点回撤与价格分位、年化波动率、趋势通道与美债利率环境复核，若为杠杆或反向 ETF 须明确指出每日再平衡波动损耗与仅适合波段/对冲的风险。"
-            "若快照包含 macro_regime，仅将其作为整体市场风险环境底色参考（流动性象限与红灯压力），不可单凭宏观大势替代个股计划或给出指数择时。"
-            "若快照包含 extended_hours（夜盘/盘前/盘后），请结合盘外成交额判断跳空有效性，仅作开盘前预案参考，不可将其混同于已确认常规收盘价或据此改写日线结构结论。"
-            "区分用户的计划价、已确认日线、券商估值的取数时间、美债观察日期与模型意见。"
-            "给出改变意见的具体条件和复核时点。技术分不能单独触发买卖。"
-            "fresh=false、输入缺失、持仓未核对时说明暂不能判断。未分配长期持仓或仅观察时不给持仓退出意见。"
-            "source=demo须标明合成。不得编造财报、宏观数据或价格；data_as_of使用日线收盘时点，缺少则填未知。\n" + snapshot
-        )
+        prompt = build_analysis_prompt(snapshot)
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = await asyncio.create_subprocess_exec(
             *command(self.executable, directory, self.defaults),

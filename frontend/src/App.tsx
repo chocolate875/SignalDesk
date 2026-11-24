@@ -33,6 +33,7 @@ import {
   fmt,
   isValidDashboard,
   ticker,
+  type AgentProviderId,
   type Dashboard,
   type Detail,
   type EvalMode,
@@ -623,11 +624,37 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [evalMode, data?.mode, selected, activeQuoteSig, refreshLiveEval]);
 
-  const analysis = (data?.analyses ?? []).find(
-    (a) =>
-      a.symbol === selected &&
-      a.source === data?.mode &&
-      a.scope === "long_value",
+  const [selectedAgent, setSelectedAgent] = useState<AgentProviderId | null>(
+    null,
+  );
+  const effectiveAgent = useMemo<AgentProviderId>(() => {
+    if (selectedAgent) return selectedAgent;
+    const hub = data?.channels?.agents;
+    const def: AgentProviderId =
+      hub?.default_agent === "antigravity" ? "antigravity" : "codex";
+    const providers = hub?.providers;
+    if (providers) {
+      if (providers[def]?.configured) return def;
+      const alt: AgentProviderId =
+        def === "antigravity" ? "codex" : "antigravity";
+      if (providers[alt]?.configured) return alt;
+    }
+    return def;
+  }, [selectedAgent, data?.channels]);
+
+  const stockAnalyses = useMemo(
+    () =>
+      (data?.analyses ?? []).filter(
+        (a) =>
+          a.symbol === selected &&
+          a.source === data?.mode &&
+          a.scope === "long_value",
+      ),
+    [data?.analyses, selected, data?.mode],
+  );
+  const analysis = useMemo(
+    () => stockAnalyses.find((a) => (a.agent ?? "codex") === effectiveAgent),
+    [stockAnalyses, effectiveAgent],
   );
   const currentDetail =
     stock && detail?.stock?.symbol === selected && detail.mode === data?.mode
@@ -734,12 +761,19 @@ export default function App() {
     }
   }
 
-  async function analyze() {
+  async function analyze(agentOverride?: AgentProviderId) {
     if (!stock) return;
+    const targetAgent = agentOverride ?? effectiveAgent;
+    setSelectedAgent(targetAgent);
     setInspectorTab("codex");
+    const agentName =
+      targetAgent === "antigravity" ? "Antigravity CLI (ACP)" : "Codex CLI";
     try {
-      await api(`/analysis/${stock.symbol}`, { method: "POST" });
-      notify("已手动提交 Codex 总结任务；行情监控继续运行");
+      await api(`/analysis/${stock.symbol}`, {
+        method: "POST",
+        body: JSON.stringify({ agent: targetAgent }),
+      });
+      notify(`已手动提交 ${agentName} 复核任务；行情监控继续运行`);
       await refresh();
     } catch (e: any) {
       notify(e.message);
@@ -1042,9 +1076,10 @@ export default function App() {
                       type="button"
                       className="button primary"
                       onClick={() => setInspectorTab("codex")}
+                      title="打开本地官方 Agent 长期复核面板（Antigravity ACP / Codex）"
                     >
                       <Bot size={14} />
-                      Codex
+                      AI 复核
                     </button>
                     {canDeleteSelected && (
                       <button
@@ -1334,7 +1369,10 @@ export default function App() {
               }
             }}
             onRefreshLiveEval={refreshLiveEval}
+            activeAgent={effectiveAgent}
+            onSelectAgent={setSelectedAgent}
             analysis={analysis}
+            stockAnalyses={stockAnalyses}
             events={data?.events ?? []}
             channels={data?.channels}
             mode={data?.mode ?? "demo"}
@@ -1389,11 +1427,11 @@ export default function App() {
           <section
             className="small-modal preview-modal"
             role="dialog"
-            aria-label="Codex脱敏发送预览"
+            aria-label="Agent脱敏发送预览"
           >
             <header className="modal-header">
               <div>
-                <h2>Codex 脱敏发送预览</h2>
+                <h2>Agent 脱敏发送预览</h2>
               </div>
               <button
                 type="button"
@@ -1405,7 +1443,11 @@ export default function App() {
               </button>
             </header>
             <p className="notice preview-notice">
-              以下内容会交给 Codex；不包含账户标识、股数、金额、成本或流水。
+              以下白名单脱敏内容将通过官方本地协议发送给当前所选 Agent（
+              {effectiveAgent === "antigravity"
+                ? "Antigravity CLI · ACP"
+                : "Codex CLI · exec"}
+              ）；不包含账户标识、股数、金额、成本或成交流水。
             </p>
             <pre>{JSON.stringify(preview, null, 2)}</pre>
             <footer className="modal-footer">
@@ -1422,10 +1464,12 @@ export default function App() {
                 className="button primary"
                 onClick={() => {
                   setPreview(null);
-                  analyze();
+                  analyze(effectiveAgent);
                 }}
               >
-                立即生成 Codex 总结
+                {effectiveAgent === "antigravity"
+                  ? "立即用 Antigravity 复核"
+                  : "立即用 Codex 复核"}
                 <ArrowRight size={15} />
               </button>
             </footer>

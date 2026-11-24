@@ -109,13 +109,17 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 - **Codex 脱敏隔离**：对 `is_fund = True` 的标的，`safe_snapshot()` 显式透传 `instrument` 与 `fund_metrics`，并将失真的基金主体 `pe_ttm`/`pb`/`earnings_yield_pct`/`yield_gap_pp` 置为 `None`，防止误导模型按公司财报分析 ETF。
 - **前复权拆股消除**：自 `live-fwd-v3` 起日线统一采用 `AdjustType.ForwardAdjust`（前复权）口径，自动平滑消除拆股（如 `SOXX`、`NVDA`、`SNDK`、`AVGO`）与合股（如 `SQQQ`、`SOXS`、`YANG`）造成的虚假跳空，并在后续除权日自动触发全量重对齐。
 
-## 综合研判状态（verdict）与 Codex 分工
+## 综合研判状态（verdict）与官方本地 Agent 分工
 
 每只股票在 `Monitor.stock()` 实时汇总生成确定性的 `verdict` 结构，用于在看板直观回答「当前怎么看、下一步看什么」：
 
 1. **行动标签与优先级（0–9，大白话直译 + `action_meaning` 悬浮释义）**：`0` 跌破止损（已确认收盘 <= 长期失效价）→ `1` 触及目标（收盘 >= 长期目标价）→ `2` 仓位待核（券商股数与本地分类不一致）→ `3` 亏损警示（有效 PE TTM <= 0）→ `4` 转弱警惕（持仓且日线偏弱或风险 >= 2 项）→ `5` 关注买点（观察股且偏强无风险）→ `6` 趋势向好（持仓且偏强无风险）→ `7` 持有观察 → `8` 弱势观望 / 震荡观望 → `9` 数据不足 / 未入长期。
 2. **三支柱与通俗维度说明**：同步输出「计划价位」「估值利率」「日线结构」三项紧凑状态，并将趋势（MA200 与 EMA20/50 相对位置）、动量（RSI14 区间与 MACD 柱方向）、量价（RVOL 倍数与涨跌）翻译为直白中文短语。
-3. **与 Codex 的职责分工**：上述规则研判在本地毫秒级确定性计算；Codex 总结默认为**纯手动触发**（`CodexSettings.automatic = False`），事件与轮询不会自动调用模型，仅在用户主动点击「生成 Codex 总结」时基于白名单脱敏快照运行。
+3. **与多 Agent 长期复核（`agent_bridge` / `codex_bridge`）的职责分工**：
+   - 仅采用**官方公开支持的本地调用协议**，严禁使用任何非官方包装器、屏幕抓取或未公开接口：
+     - **Google Antigravity CLI（`antigravity`）**：通过官方 `agy acp` 子命令启动 **Agent Client Protocol (ACP)** JSON-RPC 2.0 over stdio 会话（`initialize` → `session/new` → `session/prompt`），握手时显式声明 `clientCapabilities.fs = {readTextFile: false, writeTextFile: false}` 与 `terminal: false`，并对任何 `session/request_permission` 请求自动返回 `reject_once` / `cancelled`，确保 100% 零副作用只读运行。
+     - **OpenAI Codex CLI（`codex`）**：通过官方非交互 `codex exec` 子命令配合 `--ignore-user-config --ephemeral --output-schema` 与最小隔离只读目录权限运行（不使用第三方社区 `codex-acp` 适配器）。
+   - 所有 Agent 复核均强制为**纯手动触发**（`automatic = False`），仅在用户主动点击「生成复核」时发送经 `safe_snapshot()` 白名单过滤的脱敏快照。
 
 ## 波浪理论与趋势交易结构（wave_trend）
 

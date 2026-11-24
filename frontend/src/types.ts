@@ -389,10 +389,39 @@ export type Signal = {
   source: string;
   kind: string;
 };
+export type AgentProviderId = "antigravity" | "codex";
+export type AgentProviderStatus = {
+  id: AgentProviderId;
+  label: string;
+  protocol: string;
+  protocol_label: string;
+  official: boolean;
+  login_hint: string;
+  status: string;
+  detail: string;
+  configured: boolean;
+  model: string;
+  automatic: boolean;
+  manual_only: boolean;
+  enabled: boolean;
+  queue_size: number;
+  daily_used?: number;
+  daily_limit?: number;
+};
+export type AgentsChannel = {
+  default_agent: AgentProviderId;
+  manual_only: boolean;
+  official_only: boolean;
+  providers: Record<AgentProviderId, AgentProviderStatus>;
+};
 export type Analysis = {
   scope?: string;
   id: string;
   symbol: string;
+  agent?: AgentProviderId;
+  agent_label?: string;
+  protocol?: string;
+  model?: string;
   status: string;
   created: number;
   source: string;

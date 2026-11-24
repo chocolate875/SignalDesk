@@ -36,6 +36,8 @@ import {
   ticker,
   time,
   type AcademicFactors,
+  type AgentProviderId,
+  type AgentProviderStatus,
   type Analysis,
   type Dashboard,
   type EvalMode,
@@ -1241,7 +1243,10 @@ export default function StockInspector({
   liveEvalBusy = false,
   onEvalModeChange,
   onRefreshLiveEval,
+  activeAgent,
+  onSelectAgent,
   analysis,
+  stockAnalyses = [],
   events,
   channels,
   mode,
@@ -1264,7 +1269,10 @@ export default function StockInspector({
   liveEvalBusy?: boolean;
   onEvalModeChange?: (mode: EvalMode) => void;
   onRefreshLiveEval?: () => void;
+  activeAgent: AgentProviderId;
+  onSelectAgent: (agent: AgentProviderId) => void;
   analysis: Analysis | undefined;
+  stockAnalyses?: Analysis[];
   events: Signal[];
   channels: Dashboard["channels"] | undefined;
   mode: string;
@@ -1272,7 +1280,7 @@ export default function StockInspector({
   cooldownMinutes: number;
   onEditPlan: () => void;
   onApplyForecastLevels: (stopLoss: number, sellLow?: number | null) => void;
-  onAnalyze: () => void;
+  onAnalyze: (agent?: AgentProviderId) => void;
   onPreview: () => void;
   onSelectSymbol: (symbol: string) => void;
   onOpenDeliveries: () => void;
@@ -1299,9 +1307,25 @@ export default function StockInspector({
 
   const activeSummary = summary ?? stock?.primary ?? null;
   const dimensionNotes = stock?.verdict?.dimension_notes ?? {};
-  const codexStatus = channels?.codex;
-  const codexBusy =
+  const agyStatus: AgentProviderStatus | undefined =
+    channels?.agents?.providers?.antigravity ?? channels?.antigravity;
+  const codexStatus: AgentProviderStatus | undefined =
+    channels?.agents?.providers?.codex ?? channels?.codex;
+  const activeProvider =
+    activeAgent === "antigravity" ? agyStatus : codexStatus;
+  const activeAgentLabel =
+    activeAgent === "antigravity" ? "Antigravity" : "Codex";
+  const currentAgentBusy =
     analysis?.status === "running" || analysis?.status === "queued";
+  const anyAgentBusy = Boolean(
+    currentAgentBusy ||
+      stockAnalyses.some((a) => a.status === "running" || a.status === "queued"),
+  );
+  const altAgent: AgentProviderId =
+    activeAgent === "antigravity" ? "codex" : "antigravity";
+  const altCompleted = stockAnalyses.find(
+    (a) => (a.agent ?? "codex") === altAgent && a.status === "completed",
+  );
   const hasLiveEval = Boolean(liveEval?.available);
   const isLiveEvalView = evalMode === "live" && hasLiveEval;
   const liveScoreDelta = liveEval?.score_delta;
@@ -1392,8 +1416,8 @@ export default function StockInspector({
           onClick={() => onTabChange("codex")}
         >
           <Bot size={15} />
-          Codex 总结
-          {codexBusy && <LoaderCircle size={13} className="spin" />}
+          AI 复核
+          {anyAgentBusy && <LoaderCircle size={13} className="spin" />}
         </button>
         <button
           type="button"
@@ -1559,48 +1583,143 @@ export default function StockInspector({
           <div className="codex-tab">
             <section className="insp-card">
               <div className="insp-card-head">
-                <h3>Codex 长期复核总结</h3>
-                <span className="manual-pill">手动触发模式</span>
+                <h3>智能体长期复核</h3>
+                <span className="manual-pill">官方协议 · 手动</span>
               </div>
               <p className="codex-desc">
-                已关闭后台自动调用，仅在您手动点击下方按钮时，使用当前已确认日线、估值、美债利率与脱敏计划距离生成总结。
+                仅通过官方本地协议连接智能体 CLI，关闭后台自动触发与一切写文件/终端权限，仅发送当前脱敏快照形成独立复核意见。
               </p>
+
+              <div
+                className="agent-switch-grid"
+                role="tablist"
+                aria-label="选择官方本地 Agent 引擎"
+              >
+                {(
+                  [
+                    [
+                      "antigravity",
+                      "Antigravity CLI",
+                      "官方 ACP · agy acp",
+                      agyStatus,
+                    ],
+                    [
+                      "codex",
+                      "Codex CLI",
+                      "官方 · codex exec",
+                      codexStatus,
+                    ],
+                  ] as const
+                ).map(([id, title, proto, stObj]) => {
+                  const isSelected = activeAgent === id;
+                  const ready = stObj?.status === "ready";
+                  const running = stObj?.status === "running";
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isSelected}
+                      className={`agent-switch-card ${isSelected ? "active" : ""}`}
+                      onClick={() => onSelectAgent(id)}
+                      title={stObj?.detail ?? title}
+                    >
+                      <div className="agent-switch-top">
+                        <b>{title}</b>
+                        <span
+                          className={`conn-dot ${
+                            ready || running ? "ok" : ""
+                          }`}
+                        />
+                      </div>
+                      <span className="agent-switch-proto">{proto}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="agent-proto-row">
+                <span>
+                  调用方式：
+                  <code>
+                    {activeAgent === "antigravity"
+                      ? "agy acp (ACP JSON-RPC)"
+                      : "codex exec (--output-schema)"}
+                  </code>
+                </span>
+                <button
+                  type="button"
+                  className="text-btn"
+                  onClick={onOpenSettings}
+                >
+                  Agent 设置
+                </button>
+              </div>
+
               <div className="codex-meta-row">
                 <span>
-                  模型：<b>{codexStatus?.model ?? "未检测到 Codex CLI"}</b>
+                  模型：
+                  <b>
+                    {activeProvider?.model ??
+                      `未检测到 ${activeAgentLabel} CLI`}
+                  </b>
                 </span>
                 <span>
                   状态：
                   <b
                     className={
-                      codexStatus?.status === "ready" ? "positive" : ""
+                      activeProvider?.status === "ready" ? "positive" : ""
                     }
                   >
-                    {codexStatus?.status === "running"
+                    {activeProvider?.status === "running"
                       ? "运行中"
-                      : codexStatus?.status === "ready"
+                      : activeProvider?.status === "ready"
                         ? "已就绪"
-                        : codexStatus?.status ?? "不可用"}
+                        : activeProvider?.status === "disabled"
+                          ? "已停用"
+                          : activeProvider?.status === "unavailable"
+                            ? "未安装"
+                            : activeProvider?.status ?? "未安装"}
                   </b>
                 </span>
               </div>
+
+              {activeProvider && !activeProvider.configured && (
+                <div className="agent-hint-box">
+                  <span>
+                    本机尚未检测到{" "}
+                    <b>
+                      {activeAgent === "antigravity" ? "agy" : "codex"}
+                    </b>{" "}
+                    官方 CLI，安装后终端运行{" "}
+                    <code>
+                      {activeProvider.login_hint ||
+                        (activeAgent === "antigravity"
+                          ? "agy acp --login"
+                          : "codex login")}
+                    </code>{" "}
+                    即可就绪。
+                  </span>
+                </div>
+              )}
+
               <div className="codex-actions">
                 <button
                   type="button"
                   className="button primary codex-main-btn"
-                  disabled={!stock || codexBusy}
-                  onClick={onAnalyze}
+                  disabled={!stock || currentAgentBusy}
+                  onClick={() => onAnalyze(activeAgent)}
                 >
-                  {codexBusy ? (
+                  {currentAgentBusy ? (
                     <LoaderCircle size={16} className="spin" />
                   ) : (
                     <Sparkles size={16} />
                   )}
-                  {codexBusy
-                    ? "正在生成总结…"
+                  {currentAgentBusy
+                    ? `正在请求 ${activeAgentLabel}…`
                     : analysis?.status === "completed"
-                      ? "重新生成总结"
-                      : "生成 Codex 总结"}
+                      ? `重新用 ${activeAgentLabel} 复核`
+                      : `生成 ${activeAgentLabel} 复核`}
                 </button>
                 <button
                   type="button"
@@ -1618,7 +1737,14 @@ export default function StockInspector({
               <section className="insp-card codex-result-card">
                 <div className="codex-verdict-head">
                   <Sparkles size={17} />
-                  <strong>{labels[analysis.result.action] ?? analysis.result.action}</strong>
+                  <strong>
+                    {labels[analysis.result.action] ?? analysis.result.action}
+                  </strong>
+                  <span className="agent-source-pill">
+                    {(analysis.agent ?? "codex") === "antigravity"
+                      ? "Antigravity ACP"
+                      : "Codex CLI"}
+                  </span>
                   <span>
                     依据 {time(analysis.result.data_as_of, "America/New_York")}
                   </span>
@@ -1659,24 +1785,35 @@ export default function StockInspector({
                 <Bot size={26} />
                 <b>
                   {analysis?.status === "running"
-                    ? `正在复核 ${ticker(stock?.symbol ?? "")} 的长期计划…`
+                    ? `${activeAgentLabel} 正在复核 ${ticker(stock?.symbol ?? "")} 的长期计划…`
                     : analysis?.status === "queued"
-                      ? "分析任务已排队，等待执行…"
+                      ? `${activeAgentLabel} 复核任务已排队，等待执行…`
                       : analysis?.status === "failed"
-                        ? "上一次分析未完成"
-                        : "尚未生成 Codex 总结"}
+                        ? `${activeAgentLabel} 上一次复核未完成`
+                        : `尚未生成 ${activeAgentLabel} 复核结论`}
                 </b>
                 <p>
                   {analysis?.error ??
-                    "点击上方「生成 Codex 总结」按钮即可针对当前股票形成独立复核意见。"}
+                    `点击上方「生成 ${activeAgentLabel} 复核」按钮即可基于官方协议针对当前股票生成独立复核意见。`}
                 </p>
+                {altCompleted && (
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={() => onSelectAgent(altAgent)}
+                  >
+                    查看已生成的{" "}
+                    {altAgent === "antigravity" ? "Antigravity" : "Codex"}{" "}
+                    复核结论
+                  </button>
+                )}
               </section>
             )}
 
             <div className="privacy-strip">
               <LockKeyhole size={14} />
               <span>
-                仅发送脱敏快照，不发送账户标识、股数、实际金额、成本和成交流水。
+                仅使用官方本地 CLI 协议发送脱敏快照，绝不发送账户标识、股数、实际金额、成本和成交流水。
               </span>
             </div>
           </div>
@@ -1770,9 +1907,14 @@ export default function StockInspector({
                   mode === "live" ? "只读行情与自选同步" : "合成演示数据",
                 ],
                 [
-                  "Codex CLI",
-                  channels?.codex?.status ?? "unavailable",
-                  channels?.codex?.model ?? "未检测到 CLI",
+                  "Antigravity CLI (ACP)",
+                  agyStatus?.status ?? "unavailable",
+                  agyStatus?.model ?? "未检测到 agy CLI",
+                ],
+                [
+                  "Codex CLI (exec)",
+                  codexStatus?.status ?? "unavailable",
+                  codexStatus?.model ?? "未检测到 Codex CLI",
                 ],
                 [
                   "QQ 官方机器人",

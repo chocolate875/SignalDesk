@@ -12,6 +12,7 @@ def utcnow() -> datetime:
 
 Session = Literal["regular", "pre", "post", "overnight"]
 Sleeve = Literal["long", "short", "unassigned"]
+AgentProviderId = Literal["codex", "antigravity"]
 
 
 class StrictModel(BaseModel):
@@ -110,14 +111,25 @@ class CodexSettings(StrictModel):
     timeout_seconds: int = Field(default=600, ge=15, le=900)
 
 
+class AntigravitySettings(StrictModel):
+    enabled: bool = True
+    timeout_seconds: int = Field(default=600, ge=15, le=900)
+
+
+class AnalyzeRequest(StrictModel):
+    agent: AgentProviderId | None = None
+
+
 class Settings(StrictModel):
     mode: Literal["demo", "live"] = "demo"
     desktop_notifications: bool = True
     pause_ordinary: bool = False
     sync_watchlist: bool = True
+    default_agent: AgentProviderId = "codex"
     rules: RuleSettings = Field(default_factory=RuleSettings)
     qq: QQSettings = Field(default_factory=QQSettings)
     codex: CodexSettings = Field(default_factory=CodexSettings)
+    antigravity: AntigravitySettings = Field(default_factory=AntigravitySettings)
 
 
 class AnalysisResult(StrictModel):

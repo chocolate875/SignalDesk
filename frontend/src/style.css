@@ -6236,6 +6236,124 @@ p {
   color: var(--amber-text);
 }
 
+/* ==================== 多 Agent 官方协议复核切换控件 ==================== */
+.agent-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.agent-switch-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-alt);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.agent-switch-card:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-hover);
+}
+
+.agent-switch-card.active {
+  border-color: var(--color-corporate-blue);
+  background: var(--soft-blue-bg);
+}
+
+.agent-switch-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-switch-top b {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-switch-card.active .agent-switch-top b {
+  color: var(--color-corporate-blue);
+}
+
+.agent-switch-proto {
+  font-size: 12px;
+  color: var(--sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.agent-proto-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--sub);
+  margin-bottom: 6px;
+}
+
+.agent-proto-row code {
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.agent-hint-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: var(--panel-alt);
+  border: 1px dashed var(--line-strong);
+  font-size: 12px;
+  color: var(--sub);
+  line-height: 1.45;
+}
+
+.agent-hint-box code {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.agent-source-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-corporate-blue);
+  background: var(--soft-blue-bg);
+  border: 1px solid rgba(30, 64, 175, 0.2);
+  white-space: nowrap;
+}
+
 /* ==================== Responsive Breakpoints ==================== */
 @media (max-width: 1440px) {
   .clock-chip {

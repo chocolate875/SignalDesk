@@ -7,6 +7,7 @@ from datetime import datetime
 from threading import RLock
 
 from . import demo
+from .agent_bridge import AgentHub, AntigravityAcpBridge
 from .broker_oauth import BrokerOAuth, OAuthError
 from .calendar import NY, bar_end, calendar, latest_expected_end, session_for
 from .codex_bridge import CodexBridge
@@ -54,6 +55,8 @@ class Monitor:
         self.notifications.delivery_enabled = self.settings.mode == "live"
         self.notifications.pause_ordinary = self.settings.pause_ordinary
         self.codex = CodexBridge(store, self.settings.codex)
+        self.antigravity = AntigravityAcpBridge(store, self.settings.antigravity)
+        self.agents = AgentHub(store, self.settings, codex=self.codex, antigravity=self.antigravity)
         self.frames = {}
         self.summaries = {}
         self.wave_trends = {}
@@ -153,7 +156,7 @@ class Monitor:
         self.notifications.qq.configure(value.qq)
         self.notifications.delivery_enabled = value.mode == "live"
         self.notifications.pause_ordinary = value.pause_ordinary
-        self.codex.settings = value.codex
+        self.agents.update_settings(value)
         self.last_probe = 0
 
     def _load_cached_macro_benchmarks(self, mode: str = "live"):
@@ -228,6 +231,7 @@ class Monitor:
                 asyncio.create_task(self.run()),
                 asyncio.create_task(self.notifications.run()),
                 asyncio.create_task(self.codex.run()),
+                asyncio.create_task(self.antigravity.run()),
                 asyncio.create_task(self.refresh_macro()),
             ]
 
@@ -1088,6 +1092,8 @@ class Monitor:
                 "qq": await self.notifications.qq.health(),
                 "desktop": await self.notifications.desktop.health(),
                 "codex": self.codex.public_status(),
+                "antigravity": self.antigravity.public_status(),
+                "agents": self.agents.public_status(),
             },
             "summary": {
                 "count": len(stocks),

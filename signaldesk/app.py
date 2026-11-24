@@ -19,7 +19,15 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import startup
 from .broker_oauth import CALLBACK, FLOW_SECONDS
-from .models import Allocation, Credentials, NotificationEnvelope, Settings, utcnow
+from .models import (
+    AgentProviderId,
+    Allocation,
+    AnalyzeRequest,
+    Credentials,
+    NotificationEnvelope,
+    Settings,
+    utcnow,
+)
 from .operators import REGISTRY
 from .security import data_directory, safe_snapshot, session_token
 from .service import Monitor
@@ -283,13 +291,31 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         return safe_snapshot(item, monitor.settings.mode, monitor.macro_regime())
 
     @app.post("/api/analysis/{symbol}")
-    async def analyze(symbol: str):
+    async def analyze(
+        symbol: str,
+        request: Request,
+        agent: AgentProviderId | None = None,
+    ):
         normalized = Allocation(symbol=symbol).symbol
         item = next((s for s in monitor.stocks() if s["symbol"] == normalized), None)
         if not item:
             raise HTTPException(404, "未找到股票")
-        job_id = await monitor.codex.request(item, monitor.settings.mode, macro=monitor.macro_regime())
-        return {"job_id": job_id, "status": "queued"}
+        chosen_agent: AgentProviderId | None = agent
+        raw_body = (await request.body()).strip()
+        if raw_body:
+            try:
+                parsed = AnalyzeRequest.model_validate_json(raw_body)
+            except Exception as exc:
+                raise HTTPException(422, f"请求参数不合法：{exc}") from None
+            if parsed.agent is not None:
+                chosen_agent = parsed.agent
+        job_id, resolved_agent = await monitor.agents.request(
+            item,
+            monitor.settings.mode,
+            agent=chosen_agent,
+            macro=monitor.macro_regime(),
+        )
+        return {"job_id": job_id, "agent": resolved_agent, "status": "queued"}
 
     @app.websocket("/api/stream")
     async def stream(socket: WebSocket):

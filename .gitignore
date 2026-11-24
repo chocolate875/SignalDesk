@@ -18,6 +18,7 @@ secrets.json
 *.encrypted
 **/credentials/
 **/codex-exports/
+**/agent-exports/
 # Python, frontend and visual QA outputs
 .venv/
 __pycache__/
