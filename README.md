@@ -143,8 +143,9 @@ npm run build
 
 - **本机加密与脱敏**：运行状态与加密凭据默认位于 `%LOCALAPPDATA%\SignalDesk`（Linux 为 `~/.local/share/signaldesk`，可通过 `SIGNALDESK_DATA_DIR` 覆盖，参考 [.env.example](.env.example)）。服务仅绑定 `127.0.0.1` 并校验同源会话令牌。
 - **延伸文档**：
-  - 协作规范与模块交接字典：[AGENTS.md](AGENTS.md)
+  - 工程交接、Git 同步清单与待续任务说明：[docs/handover.md](docs/handover.md)
+  - 协作规范与模块交接字典：[AGENTS.md](AGENTS.md)（项目级前端设计技能见 [.agents/skills](.agents/skills)）
   - 算子、公式与风控口径：[docs/signals.md](docs/signals.md)
   - 学术文献与因果回放实证：[docs/research.md](docs/research.md)
   - 测试与实盘验收记录：[docs/verification.md](docs/verification.md)
-  - 迭代归档与选股推荐路线图：[TODO.md](TODO.md)
+  - 迭代归档与多工作台路线图：[TODO.md](TODO.md)

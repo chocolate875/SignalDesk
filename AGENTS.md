@@ -59,9 +59,15 @@
 
 ---
 
-## 4. UI 视觉规范（企业简洁风 & 16:9 适配）
+## 4. UI 视觉规范与项目级前端设计技能（`.agents/skills/`）
 
-- **色彩与质感**：默认亮色「企业简洁风」（保留深色与涨跌色切换）。画布底色 `#f8fafc`，白卡 `#ffffff` 配 `1px solid #e5e7eb` 与 `12px` 圆角；主色 `#1e40af`（Corporate Blue），焦点色 `#3b82f6`。
+修改前端页面或样式（`frontend/src/`）前，应结合仓库内置的 4 项前端设计与交互工程技能执行设计与自检：
+- **项目级设计技能目录**（[`.agents/skills/`](.agents/skills)）：
+  - `frontend-design`（[SKILL.md](.agents/skills/frontend-design/SKILL.md)）：视觉层级、留白节奏、色彩规划与反 AI 模板化设计；
+  - `web-design-guidelines`（[SKILL.md](.agents/skills/web-design-guidelines/SKILL.md)）：Web 界面可访问性（a11y）、键盘焦点、语义标签与表单/弹层审计清单；
+  - `vercel-composition-patterns`（[SKILL.md](.agents/skills/vercel-composition-patterns/SKILL.md)）：React 19 组件组合、状态提升解耦与显式变体模式；
+  - `emil-design-eng`（[SKILL.md](.agents/skills/emil-design-eng/SKILL.md)）：GPU 合成动效、Popover 原点缩放、`<= 200ms` 缓动与 `prefers-reduced-motion` 微交互细节。
+- **色彩与质感**：默认亮色「企业简洁风」（保留深色与跟随系统、红绿涨跌色切换）。画布底色 `#f8fafc`，白卡 `#ffffff` 配 `1px solid #e5e7eb` 与 `12px` 圆角；主色 `#1e40af`（Corporate Blue），焦点色 `#3b82f6`。
 - **字号硬底线**：**全站 CSS 严禁出现任何 `< 12.0px` 的 `font-size`**（每次改动样式后必须运行下方字号审计命令确认 `bad = 0`）；金融数字统一启用 `font-variant-numeric: tabular-nums`。
 - **16:9 信息分层**：一级视图聚焦核心结论、关键点位与紧凑网格，长篇点位依据、护栏细则、波浪历史拐点与免责声明统一收纳进 `<details>` 二级折叠区或说明弹窗，确保 `1440×810` 与 `1280×720` 下零横向溢出、零按钮挤压裁切。
 
