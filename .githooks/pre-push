@@ -1,0 +1,20 @@
+#!/bin/sh
+# Git supplies one local/destination ref pair per line, including for --all.
+checked_out=$(git symbolic-ref --quiet HEAD) || checked_out=
+
+forbidden_branch() {
+    case "$1" in
+        refs/heads/codex|refs/heads/codex/*|refs/heads/agent|refs/heads/agent/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+while read -r source_ref source_oid destination_ref destination_oid; do
+    # Allow deletion of a previously published temporary ref.
+    [ "$source_ref" = '(delete)' ] && continue
+    if forbidden_branch "$checked_out" || forbidden_branch "$source_ref" || forbidden_branch "$destination_ref"; then
+        echo 'Agent 临时分支仅限本地。日常交付请切换到 develop，快进合并后推送 develop。' >&2
+        exit 1
+    fi
+done
+exit 0

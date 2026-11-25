@@ -37,6 +37,24 @@ jobs:
             echo "提交历史包含本机技能目录 .agents/skills/，请从待合并的提交中移除。"
             exit 1
           fi
+      - name: 检查 PR 来源
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$GITHUB_HEAD_REF" in
+            codex|codex/*|agent|agent/*)
+              echo "Agent 临时分支仅限本地，请将改动合入正式任务分支。"
+              exit 1 ;;
+          esac
+          if [[ "$GITHUB_BASE_REF" == main ]]; then
+            if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+              case "$GITHUB_HEAD_REF" in develop|release/?*|hotfix/?*) exit 0 ;; esac
+            fi
+            echo "main 仅接受本仓库的 develop、release/* 或 hotfix/*；外部贡献请先提交到 develop。"
+            exit 1
+          fi
       - name: 校验 PR 标题与全部新增提交
         if: github.event_name == 'pull_request'
         env:

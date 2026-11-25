@@ -46,7 +46,7 @@ git push origin develop
 
 推送成功后运行 `git branch -d codex/chart-zoom` 删除本地临时分支。若推送期间远端已有新提交，先同步并整合尚未发布的改动，再正常推送。已经 squash 或 cherry-pick 的历史任务，先核对补丁是否完整进入远端，再清理。仍有独有改动的分支留待继续开发。
 
-Agent 日常工作仍按上述本地临时分支流程交付。CI 不再根据分支名称限制 PR 来源；外部贡献或需要独立评审时，可将已审阅的改动放到任务分支发 PR。
+`codex`、`agent` 及其子分支仅限本地，启用的 pre-push 钩子会阻止推送，CI 也会拒绝它们直接发起 PR。外部贡献或需要独立评审时，可将已审阅的改动放到正式任务分支发 PR。
 
 ### 贡献与发布
 
@@ -103,5 +103,5 @@ chore(release): 发布 0.2.0 版本
 - `develop` 未启用分支保护，有写权限的成员可直接推送。CI 在推送后验证提交。外部贡献者按 PR 流程由维护者审查。
 - `main` 通过 PR 更新，禁止强推和删除。合并前须与目标分支保持最新、解决所有审查讨论，并通过 GitHub Actions 的 **提交规范** 和 **工程验证**。
 - [CODEOWNERS](.github/CODEOWNERS) 指定 `@chocolate875` 审查全仓库，包括 CI 和规则文件。向 `main` 提交的 PR 启用维护者审批，新改动影响已有审查时须重新审批。维护者可以通过 PR 自合，但同样需要通过两项 CI。
-- **提交规范** 检查中文提交及 PR 标题、误跟踪的忽略文件和本机技能目录历史。**工程验证** 在 Windows 上运行 Ruff、最小字号审计、前端锁定依赖安装、生产构建和全量 pytest。CI 不再限制 PR 来源分支；GitHub 上独立配置的规则仍可能适用。
+- **提交规范** 检查中文提交及 PR 标题、误跟踪的忽略文件和本机技能目录历史，并限制 Agent 临时分支直接发起 PR。`main` 的 PR 须来自本仓库的 `develop`、`release/*` 或 `hotfix/*`；外部贡献先向 `develop` 提交。**工程验证** 在 Windows 上运行 Ruff、最小字号审计、前端锁定依赖安装、生产构建和全量 pytest。GitHub 上独立配置的保护规则仍可能适用。
 - CI 在 `pull_request` 事件下用只读令牌验证外部代码。同一 PR 推送新改动时，旧运行会取消。规则可在仓库的 [Rulesets](https://github.com/chocolate875/SignalDesk/settings/rules) 中查看。
