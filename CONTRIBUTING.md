@@ -71,6 +71,6 @@ chore(release): 发布 0.2.0 版本
 
 2. 将默认分支设为 `main`。在 **Settings → General → Pull Requests** 启用 squash 和 merge commit，两者的默认提交信息均选 **Pull request title**。
 3. 首次推送触发 Actions 后，在 **Settings → Rules → Rulesets** 为 `main` 和 `develop` 启用分支保护。要求通过 PR、至少一位其他成员批准、解决审查讨论，并将 **提交规范**、**工程验证** 设为必需检查。禁止强推和删除长期分支，允许发布流程使用合并提交。
-4. **提交规范** 检查 PR 标题、该 PR 引入的每条提交和技能目录历史。首次推送从协作基线 `8cd4ba0` 起检查新增提交，后续推送从上次分支位置起检查。**工程验证** 在 Windows 上执行 Ruff、pytest、最小字号审计、锁定依赖安装和前端生产构建。
+4. **提交规范** 检查 PR 标题、该 PR 引入的每条提交和技能目录历史。首次推送从协作基线 `8cd4ba0` 起检查新增提交，后续推送从上次分支位置起检查。**工程验证** 在 Windows 上执行 Ruff 和最小字号审计，按锁文件安装前端依赖并构建后，再运行全量 pytest。API 测试会请求构建产物中的图标。
 
 本地 `.agents/skills/` 供个人工具使用，Git 忽略该目录。共享的 UI、接口和数据安全约定见 [AGENTS.md](AGENTS.md)。首次发布仅使用上述明确列出的分支，尤其避免镜像推送本机归档引用。
