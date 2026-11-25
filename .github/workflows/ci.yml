@@ -10,23 +10,44 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   commits:
     name: 提交规范
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: 检查技能目录的提交历史
+      - name: 检查本地文件和技能目录历史
         shell: bash
         run: |
+          ignored_files=$(git ls-files --cached --ignored --exclude-per-directory=.gitignore)
+          if [[ -n "$ignored_files" ]]; then
+            echo "有被 .gitignore 排除的文件已被跟踪，请在本地用 git ls-files -ci --exclude-per-directory=.gitignore 核查。"
+            exit 1
+          fi
           skill_commit=$(git rev-list --full-history -1 HEAD -- .agents/skills)
           if [[ -n "$skill_commit" ]]; then
             echo "提交历史包含本机技能目录 .agents/skills/，请从待合并的提交中移除。"
             exit 1
           fi
+      - name: 检查主分支的合并来源
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        shell: bash
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+            case "$GITHUB_HEAD_REF" in develop|release/?*|hotfix/?*) exit 0 ;; esac
+          fi
+          echo "功能 PR 请提交到 develop。main 接受本仓库的 develop、release/* 和 hotfix/*。"
+          exit 1
       - name: 校验 PR 标题与全部新增提交
         if: github.event_name == 'pull_request'
         env:
@@ -53,14 +74,15 @@ jobs:
   project:
     name: 工程验证
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
       PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
       - run: uv sync --frozen
