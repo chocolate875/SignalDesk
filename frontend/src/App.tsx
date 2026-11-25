@@ -28,6 +28,7 @@ import StockInspector, { type InspectorTab } from "./StockInspector";
 import WatchlistRail from "./WatchlistRail";
 import {
   api,
+  ApiError,
   fmt,
   pricePrefix,
   isValidDashboard,
@@ -110,7 +111,7 @@ function AllocationEditor({
                 value={symbol}
                 disabled={!!stock}
                 onChange={(e) => setSymbol(e.target.value)}
-                placeholder="AAPL / 700.HK / 600519.SH"
+                placeholder="AAPL / 00700.HK / 600519.SH"
               />
             </label>
             <label className="field">
@@ -200,7 +201,7 @@ function AllocationEditor({
           </div>
 
           <p className="muted">
-            代码支持美股、港股（700.HK）、沪市（600519.SH）和深市（000001.SZ）。盘中触价时提醒，收盘后用日线复核。
+            代码支持美股、港股（00700.HK）、沪市（600519.SH）和深市（000001.SZ）。盘中触价时提醒，收盘后用日线复核。
           </p>
         </div>
         <footer className="modal-footer">
@@ -461,8 +462,51 @@ function TopbarMoreMenu({
   );
 }
 
+const lanView = !["127.0.0.1", "localhost"].includes(location.hostname);
+
+function LanAccess() {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <main className="modal-shade">
+      <section className="small-modal" aria-labelledby="lan-title">
+        <header className="modal-header">
+          <h2 id="lan-title">SignalDesk 局域网看板</h2>
+        </header>
+        <form onSubmit={async (event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError("");
+          try {
+            await api("/lan/login", { method: "POST", body: JSON.stringify({ code }) });
+            location.reload();
+          } catch (error) {
+            setError(error instanceof Error ? error.message : "连接失败");
+            setBusy(false);
+          }
+        }}>
+          <div className="small-modal-body">
+            <label className="field">
+              局域网访问码
+              <input type="password" value={code} onChange={(event) => setCode(event.target.value)} autoFocus required />
+            </label>
+            <p className="muted">在运行 SignalDesk 的电脑上打开「设置 → 运行与通知」查看访问码。</p>
+            {error && <p role="alert">{error}</p>}
+          </div>
+          <footer className="modal-footer">
+            <button type="submit" className="button primary" disabled={busy || !code.trim()}>打开只读看板</button>
+          </footer>
+        </form>
+      </section>
+    </main>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [needsLanCode, setNeedsLanCode] = useState(false);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -506,6 +550,12 @@ export default function App() {
   }, [selected]);
 
   const notify = (s: string) => setToast(s);
+  const runLocal = (action: () => void) => {
+    if (lanView) notify("局域网看板为只读，请在主机上操作");
+    else action();
+  };
+  const openSettings = () => runLocal(() => setSettings(true));
+  const openEditor = (value: NonNullable<typeof editor>) => runLocal(() => setEditor(value));
 
   useEffect(() => {
     if (!toast) return;
@@ -574,7 +624,7 @@ export default function App() {
         }
         setData(snapshot);
         setError("");
-        if (!localStorage.getItem("sd-onboarded")) setSettings(true);
+        if (!lanView && !localStorage.getItem("sd-onboarded")) setSettings(true);
         const ws = new WebSocket(
           `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/stream`,
         );
@@ -609,6 +659,12 @@ export default function App() {
         };
       } catch (e: any) {
         if (!disposed) {
+          if (lanView && e instanceof ApiError && e.status === 401) {
+            setData(null);
+            setConnected(false);
+            setNeedsLanCode(true);
+            return;
+          }
           setError(e?.message || "正在重新连接本地服务");
           clearTimeout(retry);
           retry = setTimeout(connect, 3000);
@@ -784,6 +840,7 @@ export default function App() {
   }
 
   async function toggleFavorite(target: Stock) {
+    if (lanView) return notify("局域网看板为只读，请在主机上操作");
     const next = !target.favorite;
     setData((prev) =>
       prev
@@ -905,6 +962,8 @@ export default function App() {
     stock && stock.broker_quantity === 0 && !stock.in_watchlist,
   );
 
+  if (needsLanCode) return <LanAccess />;
+
   return (
     <div className="desk-shell">
       <header className="desk-topbar">
@@ -924,7 +983,7 @@ export default function App() {
                   ? "live"
                   : "demo"
             }`}
-            onClick={() => setSettings(true)}
+            onClick={openSettings}
             title={`北京 ${bjClock} / 纽约 ${nyClock}${data?.detail ? ` · ${data.detail}` : ""}（点击修改接入设置）`}
           >
             <span
@@ -942,6 +1001,7 @@ export default function App() {
                 : data?.mode === "live"
                   ? `实盘 · ${market ? market.name + market.label : "同步中"}`
                   : "演示工作区"}
+              {lanView ? " · 只读" : ""}
               {connected && market?.early_close ? " · 提前收" : ""}
             </span>
           </button>
@@ -982,7 +1042,7 @@ export default function App() {
           <button
             type="button"
             className="button primary top-settings-btn"
-            onClick={() => setSettings(true)}
+            onClick={openSettings}
           >
             <Settings2 size={15} aria-hidden="true" />
             <span>设置</span>
@@ -996,7 +1056,7 @@ export default function App() {
         <div className="alert-strip">
           <TriangleAlert size={16} />
           <span>{error || data?.detail}</span>
-          <button type="button" onClick={() => setSettings(true)}>
+          <button type="button" onClick={openSettings}>
             检查接入
             <ArrowRight size={14} />
           </button>
@@ -1012,10 +1072,10 @@ export default function App() {
             selected={selected}
             onSelect={setSelected}
             onToggleFavorite={toggleFavorite}
-            onAddWatch={() => setEditor({ stock: null })}
+            onAddWatch={() => openEditor({ stock: null })}
             onSyncWatchlist={syncWatchlist}
             syncing={syncingWatchlist}
-            onOpenSettings={() => setSettings(true)}
+            onOpenSettings={openSettings}
             mode={data?.mode ?? "demo"}
           />
         </ErrorBoundary>
@@ -1042,10 +1102,10 @@ export default function App() {
                   <div className="hero-identity">
                     <div className="hero-title-line">
                       <h1>{ticker(stock.symbol)}</h1>
-                      <span className="hero-name" title={stock.name || "观察标的"}>
-                        {stock.name || "观察标的"}
+                      <span className="hero-name" title={stock.name || (stock.market.code === "US" ? "观察标的" : "名称待同步")}>
+                        {stock.name || (stock.market.code === "US" ? "观察标的" : "名称待同步")}
                       </span>
-                      {stock.instrument?.is_fund && (
+                      {stock.instrument && (stock.market.code !== "US" || stock.instrument.is_fund) && (
                         <span
                           className={`tag-chip asset-type ${
                             stock.instrument.is_leveraged ? "leveraged" : "etf"
@@ -1147,7 +1207,7 @@ export default function App() {
                     <button
                       type="button"
                       className="button secondary"
-                      onClick={() => setEditor({ stock })}
+                      onClick={() => openEditor({ stock })}
                     >
                       <SlidersHorizontal size={14} />
                       计划
@@ -1319,7 +1379,7 @@ export default function App() {
                             className="text-btn forecast-strip-apply"
                             title="将主要防守位与参考卖点预填到个人计划价"
                             onClick={() =>
-                              setEditor({
+                              openEditor({
                                 stock,
                                 presetStop:
                                   activeForecast.levels.defense_level ??
@@ -1455,7 +1515,7 @@ export default function App() {
                 <button
                   type="button"
                   className="button primary"
-                  onClick={() => setSettings(true)}
+                  onClick={openSettings}
                 >
                   <Settings2 size={15} />
                   配置 LongPort 接入
@@ -1463,7 +1523,7 @@ export default function App() {
                 <button
                   type="button"
                   className="button secondary"
-                  onClick={() => setEditor({ stock: null })}
+                  onClick={() => openEditor({ stock: null })}
                 >
                   <Plus size={15} />
                   添加本地观察股
@@ -1502,10 +1562,10 @@ export default function App() {
             mode={data?.mode ?? "demo"}
             status={data?.status ?? "starting"}
             cooldownMinutes={data?.rules?.cooldown_minutes ?? 30}
-            onEditPlan={() => stock && setEditor({ stock })}
+            onEditPlan={() => stock && openEditor({ stock })}
             onApplyForecastLevels={(stopLoss, sellLow) =>
               stock &&
-              setEditor({
+              openEditor({
                 stock,
                 presetStop: stopLoss,
                 presetTarget: sellLow ?? undefined,
@@ -1521,7 +1581,7 @@ export default function App() {
                 notify(e.message);
               }
             }}
-            onOpenSettings={() => setSettings(true)}
+            onOpenSettings={openSettings}
           />
         </ErrorBoundary>
       </main>
@@ -1530,7 +1590,7 @@ export default function App() {
         <SettingsPanel onClose={closeSettings} notify={notify} first={first} />
       )}
 
-      {editor !== undefined && (
+      {editor && (
         <AllocationEditor
           stock={editor.stock}
           presetStop={editor.presetStop}

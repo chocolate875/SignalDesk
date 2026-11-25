@@ -133,6 +133,40 @@ _COMMODITY_RE = re.compile(
 )
 _CONCEPT_SYMBOL_RE = re.compile(r"^CP\d+\.US$")
 
+# Used before a first broker refresh and in demo mode.
+ASIAN_REFERENCE_NAMES = {
+    "00700.HK": "腾讯控股",
+    "00941.HK": "中国移动",
+    "09988.HK": "阿里巴巴-W",
+    "HSI.HK": "恒生指数",
+    "HSCEI.HK": "恒生中国企业指数",
+    "HSTECH.HK": "恒生科技指数",
+    "02800.HK": "盈富基金",
+    "07200.HK": "南方两倍看多恒指",
+    "07500.HK": "南方两倍看空恒指",
+    "600519.SH": "贵州茅台",
+    "000001.SZ": "平安银行",
+    "000001.SH": "上证指数",
+    "000300.SH": "沪深300",
+    "399001.SZ": "深证成指",
+    "399006.SZ": "创业板指",
+    "510300.SH": "沪深300ETF",
+    "159915.SZ": "创业板ETF",
+}
+_ASIAN_INDEX_CODES = {
+    "HSI.HK", "HSCEI.HK", "HSTECH.HK", "000001.SH", "000300.SH", "399001.SZ", "399006.SZ",
+}
+_INDEX_BOARDS = {"HKHS", "HKSector", "CNIX", "CNSector"}
+_ASIAN_STOCK_BOARDS = {
+    "HKEquity", "SHMainConnect", "SHMainNonConnect", "SHSTAR",
+    "SZMainConnect", "SZMainNonConnect", "SZGEMConnect", "SZGEMNonConnect",
+}
+_HK_ETF_RANGES = ((2800, 2849), (3000, 3199), (3400, 3599), (9000, 9199), (9400, 9499),
+                  (9800, 9849), (41500, 41599), (82800, 82849), (83000, 83199), (83400, 83599))
+# HKEX reserves these prefixes for leveraged/inverse products across currency counters.
+_HK_LEVERAGED_PREFIXES = {"72", "73", "75", "77", "92", "93", "95", "97"}
+_HK_KNOWN_MULTIPLIERS = {"72": 2.0, "73": -1.0, "75": -2.0, "92": 2.0, "93": -1.0, "95": -2.0}
+
 
 def _risk_notice(asset_type: str, leverage: float | None, is_inverse: bool) -> str:
     if asset_type == "leveraged_etf":
@@ -150,10 +184,44 @@ def _risk_notice(asset_type: str, leverage: float | None, is_inverse: bool) -> s
     return ""
 
 
-def classify_instrument(symbol: str, name: str = "") -> dict:
+def _non_company(asset_type: str, label: str, notice: str = "") -> dict:
+    return {
+        "asset_type": asset_type,
+        "type_label": label,
+        "benchmark": "",
+        "is_fund": False,
+        "is_leveraged": False,
+        "is_inverse": False,
+        "leverage": None,
+        "company_valuation_applicable": False,
+        "risk_notice": notice,
+    }
+
+
+def classify_instrument(symbol: str, name: str = "", *, board: str = "", name_en: str = "") -> dict:
     """确定性识别标的是上市公司个股，还是宽基/行业/商品/杠杆 ETF 或基金。"""
     sym = (symbol or "").strip().upper()
     clean_name = (name or "").strip()
+    code, _, market = sym.rpartition(".")
+    asian = market in {"HK", "SH", "SZ"}
+    if board in _INDEX_BOARDS or sym in _ASIAN_INDEX_CODES or (market == "SZ" and code.startswith("399")):
+        return _non_company("index", "指数", "指数可查看行情与技术指标。")
+
+    hk_number = int(code) if market == "HK" and code.isdecimal() else 0
+    hk_prefix = str(hk_number)[1:3] if 87000 <= hk_number <= 87999 else str(hk_number)[:2]
+    hk_leveraged = hk_prefix in _HK_LEVERAGED_PREFIXES and (
+        7200 <= hk_number <= 9799 or 87200 <= hk_number <= 87799
+    )
+    code_etf = (
+        any(start <= hk_number <= end for start, end in _HK_ETF_RANGES)
+        or (market == "SZ" and code.startswith(("158", "159")))
+        or (market == "SH" and code.startswith(("510", "511", "512", "513", "515", "516", "517",
+                                                "518", "520", "560", "561", "562", "563", "588", "589")))
+    )
+    if board == "HKWarrant" or (market == "HK" and (
+        10000 <= hk_number <= 29999 or 47000 <= hk_number <= 48999 or 50000 <= hk_number <= 69999
+    )):
+        return _non_company("derivative", "权证 / 牛熊证", "衍生品可查看行情与技术指标。")
 
     if sym in KNOWN_FUNDS:
         asset_type, type_label, benchmark, leverage, is_inverse = KNOWN_FUNDS[sym]
@@ -183,22 +251,26 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
             "risk_notice": _risk_notice("fund", None, False),
         }
 
-    upper_name = clean_name.upper()
+    upper_name = f"{clean_name} {name_en}".strip().upper()
     has_etf_word = bool(_ETF_KEYWORD_RE.search(upper_name)) or "ETF" in upper_name
+    if asian:
+        has_etf_word = code_etf or hk_leveraged or bool(re.search(
+            r"ETF|交易型开放式|交易所买卖基金|交易所買賣基金", upper_name
+        ))
     has_issuer = bool(_ETF_ISSUER_RE.search(upper_name))
     # 排除单一上市银行/金融公司名中含 Trust 的误判（如 Northern Trust）
     is_bank_trust = "TRUST" in upper_name and any(
         w in upper_name for w in ("BANK", "BANCORP", "FINANCIAL", "NORTHERN TRUST", "REALTY")
     )
     looks_like_fund = (has_etf_word and not is_bank_trust) or (
-        has_issuer and not any(w in upper_name for w in ("INC", "CORP", "PLC", "LTD"))
+        not asian and has_issuer and not any(w in upper_name for w in ("INC", "CORP", "PLC", "LTD"))
     )
 
     if looks_like_fund:
         lev_match = _LEVERAGE_RE.search(upper_name)
         inv_match = _INVERSE_RE.search(upper_name)
-        if lev_match or inv_match:
-            mult: float | None = None
+        if lev_match or inv_match or hk_leveraged:
+            mult = _HK_KNOWN_MULTIPLIERS.get(hk_prefix) if hk_leveraged else None
             if lev_match:
                 if lev_match.group(1):
                     mult = float(lev_match.group(1))
@@ -206,13 +278,15 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
                     mult = 3.0
                 elif "ULTRA" in upper_name or "两倍" in clean_name or "2倍" in clean_name:
                     mult = 2.0
-            is_inv = bool(inv_match)
+            is_inv = bool(inv_match) or (mult is not None and mult < 0)
             if is_inv and mult is not None:
                 mult = -abs(mult)
             elif is_inv:
                 mult = -1.0
             mult_prefix = f"{abs(mult):g}X " if mult else ""
             t_label = f"{mult_prefix}反向 ETF" if is_inv else f"{mult_prefix}杠杆 ETF"
+            if hk_leveraged and mult is None and not (lev_match or inv_match):
+                t_label = "杠杆 / 反向产品"
             return {
                 "asset_type": "leveraged_etf",
                 "type_label": t_label,
@@ -250,8 +324,8 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
             }
         return {
             "asset_type": "sector_etf",
-            "type_label": "指数/主题 ETF",
-            "benchmark": f"指数/主题篮子基金（{clean_name}）",
+            "type_label": "ETF" if asian else "指数/主题 ETF",
+            "benchmark": clean_name if asian else f"指数/主题篮子基金（{clean_name}）",
             "is_fund": True,
             "is_leveraged": False,
             "is_inverse": False,
@@ -260,6 +334,13 @@ def classify_instrument(symbol: str, name: str = "") -> dict:
             "risk_notice": _risk_notice("sector_etf", None, False),
         }
 
+    if asian and not (
+        board in _ASIAN_STOCK_BOARDS
+        or sym in ASIAN_REFERENCE_NAMES
+        or (market == "SH" and code.startswith(("600", "601", "603", "605", "688", "689")))
+        or (market == "SZ" and code.startswith(("000", "001", "002", "003", "300", "301")))
+    ):
+        return _non_company("unknown", "类型待确认")
     return {
         "asset_type": "stock",
         "type_label": "个股",

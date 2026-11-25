@@ -44,9 +44,9 @@ def test_multi_market_detail_and_manual_watch(client):
         assert stock["forecast"]["risk_budget"]["macro_red_count"] is None
         assert stock["research"]["yield_gap_pp"] is None
     added = client.put("/api/allocations", json={"symbol": "00941.hk", "watch_only": True})
-    assert added.status_code == 200 and added.json()["symbol"] == "941.HK"
-    assert client.put("/api/favorites/00941.HK", json={"favorite": True}).json()["symbol"] == "941.HK"
-    assert client.delete("/api/watchlist/941.HK").status_code == 200
+    assert added.status_code == 200 and added.json()["symbol"] == "00941.HK"
+    assert client.put("/api/favorites/00941.HK", json={"favorite": True}).json()["symbol"] == "00941.HK"
+    assert client.delete("/api/watchlist/00941.HK").status_code == 200
     assert client.put("/api/allocations", json={"symbol": "000001"}).status_code == 422
 
 

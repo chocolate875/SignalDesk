@@ -26,7 +26,10 @@ def normalize_symbol(value: str, *, broker: bool = False) -> str:
     value = value.strip().upper()
     ticker, _, exchange = value.rpartition(".")
     if exchange == "HK" and re.fullmatch(r"[0-9]{1,5}", ticker) and int(ticker):
-        return f"{int(ticker)}.HK"
+        return f"{int(ticker):05d}.HK"
+    if exchange == "HK" and re.fullmatch(r"[A-Z][A-Z0-9]{1,14}", ticker):
+        # Longbridge also represents indices and sector series with letter-based codes.
+        return value
     if exchange in {"SH", "SZ"} and re.fullmatch(r"[0-9]{6}", ticker):
         # Mainland B shares trade in foreign currencies and are outside the A-share universe.
         if not ticker.startswith("900" if exchange == "SH" else "200"):
@@ -35,7 +38,14 @@ def normalize_symbol(value: str, *, broker: bool = False) -> str:
         return value
     if not broker and re.fullmatch(r"[A-Z][A-Z0-9\-]*(?:\.[AB])?", value) and len(value) <= 15:
         return f"{value}.US"
-    raise ValueError("请输入股票代码，例如 AAPL、700.HK、600519.SH 或 000001.SZ")
+    raise ValueError("请输入股票代码，例如 AAPL、00700.HK、600519.SH 或 000001.SZ")
+
+
+def broker_symbol(symbol: str) -> str:
+    code, _, market = symbol.rpartition(".")
+    if market == "HK" and code.isdecimal():
+        return f"{int(code)}.HK"
+    return symbol
 
 
 def market_for(symbol: str) -> Market:

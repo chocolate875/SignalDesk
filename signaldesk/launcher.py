@@ -94,6 +94,8 @@ def stop_desktop(directory: Path, timeout=60):
         return
     if not instance.generation:
         raise RuntimeError("Instance is starting or predates this script. Retry or exit it from its tray/console.")
+    if instance.port == 0:
+        raise RuntimeError("SignalDesk 正在清理本地数据。")
     request = instance.stop_request(directory)
     request.touch()
     deadline = time.monotonic() + timeout
@@ -107,13 +109,16 @@ def stop_desktop(directory: Path, timeout=60):
     raise RuntimeError("Stop requested. SignalDesk has not finished shutting down.")
 
 
-def start_desktop(directory: Path, port: int, background: bool):
+def start_desktop(directory: Path, port: int, background: bool, *, lan: bool = False):
     child = None
     if active_instance(directory) is None:
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         print("Starting SignalDesk...", flush=True)
+        arguments = [str(pythonw), "-m", "signaldesk.desktop", "--background", "--port", str(port)]
+        if lan:
+            arguments.append("--lan")
         child = subprocess.Popen(
-            [str(pythonw), "-m", "signaldesk.desktop", "--background", "--port", str(port)],
+            arguments,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     wait_for_desktop(directory, port, background, child)
@@ -165,6 +170,7 @@ def main():
     start = commands.add_parser("start")
     start.add_argument("--port", type=int, default=8765)
     start.add_argument("--background", action="store_true")
+    start.add_argument("--lan", action="store_true")
     commands.add_parser("stop")
     args = parser.parse_args()
     try:
@@ -173,7 +179,7 @@ def main():
         elif not 1 <= args.port <= 65535:
             parser.error("port must be between 1 and 65535")
         else:
-            start_desktop(data_directory(), args.port, args.background)
+            start_desktop(data_directory(), args.port, args.background, lan=args.lan)
     except (OSError, RuntimeError) as exc:
         sys.exit(str(exc))
 

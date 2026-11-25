@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from uuid import uuid4
 
+from . import __version__
 from .models import AgentProviderId, AnalysisResult, AntigravitySettings, Settings
 from .security import safe_child_environment, safe_snapshot
 from .storage import Store
@@ -301,7 +302,7 @@ class AcpStdioClient:
             "initialize",
             {
                 "protocolVersion": 1,
-                "clientInfo": {"name": "SignalDesk", "version": "0.1.0"},
+                "clientInfo": {"name": "SignalDesk", "version": __version__},
                 "clientCapabilities": {
                     "fs": {"readTextFile": False, "writeTextFile": False},
                     "terminal": False,

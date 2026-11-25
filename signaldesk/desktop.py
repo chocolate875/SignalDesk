@@ -14,7 +14,7 @@ from .launcher import PORT_UNAVAILABLE, claim_instance, wait_for_desktop
 from .security import data_directory
 
 
-def server_config(app, port: int):
+def server_config(app, port: int, host: str = "127.0.0.1"):
     options = {}
     if sys.stdout is None or sys.stderr is None:
         # pythonw has no console streams. Uvicorn's default formatter calls stdout.isatty().
@@ -28,7 +28,9 @@ def server_config(app, port: int):
                 for name in ["uvicorn", "uvicorn.error", "uvicorn.access"]
             },
         }
-    return uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False, **options)
+    return uvicorn.Config(
+        app, host=host, port=port, log_level="warning", access_log=False, proxy_headers=False, **options,
+    )
 
 
 def icon_image(color="#6de0bc"):
@@ -62,9 +64,11 @@ def main():
     parser.add_argument("--headless", action="store_true", help="无托盘模式，适用于Linux/本地服务")
     parser.add_argument("--background", action="store_true", help="后台启动，只显示托盘")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--lan", action="store_true", help="启用带访问码的只读局域网看板")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
+    host = "0.0.0.0" if args.lan else "127.0.0.1"
     directory = data_directory()
     with claim_instance(directory, args.port) as owner:
         if owner is None:
@@ -77,16 +81,18 @@ def main():
             option = socket.SO_EXCLUSIVEADDRUSE if os.name == "nt" else socket.SO_REUSEADDR
             listener.setsockopt(socket.SOL_SOCKET, option, 1)
             try:
-                listener.bind(("127.0.0.1", args.port))
+                listener.bind((host, args.port))
                 listener.listen()
             except OSError as exc:
                 if sys.stderr is not None:
-                    print(f"Cannot bind to 127.0.0.1:{args.port}: {exc}", file=sys.stderr)
+                    print(f"Cannot bind to {host}:{args.port}: {exc}", file=sys.stderr)
                 raise SystemExit(PORT_UNAVAILABLE) from exc
             from .app import create_app
 
-            app = create_app(directory)
-            server = DesktopServer(server_config(app, args.port), mark_ready, instance.stop_request(directory))
+            app = create_app(directory, lan=args.lan)
+            server = DesktopServer(server_config(app, args.port, host), mark_ready, instance.stop_request(directory))
+            if args.lan and sys.stdout is not None:
+                print(f"局域网看板已启用。在 http://127.0.0.1:{args.port} 的设置中查看访问码。")
             if args.headless or os.name != "nt":
                 server.run(sockets=[listener])
             else:

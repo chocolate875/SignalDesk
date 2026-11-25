@@ -42,7 +42,7 @@ def test_broker_uses_only_selected_issuer_endpoints(monkeypatch, platform, domai
     assert options["trade_ws_url"] == f"wss://openapi-trade.{domain}/v2"
 
 
-def test_quote_subscription_matches_installed_sdk():
+def test_quote_subscription_batches_deltas_using_installed_sdk_signature():
     calls = []
     sdk_signature = signature(lp.QuoteContext.subscribe)
 
@@ -53,10 +53,28 @@ def test_quote_subscription_matches_installed_sdk():
     feed = LongPortFeed.__new__(LongPortFeed)
     feed.lp = lp
     feed.symbols = set()
-    feed.quote_context = SimpleNamespace(subscribe=subscribe)
-    feed.subscribe(["TEST.US"])
-    feed.subscribe(["TEST.US"])
-    assert calls == [(["TEST.US"], [lp.SubType.Quote])]
+    unsubscribed = []
+    feed.quote_context = SimpleNamespace(subscribe=subscribe, unsubscribe=lambda symbols, types: unsubscribed.append(symbols))
+    feed.subscribe(["TEST.US", "00700.HK"])
+    feed.subscribe(["TEST.US", "00700.HK"])
+    feed.subscribe(["00700.HK", "000001.SZ"])
+    assert calls == [
+        (["TEST.US", "700.HK"], [lp.SubType.Quote]),
+        (["000001.SZ"], [lp.SubType.Quote]),
+    ]
+    assert unsubscribed == [["TEST.US"]]
+    assert feed.symbols == {"00700.HK", "000001.SZ"}
+
+
+def test_quote_snapshot_batches_137_symbols_across_markets():
+    feed = LongPortFeed.__new__(LongPortFeed)
+    request = Mock(return_value=[])
+    feed.quote_context = SimpleNamespace(quote=request)
+    us = [f"T{i}.US" for i in range(94)]
+    hk = [f"{i:05}.HK" for i in range(1, 42)]
+    cn = ["600519.SH", "000001.SZ"]
+    feed.quotes(us + hk + cn)
+    request.assert_called_once_with(us + [f"{i}.HK" for i in range(1, 42)] + cn)
 
 
 def test_public_spy_half_day_history_and_confirmed_upsert(tmp_path):
@@ -112,6 +130,7 @@ def test_daily_gaps_reset_and_contributions_reconcile():
 async def test_poll_recovers_sessions_after_sleep(tmp_path, monkeypatch, missed, unavailable):
     now = datetime(2026, 11, 18, 22, tzinfo=timezone.utc)
     monkeypatch.setattr("signaldesk.service.utcnow", lambda: now)
+    monkeypatch.setattr("signaldesk.service.MACRO_BENCHMARK_SYMBOLS", ())
     bars = make_bars("AAPL.US", "day", now)[-300:]
     monitor = Monitor(Store(tmp_path))
     monitor.settings.mode = "live"
@@ -132,13 +151,13 @@ async def test_poll_recovers_sessions_after_sleep(tmp_path, monkeypatch, missed,
         history=history,
         subscribe=lambda symbols: None,
         account=lambda: {"positions": [], "cash": None, "net_assets": None, "unsupported": []},
-        valuations=lambda symbols: {},
+        valuations=lambda symbols, cached: {},
         quotes=lambda symbols: [],
         close=lambda: None,
     )
     try:
-        await monitor._poll()
-        assert requests == ([False, True] if missed > 5 else [False])
+        await monitor._backfill_missing_history(["AAPL.US"])
+        assert requests == ([True] if missed > 5 else [False])
         cached = monitor.store.bars("live", "AAPL.US", "day")
         assert len(cached) == (299 if unavailable else 300)
         summary = monitor.detail_for("AAPL.US", "day", "regular")["summary"]
@@ -147,14 +166,14 @@ async def test_poll_recovers_sessions_after_sleep(tmp_path, monkeypatch, missed,
         if missed > 5:
             assert monitor.store.events("live") == []
             assert monitor.store.deliveries() == []
-        await monitor._poll()
-        assert requests == ([False, True, False] if missed > 5 else [False, False])
+        await monitor._backfill_missing_history(["AAPL.US"])
+        assert requests == ([True] if missed > 5 else [False])
         assert monitor.store.bars("live", "AAPL.US", "day") == cached
         if unavailable:
             unavailable = False
             monitor.history_retry_at["AAPL.US"] = 0
-            await monitor._poll()
-            assert requests[-2:] == [False, True]
+            await monitor._backfill_missing_history(["AAPL.US"])
+            assert requests == [True, True]
             assert monitor.detail_for("AAPL.US", "day", "regular")["summary"]["valid"]
             assert monitor.store.events("live") == []
     finally:
@@ -241,7 +260,7 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     parsed = feed.watchlist()
     assert len(parsed["groups"]) == 2
     assert parsed["unsupported"] == ["INVALID!"]
-    assert "700.HK" in parsed["groups"][0]["symbols"]
+    assert "00700.HK" in parsed["groups"][0]["symbols"]
     nvda_entry = next(s for s in parsed["securities"] if s["symbol"] == "NVDA.US")
     assert nvda_entry["groups"] == ["AI 与算力", "核心持仓"]
 
@@ -272,7 +291,7 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     )
     await monitor._sync_account()
     live_items = {a.symbol: a for a in monitor.portfolio("live")}
-    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US", "700.HK", "600519.SH", "000001.SZ"}
+    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US", "00700.HK", "600519.SH", "000001.SZ"}
     assert live_items["NVDA.US"].broker_quantity == 10 and live_items["NVDA.US"].in_watchlist
     assert live_items["AMD.US"].watch_only and live_items["AMD.US"].watchlist_groups == ["AI 与算力"]
     assert monitor.watchlist_unsupported == ["INVALID!"]
