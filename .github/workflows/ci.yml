@@ -1,0 +1,75 @@
+name: SignalDesk CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, reopened, synchronize, edited]
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  commits:
+    name: 提交规范
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 检查技能目录的提交历史
+        shell: bash
+        run: |
+          skill_commit=$(git rev-list --full-history -1 HEAD -- .agents/skills)
+          if [[ -n "$skill_commit" ]]; then
+            echo "提交历史包含本机技能目录 .agents/skills/，请从待合并的提交中移除。"
+            exit 1
+          fi
+      - name: 校验 PR 标题与全部新增提交
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 scripts/check_commits.py --title="$PR_TITLE"
+          python3 scripts/check_commits.py --range "$BASE_SHA..$HEAD_SHA"
+      - name: 校验长期分支新增提交
+        if: github.event_name == 'push'
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if [[ "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
+            # 首次发布也检查新提交，旧版提交沿用原始标题。
+            BASE_SHA=8cd4ba0d9713ddca9751d92729b7ef8174488e46
+            git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
+          fi
+          python3 scripts/check_commits.py --range "$BASE_SHA..$HEAD_SHA"
+
+  project:
+    name: 工程验证
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check signaldesk tests scripts/check_commits.py
+      - run: uv run --frozen pytest -q
+      - name: 检查界面最小字号
+        run: |
+          uv run --frozen python -c "import pathlib,re; css=pathlib.Path('frontend/src/style.css').read_text(encoding='utf-8'); sizes=[float(x) for x in re.findall(r'font-size\s*:\s*([0-9.]+)px',css)]; print('最小字号', min(sizes)); assert min(sizes) >= 12"
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

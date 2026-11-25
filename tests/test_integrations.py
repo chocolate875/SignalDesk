@@ -191,9 +191,15 @@ def test_no_private_runtime_files_tracked():
     root = Path(__file__).resolve().parent.parent
     result = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True)
     tracked = result.stdout.splitlines()
-    assert not any(p.startswith((".runtime/", "data/", "logs/", ".private/")) for p in tracked)
-    paths = b".runtime/codex-exports/snapshot.json\0data/account.sqlite3\0.env\0logs/private.log\0"
+    assert not any(p.startswith((".runtime/", "data/", "logs/", ".private/", ".agents/skills/")) for p in tracked)
+    paths = [
+        b".runtime/codex-exports/snapshot.json",
+        b"data/account.sqlite3",
+        b".env",
+        b"logs/private.log",
+        b".agents/skills/example/SKILL.md",
+    ]
     ignored = subprocess.run(
-        ["git", "check-ignore", "-z", "--stdin"], input=paths, cwd=root, capture_output=True
+        ["git", "check-ignore", "-z", "--stdin"], input=b"\0".join(paths) + b"\0", cwd=root, capture_output=True
     )
-    assert ignored.returncode == 0 and len(ignored.stdout.rstrip(b"\0").split(b"\0")) == 4
+    assert ignored.returncode == 0 and ignored.stdout.rstrip(b"\0").split(b"\0") == paths

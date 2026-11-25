@@ -1,0 +1,2 @@
+#!/bin/sh
+exec uv run --no-sync python -X utf8 scripts/check_commits.py --message-file "$1"

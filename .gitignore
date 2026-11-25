@@ -1,3 +1,6 @@
+# Developer-local agent skills
+/.agents/skills/
+
 # Private runtime state (never commit real account data or credentials)
 .runtime/
 .private/
