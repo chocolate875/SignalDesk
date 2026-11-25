@@ -424,11 +424,21 @@ function ForecastCard({
   const forecast = stock.forecast;
   const rating = forecast?.rating;
   const levels = forecast?.levels;
+  const vp = forecast?.volume_profile;
   const rb = forecast?.risk_budget;
+  const closeNow = stock.long_plan.close;
   const available = Boolean(
     forecast && levels?.available && rating?.available,
   );
   const guardrailCount = rating?.guardrails?.length ?? 0;
+  const breakoutDist =
+    levels?.breakout_level != null && closeNow != null && closeNow > 0
+      ? (levels.breakout_level / closeNow - 1) * 100
+      : null;
+  const defenseDist =
+    levels?.defense_level != null && closeNow != null && closeNow > 0
+      ? (levels.defense_level / closeNow - 1) * 100
+      : null;
 
   return (
     <section className="insp-card forecast-card">
@@ -452,21 +462,60 @@ function ForecastCard({
         </div>
       ) : (
         <>
+          {(levels!.breakout_level != null || levels!.defense_level != null) && (
+            <div className="key-levels-pair">
+              <div
+                className="key-level-box breakout"
+                title={levels!.breakout_anchor || "主要向上突破位"}
+              >
+                <div className="key-level-top">
+                  <small>▲ 主要突破位</small>
+                  {levels!.breakout_confluence && <em>共振</em>}
+                </div>
+                <strong>
+                  {levels!.breakout_level != null
+                    ? `$${fmt(levels!.breakout_level, 2)}`
+                    : "—"}
+                </strong>
+                <span>
+                  {breakoutDist != null ? `+${fmt(breakoutDist, 1)}%` : "放量站稳打开空间"}
+                </span>
+              </div>
+              <div
+                className="key-level-box defense"
+                title={levels!.defense_anchor || "主要结构与筹码防守底线"}
+              >
+                <div className="key-level-top">
+                  <small>▼ 主要防守位</small>
+                  {levels!.defense_confluence && <em>共振</em>}
+                </div>
+                <strong>
+                  {levels!.defense_level != null
+                    ? `$${fmt(levels!.defense_level, 2)}`
+                    : "—"}
+                </strong>
+                <span>
+                  {defenseDist != null ? `${fmt(defenseDist, 1)}%` : "结构/筹码防守底线"}
+                </span>
+              </div>
+            </div>
+          )}
+
           <div className="forecast-levels-grid">
             <div className="forecast-level-cell buy">
-              <small>参考买点区间</small>
+              <small>参考买区</small>
               <strong>
-                ${fmt(levels!.buy_low, 2)} – ${fmt(levels!.buy_high, 2)}
+                ${fmt(levels!.buy_low, 2)}–${fmt(levels!.buy_high, 2)}
               </strong>
               <span>
-                距买点 {fmt(levels!.buy_discount_pct, 1)}% · 中枢 $
+                距买区 {fmt(levels!.buy_discount_pct, 1)}% · 中枢 $
                 {fmt(levels!.ideal_buy, 2)}
               </span>
             </div>
             <div className="forecast-level-cell sell">
-              <small>参考卖点区间</small>
+              <small>参考卖区</small>
               <strong>
-                ${fmt(levels!.sell_low, 2)} – ${fmt(levels!.sell_high, 2)}
+                ${fmt(levels!.sell_low, 2)}–${fmt(levels!.sell_high, 2)}
               </strong>
               <span>
                 空间 +{fmt(levels!.upside_pct, 1)}% / +
@@ -474,7 +523,7 @@ function ForecastCard({
               </span>
             </div>
             <div className="forecast-level-cell stop">
-              <small>防守止损 &amp; 赔率</small>
+              <small>ATR止损 &amp; 赔率</small>
               <strong>${fmt(levels!.stop_loss, 2)}</strong>
               <span>
                 回撤 {fmt(levels!.downside_pct, 1)}% · 赔率{" "}
@@ -482,6 +531,29 @@ function ForecastCard({
               </span>
             </div>
           </div>
+
+          {vp?.available && vp.poc != null && (
+            <div
+              className="vp-summary-strip"
+              title={`近${vp.window_days}日筹码分布（90日半衰期加权）：${vp.position_label}；70%筹码集中度 ${fmt(vp.concentration_pct, 1)}%`}
+            >
+              <div className="vp-summary-row">
+                <span>
+                  筹码峰 POC <b className="amber-text">${fmt(vp.poc, 2)}</b>
+                </span>
+                <span>
+                  70%价值区 <b>${fmt(vp.val, 2)}–${fmt(vp.vah, 2)}</b>
+                </span>
+              </div>
+              <div className="vp-summary-row sub">
+                <span>
+                  获利筹码 <b>{fmt(vp.profit_ratio_pct, 0)}%</b> · 上方套牢{" "}
+                  <b>{fmt(vp.overhead_supply_pct, 0)}%</b>
+                </span>
+                <em>{vp.position_label}</em>
+              </div>
+            </div>
+          )}
 
           <div className="forecast-action-row">
             <div
@@ -548,6 +620,18 @@ function ForecastCard({
               )}
 
               <div className="forecast-anchors">
+                {levels!.breakout_anchor && (
+                  <div>
+                    <b>突破依据：</b>
+                    <span>{levels!.breakout_anchor}</span>
+                  </div>
+                )}
+                {levels!.defense_anchor && (
+                  <div>
+                    <b>防守依据：</b>
+                    <span>{levels!.defense_anchor}</span>
+                  </div>
+                )}
                 <div>
                   <b>买入支撑：</b>
                   <span>{levels!.buy_anchors.join(" · ")}</span>
@@ -557,9 +641,21 @@ function ForecastCard({
                   <span>{levels!.sell_anchors.join(" · ")}</span>
                 </div>
                 <div>
-                  <b>防守依据：</b>
+                  <b>ATR 止损：</b>
                   <span>{levels!.stop_anchor}</span>
                 </div>
+                {vp?.available && (
+                  <div>
+                    <b>筹码结构：</b>
+                    <span>
+                      近{vp.window_days}日 70%价值区 ${fmt(vp.val, 2)}–${fmt(vp.vah, 2)}
+                      （集中度 {fmt(vp.concentration_pct, 1)}%）
+                      {vp.support_hvn != null ? ` · 下方筹码峰 $${fmt(vp.support_hvn, 2)}` : ""}
+                      {vp.resistance_hvn != null ? ` · 上方筹码峰 $${fmt(vp.resistance_hvn, 2)}` : ""}
+                      {vp.lvn_price != null ? ` · 低量真空 $${fmt(vp.lvn_price, 2)}` : ""}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="rating-factors">

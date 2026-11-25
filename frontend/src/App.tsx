@@ -7,7 +7,7 @@ import {
   ChevronDown,
   CircleDot,
   Clock3,
-  Compass,
+  Monitor,
   Moon,
   MoreHorizontal,
   Plus,
@@ -17,8 +17,6 @@ import {
   Sun,
   Trash2,
   TriangleAlert,
-  Wifi,
-  WifiOff,
   X,
 } from "lucide-react";
 import Chart from "./Chart";
@@ -38,7 +36,9 @@ import {
   type Detail,
   type EvalMode,
   type LiveEvaluation,
+  type ResolvedTheme,
   type Stock,
+  type ThemeMode,
 } from "./types";
 
 function AllocationEditor({
@@ -273,29 +273,109 @@ function AllocationEditor({
   );
 }
 
-/** 顶栏右侧「更多 / 偏好」二级菜单：收纳低频控制、连接状态与京/纽双时钟，保持 16:9 顶栏清爽 */
+const THEME_OPTIONS: {
+  id: ThemeMode;
+  label: string;
+  title: string;
+}[] = [
+  { id: "light", label: "浅色", title: "切换为浅色外观" },
+  { id: "dark", label: "深色", title: "切换为深色外观" },
+  { id: "system", label: "跟随系统", title: "跟随操作系统深浅外观" },
+];
+
+function readInitialThemeMode(): ThemeMode {
+  const saved = localStorage.getItem("sd-theme-mode");
+  if (saved === "light" || saved === "dark" || saved === "system") {
+    return saved;
+  }
+  const legacy = localStorage.getItem("sd-theme-v2");
+  if (legacy === "light" || legacy === "dark") {
+    return legacy;
+  }
+  return "light";
+}
+
+/** 顶栏外置三态外观切换分段控件（浅色 / 深色 / 跟随系统） */
+function ThemeModeSwitch({
+  mode,
+  resolvedTheme,
+  onChange,
+}: {
+  mode: ThemeMode;
+  resolvedTheme: ResolvedTheme;
+  onChange: (next: ThemeMode) => void;
+}) {
+  const btnRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
+    let nextIdx: number | null = null;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      nextIdx = (index + 1) % THEME_OPTIONS.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      nextIdx = (index - 1 + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+    } else if (e.key === "Home") {
+      nextIdx = 0;
+    } else if (e.key === "End") {
+      nextIdx = THEME_OPTIONS.length - 1;
+    }
+    if (nextIdx !== null) {
+      e.preventDefault();
+      onChange(THEME_OPTIONS[nextIdx].id);
+      btnRefs.current[nextIdx]?.focus();
+    }
+  };
+
+  return (
+    <div
+      className="theme-seg-group"
+      role="radiogroup"
+      aria-label="外观主题模式"
+    >
+      {THEME_OPTIONS.map((opt, idx) => {
+        const active = mode === opt.id;
+        const tip =
+          opt.id === "system"
+            ? `${opt.title}（当前：${resolvedTheme === "dark" ? "深色" : "浅色"}）`
+            : opt.title;
+        return (
+          <button
+            key={opt.id}
+            ref={(el) => {
+              btnRefs.current[idx] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={tip}
+            title={tip}
+            tabIndex={active ? 0 : -1}
+            className={`theme-seg-btn ${active ? "active" : ""}`}
+            onClick={() => onChange(opt.id)}
+            onKeyDown={(e) => handleKeyDown(idx, e)}
+          >
+            {opt.id === "light" && <Sun size={14} aria-hidden="true" />}
+            {opt.id === "dark" && <Moon size={14} aria-hidden="true" />}
+            {opt.id === "system" && <Monitor size={14} aria-hidden="true" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 顶栏右侧「更多」二级菜单：仅保留无重复的低频偏好与辅助项（双时钟、涨跌配色、通知记录） */
 function TopbarMoreMenu({
-  connected,
-  statusDetail,
   bjClock,
   nyClock,
   reverse,
-  theme,
   onToggleReverse,
-  onToggleTheme,
   onOpenDeliveries,
-  onOpenMacro,
 }: {
-  connected: boolean;
-  statusDetail?: string;
   bjClock: string;
   nyClock: string;
   reverse: boolean;
-  theme: string;
   onToggleReverse: () => void;
-  onToggleTheme: () => void;
   onOpenDeliveries: () => void;
-  onOpenMacro: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -326,27 +406,22 @@ function TopbarMoreMenu({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        title="更多工具、配色主题、通知记录与双时钟"
+        title="双时钟、涨跌配色与通知记录"
       >
-        <MoreHorizontal size={16} />
+        <MoreHorizontal size={16} aria-hidden="true" />
         <span>更多</span>
-        <ChevronDown size={13} />
+        <ChevronDown size={13} aria-hidden="true" />
       </button>
 
       {open && (
-        <div className="topbar-dropdown" role="menu" aria-label="顶栏二级菜单">
+        <div className="topbar-dropdown" role="menu" aria-label="顶栏偏好与辅助菜单">
           <div className="topbar-dd-status">
-            <div className={`topbar-dd-conn ${connected ? "online" : "offline"}`}>
-              {connected ? <Wifi size={14} /> : <WifiOff size={14} />}
-              <b>{connected ? "实时流已连接" : "正在重连服务"}</b>
-            </div>
             <div className="topbar-dd-clocks">
-              <Clock3 size={13} />
+              <Clock3 size={13} aria-hidden="true" />
               <span>北京 {bjClock}</span>
               <span className="sep">/</span>
               <span>纽约 {nyClock}</span>
             </div>
-            {statusDetail && <small className="topbar-dd-note">{statusDetail}</small>}
           </div>
 
           <div className="topbar-dd-sep" />
@@ -369,47 +444,15 @@ function TopbarMoreMenu({
             role="menuitem"
             className="topbar-dd-item"
             onClick={() => {
-              onToggleTheme();
-              setOpen(false);
-            }}
-          >
-            <span className="topbar-dd-ico">
-              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-              外观主题
-            </span>
-            <em>{theme === "dark" ? "切至浅色" : "切至深色"}</em>
-          </button>
-
-          <button
-            type="button"
-            role="menuitem"
-            className="topbar-dd-item"
-            onClick={() => {
               setOpen(false);
               onOpenDeliveries();
             }}
           >
             <span className="topbar-dd-ico">
-              <Bell size={14} />
+              <Bell size={14} aria-hidden="true" />
               通知投递记录
             </span>
             <em>查看</em>
-          </button>
-
-          <button
-            type="button"
-            role="menuitem"
-            className="topbar-dd-item"
-            onClick={() => {
-              setOpen(false);
-              onOpenMacro();
-            }}
-          >
-            <span className="topbar-dd-ico">
-              <Compass size={14} />
-              市场大势与美债全景
-            </span>
-            <em>打开</em>
           </button>
         </div>
       )}
@@ -421,9 +464,15 @@ export default function App() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
-  const [theme, setTheme] = useState(
-    localStorage.getItem("sd-theme-v2") ?? "light",
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
+  const [systemDark, setSystemDark] = useState<boolean>(() =>
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : false,
   );
+  const resolvedTheme: ResolvedTheme =
+    themeMode === "system" ? (systemDark ? "dark" : "light") : themeMode;
   const [reverse, setReverse] = useState(
     localStorage.getItem("sd-reverse") === "true",
   );
@@ -464,9 +513,36 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("sd-theme-v2", theme);
-  }, [theme]);
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches);
+    setSystemDark(mq.matches);
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.dataset.themeMode = themeMode;
+    document.documentElement.style.colorScheme = resolvedTheme;
+    localStorage.setItem("sd-theme-mode", themeMode);
+    localStorage.setItem("sd-theme-v2", resolvedTheme);
+    const metaTheme = document.querySelector<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    );
+    if (metaTheme) {
+      metaTheme.content = resolvedTheme === "dark" ? "#0b0f14" : "#f8fafc";
+    }
+  }, [themeMode, resolvedTheme]);
 
   useEffect(() => {
     document.documentElement.dataset.reverse = String(reverse);
@@ -876,20 +952,22 @@ export default function App() {
           />
           <MacroStripWithGuide
             curve={curve}
+            gold={data?.gold}
             onOpenMacroPanel={() => setMacroOpen(true)}
           />
         </div>
 
         <div className="topbar-right">
+          <ThemeModeSwitch
+            mode={themeMode}
+            resolvedTheme={resolvedTheme}
+            onChange={setThemeMode}
+          />
           <TopbarMoreMenu
-            connected={connected}
-            statusDetail={data?.detail}
             bjClock={bjClock}
             nyClock={nyClock}
             reverse={reverse}
-            theme={theme}
             onToggleReverse={() => setReverse(!reverse)}
-            onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
             onOpenDeliveries={async () => {
               try {
                 setDeliveries(await api("/deliveries"));
@@ -897,14 +975,13 @@ export default function App() {
                 notify(e.message);
               }
             }}
-            onOpenMacro={() => setMacroOpen(true)}
           />
           <button
             type="button"
             className="button primary top-settings-btn"
             onClick={() => setSettings(true)}
           >
-            <Settings2 size={15} />
+            <Settings2 size={15} aria-hidden="true" />
             <span>设置</span>
           </button>
         </div>
@@ -1166,43 +1243,87 @@ export default function App() {
 
                   {activeForecast?.levels?.available && (
                     <div className="forecast-strip">
+                      {activeForecast.levels.breakout_level != null && (
+                        <div
+                          className="forecast-strip-item"
+                          title={
+                            activeForecast.levels.breakout_anchor ||
+                            "综合波浪前高与筹码密集区上沿测算的主要突破位"
+                          }
+                        >
+                          <span>
+                            {activeForecast.levels.breakout_confluence
+                              ? "共振突破"
+                              : "突破位"}
+                          </span>
+                          <strong className="accent-val">
+                            ${fmt(activeForecast.levels.breakout_level, 2)}
+                          </strong>
+                        </div>
+                      )}
+                      {activeForecast.levels.defense_level != null && (
+                        <div
+                          className="forecast-strip-item"
+                          title={
+                            activeForecast.levels.defense_anchor ||
+                            "综合筹码价值区下沿、波浪前低与移动保护位测算的主要防守位"
+                          }
+                        >
+                          <span>
+                            {activeForecast.levels.defense_confluence
+                              ? "共振防守"
+                              : "防守位"}
+                          </span>
+                          <strong className="down">
+                            ${fmt(activeForecast.levels.defense_level, 2)}
+                          </strong>
+                        </div>
+                      )}
                       <div className="forecast-strip-item">
-                        <span>买点</span>
+                        <span>买区</span>
                         <strong className="up">
-                          ${fmt(activeForecast.levels.buy_low, 2)} – $
+                          ${fmt(activeForecast.levels.buy_low, 2)}–$
                           {fmt(activeForecast.levels.buy_high, 2)}
                         </strong>
                       </div>
-                      <div className="forecast-strip-item">
-                        <span>卖点</span>
-                        <strong className="accent-val">
-                          ${fmt(activeForecast.levels.sell_low, 2)} – $
-                          {fmt(activeForecast.levels.sell_high, 2)}
-                        </strong>
-                      </div>
-                      <div className="forecast-strip-item">
-                        <span>止损</span>
-                        <strong className="down">
-                          ${fmt(activeForecast.levels.stop_loss, 2)}
-                        </strong>
-                      </div>
+                      {activeForecast.volume_profile?.available &&
+                        activeForecast.volume_profile.poc != null && (
+                          <div
+                            className="forecast-strip-item forecast-strip-chip"
+                            title={`近${activeForecast.volume_profile.window_days}日筹码分布 · 70%价值区 $${fmt(activeForecast.volume_profile.val, 2)}–$${fmt(activeForecast.volume_profile.vah, 2)} · ${activeForecast.volume_profile.position_label}`}
+                          >
+                            <span>筹码峰</span>
+                            <strong className="amber-text">
+                              ${fmt(activeForecast.volume_profile.poc, 2)}
+                              {activeForecast.volume_profile.profit_ratio_pct !=
+                                null &&
+                                ` (${fmt(activeForecast.volume_profile.profit_ratio_pct, 0)}%获利)`}
+                            </strong>
+                          </div>
+                        )}
                       <div className="forecast-strip-item">
                         <span>盈亏比</span>
                         <strong>
                           {fmt(activeForecast.levels.risk_reward_ratio, 2)}:1
                         </strong>
                       </div>
-                      {activeForecast.levels.stop_loss != null &&
-                        activeForecast.levels.sell_low != null && (
+                      {(activeForecast.levels.defense_level ??
+                        activeForecast.levels.stop_loss) != null &&
+                        (activeForecast.levels.breakout_level ??
+                          activeForecast.levels.sell_low) != null && (
                           <button
                             type="button"
                             className="text-btn forecast-strip-apply"
-                            title="将参考止损与参考卖点预填到个人计划价"
+                            title="将主要防守位与参考卖点预填到个人计划价"
                             onClick={() =>
                               setEditor({
                                 stock,
-                                presetStop: activeForecast.levels.stop_loss,
-                                presetTarget: activeForecast.levels.sell_low,
+                                presetStop:
+                                  activeForecast.levels.defense_level ??
+                                  activeForecast.levels.stop_loss,
+                                presetTarget:
+                                  activeForecast.levels.sell_low ??
+                                  activeForecast.levels.breakout_level,
                               })
                             }
                           >
@@ -1312,7 +1433,7 @@ export default function App() {
                     marketSession={data?.market?.session}
                     evalMode={isLiveEvalActive ? "live" : "confirmed"}
                     liveEvalRow={isLiveEvalActive ? (activeLiveEval?.live_row ?? null) : null}
-                    theme={theme}
+                    theme={resolvedTheme}
                     reverse={reverse}
                   />
                 </ErrorBoundary>

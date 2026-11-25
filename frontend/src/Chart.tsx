@@ -5,6 +5,7 @@ import {
   LineChart,
   BarChart,
   ScatterChart,
+  CustomChart,
 } from "echarts/charts";
 import {
   GridComponent,
@@ -12,6 +13,7 @@ import {
   DataZoomComponent,
   AxisPointerComponent,
   MarkLineComponent,
+  MarkAreaComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { HelpCircle, Maximize2, Minimize2, X } from "lucide-react";
@@ -24,15 +26,96 @@ echarts.use([
   LineChart,
   BarChart,
   ScatterChart,
+  CustomChart,
   GridComponent,
   TooltipComponent,
   DataZoomComponent,
   AxisPointerComponent,
   MarkLineComponent,
+  MarkAreaComponent,
   CanvasRenderer,
 ]);
 
 type OverlayMode = "MA" | "BOLL" | "NONE";
+
+const DEFAULT_RANGE_BARS = 126;
+const PRESET_RANGES = [63, 126, 252, 0] as const;
+
+type SavedViewWindow = {
+  spanBars: number;
+  anchoredRight: boolean;
+  startDate: string;
+  endDate: string;
+};
+
+/** 跨标的共享的视图缩放与日期位置状态，确保切换不同股票时保持一致的缩放比例与历史位置 */
+let sharedViewWindow: SavedViewWindow = {
+  spanBars: DEFAULT_RANGE_BARS,
+  anchoredRight: true,
+  startDate: "",
+  endDate: "",
+};
+
+/** 在升序日期数组中找到最贴合 saved 视图窗口的 [left, right] 索引范围 */
+function resolveViewWindow(
+  dates: string[],
+  saved: SavedViewWindow,
+): { left: number; right: number } {
+  const n = dates.length;
+  if (n <= 1) return { left: 0, right: Math.max(0, n - 1) };
+  if (saved.spanBars === 0) {
+    return { left: 0, right: n - 1 };
+  }
+  const span = Math.max(10, saved.spanBars);
+  if (saved.anchoredRight || !saved.startDate || !saved.endDate) {
+    return { left: Math.max(0, n - span), right: n - 1 };
+  }
+  // 历史区间定位：在目标标的的升序日期中查找首个 >= startDate 与末个 <= endDate 的交易日
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] < saved.startDate) lo = mid + 1;
+    else hi = mid;
+  }
+  const mappedLeft = dates[lo] >= saved.startDate ? lo : -1;
+
+  lo = 0;
+  hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (dates[mid] <= saved.endDate) lo = mid;
+    else hi = mid - 1;
+  }
+  const mappedRight = dates[lo] <= saved.endDate ? lo : -1;
+
+  if (mappedLeft >= 0 && mappedRight >= mappedLeft && mappedRight - mappedLeft >= 4) {
+    return { left: mappedLeft, right: mappedRight };
+  }
+  // 若目标标的为次新股（上市晚于所选历史区间），回退到最左侧相同跨度；若历史结束更早，回退最右侧相同跨度
+  if (dates[0] > saved.endDate) {
+    return { left: 0, right: Math.min(n - 1, span - 1) };
+  }
+  return { left: Math.max(0, n - span), right: n - 1 };
+}
+
+function inferPresetRange(
+  sIdx: number,
+  eIdx: number,
+  total: number,
+): number {
+  if (total <= 0) return DEFAULT_RANGE_BARS;
+  if (sIdx <= 0 && eIdx >= total - 1) return 0;
+  const anchoredRight = eIdx >= total - 2;
+  if (!anchoredRight) return -1;
+  const span = eIdx - sIdx + 1;
+  for (const preset of [63, 126, 252]) {
+    if (Math.abs(span - Math.min(preset, total)) <= 2) {
+      return preset;
+    }
+  }
+  return -1;
+}
 
 const NY_DATE_FMT = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "America/New_York",
@@ -70,6 +153,75 @@ function buildCandleSeriesData(rows: ChartRow[]) {
     safeNumber(r.low),
     safeNumber(r.high),
   ]);
+}
+
+/** 根据当前可见时间窗口 [startIdx, endIdx] 计算紧凑的 Y 轴价格范围，消除大片上下空白并防止远期参考线压扁 K 线 */
+function computeTightPriceBounds(
+  rows: ChartRow[],
+  startIdx: number,
+  endIdx: number,
+  overlay: OverlayMode,
+  keyPrices: number[],
+): { min: number; max: number } | null {
+  if (!rows.length) return null;
+  const s = Math.max(0, Math.min(startIdx, rows.length - 1));
+  const e = Math.max(s, Math.min(endIdx, rows.length - 1));
+  let candleMin = Infinity;
+  let candleMax = -Infinity;
+  for (let i = s; i <= e; i++) {
+    const lo = safeNumber(rows[i].low);
+    const hi = safeNumber(rows[i].high);
+    const cl = safeNumber(rows[i].close);
+    if (lo != null && lo > 0 && lo < candleMin) candleMin = lo;
+    if (hi != null && hi > 0 && hi > candleMax) candleMax = hi;
+    if (cl != null && cl > 0) {
+      if (cl < candleMin) candleMin = cl;
+      if (cl > candleMax) candleMax = cl;
+    }
+  }
+  if (!Number.isFinite(candleMin) || !Number.isFinite(candleMax) || candleMax <= 0) {
+    return null;
+  }
+  const baseSpan = Math.max(candleMax - candleMin, candleMax * 0.015);
+  let lo = candleMin;
+  let hi = candleMax;
+
+  // 仅吸纳紧贴当前可见 K 线的均线/布林与核心防守/突破位，绝不让远期 MA200 或极端目标价拉爆纵轴空白
+  const overlayGuardLo = candleMin - baseSpan * 0.12;
+  const overlayGuardHi = candleMax + baseSpan * 0.12;
+  if (overlay === "MA" || overlay === "BOLL") {
+    const fields =
+      overlay === "MA" ? ["ma20", "ma50", "ma200"] : ["bb_upper", "bb_lower"];
+    for (let i = s; i <= e; i++) {
+      for (const f of fields) {
+        const v = safeNumber(rows[i][f]);
+        if (v != null && v >= overlayGuardLo && v <= overlayGuardHi) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+    }
+  }
+
+  const levelGuardLo = candleMin - baseSpan * 0.18;
+  const levelGuardHi = candleMax + baseSpan * 0.18;
+  for (const p of keyPrices) {
+    if (Number.isFinite(p) && p > 0 && p >= levelGuardLo && p <= levelGuardHi) {
+      if (p < lo) lo = p;
+      if (p > hi) hi = p;
+    }
+  }
+
+  const finalSpan = Math.max(hi - lo, candleMax * 0.015);
+  const padBottom = finalSpan * 0.07;
+  const padTop = finalSpan * 0.08;
+  const yMin = Math.max(0, lo - padBottom);
+  const yMax = hi + padTop;
+  const digits = candleMax < 5 ? 3 : 2;
+  return {
+    min: Number(yMin.toFixed(digits)),
+    max: Number(yMax.toFixed(digits)),
+  };
 }
 
 function buildVolumeSeriesData(rows: ChartRow[], up: string, down: string) {
@@ -429,14 +581,27 @@ function Chart({
   const latestDatesRef = useRef<string[]>([]);
   const evalModeRef = useRef<EvalMode>(evalMode);
   const pivotByIndexRef = useRef<Map<number, WavePivot>>(new Map());
+  const yBoundsCtxRef = useRef<{
+    rows: ChartRow[];
+    overlay: OverlayMode;
+    keyPrices: number[];
+  }>({ rows: [], overlay: "MA", keyPrices: [] });
   const hoverSetter = useRef<(idx: number | null) => void>(() => {});
   const [overlay, setOverlay] = useState<OverlayMode>("MA");
-  const [showMacd, setShowMacd] = useState(true);
+  const [showMacd, setShowMacd] = useState(false);
   const [showRsi, setShowRsi] = useState(false);
   const [showCost, setShowCost] = useState(true);
   const [showForecast, setShowForecast] = useState(true);
+  const [showVolumeProfile, setShowVolumeProfile] = useState(true);
   const [showWaveTrend, setShowWaveTrend] = useState(true);
-  const [activeRange, setActiveRange] = useState<number>(252);
+  const [activeRange, setActiveRange] = useState<number>(() =>
+    sharedViewWindow.spanBars === 0
+      ? 0
+      : sharedViewWindow.anchoredRight &&
+          (PRESET_RANGES as readonly number[]).includes(sharedViewWindow.spanBars)
+        ? sharedViewWindow.spanBars
+        : -1,
+  );
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [chartError, setChartError] = useState("");
   const [retrySeq, setRetrySeq] = useState(0);
@@ -616,6 +781,50 @@ function Chart({
     instance.on("globalout", () => {
       hoverSetter.current(null);
     });
+    let zoomRafId: number | null = null;
+    instance.on("datazoom", () => {
+      if (zoomRafId != null) cancelAnimationFrame(zoomRafId);
+      zoomRafId = requestAnimationFrame(() => {
+        if (instance.isDisposed()) return;
+        const { rows, overlay: ov, keyPrices } = yBoundsCtxRef.current;
+        const liveDates = latestDatesRef.current;
+        if (!rows.length) return;
+        try {
+          const opt: any = instance.getOption();
+          const dz = opt?.dataZoom?.[0];
+          if (!dz) return;
+          let sIdx = 0;
+          let eIdx = rows.length - 1;
+          if (typeof dz.startValue === "number" && typeof dz.endValue === "number") {
+            sIdx = Math.round(dz.startValue);
+            eIdx = Math.round(dz.endValue);
+          } else if (typeof dz.start === "number" && typeof dz.end === "number") {
+            sIdx = Math.round(((rows.length - 1) * dz.start) / 100);
+            eIdx = Math.round(((rows.length - 1) * dz.end) / 100);
+          }
+          sIdx = Math.max(0, Math.min(sIdx, rows.length - 1));
+          eIdx = Math.max(sIdx, Math.min(eIdx, rows.length - 1));
+          const isAll = sIdx <= 0 && eIdx >= rows.length - 1;
+          const anchoredRight = eIdx >= rows.length - 2;
+          sharedViewWindow = {
+            spanBars: isAll ? 0 : Math.max(10, eIdx - sIdx + 1),
+            anchoredRight,
+            startDate: liveDates[sIdx] ?? "",
+            endDate: liveDates[eIdx] ?? "",
+          };
+          setActiveRange(inferPresetRange(sIdx, eIdx, rows.length));
+          const bounds = computeTightPriceBounds(rows, sIdx, eIdx, ov, keyPrices);
+          if (bounds) {
+            instance.setOption(
+              { yAxis: [{ min: bounds.min, max: bounds.max }] },
+              { notMerge: false },
+            );
+          }
+        } catch {
+          // 忽略缩放期间瞬态读取异常
+        }
+      });
+    });
     let rafId: number | null = null;
     const resize = new ResizeObserver(() => {
       if (rafId != null) cancelAnimationFrame(rafId);
@@ -635,6 +844,7 @@ function Chart({
     });
     resize.observe(el);
     return () => {
+      if (zoomRafId != null) cancelAnimationFrame(zoomRafId);
       if (rafId != null) cancelAnimationFrame(rafId);
       resize.disconnect();
       if (!instance.isDisposed()) instance.dispose();
@@ -687,6 +897,7 @@ function Chart({
     ].join("/");
 
     const flRef = detail.stock.forecast?.levels;
+    const vpRef = detail.stock.forecast?.volume_profile;
     const structSig = JSON.stringify([
       key,
       detail.rows.length,
@@ -704,6 +915,10 @@ function Chart({
       flRef?.buy_high ?? null,
       flRef?.sell_low ?? null,
       flRef?.stop_loss ?? null,
+      flRef?.defense_level ?? null,
+      flRef?.breakout_level ?? null,
+      vpRef?.available ?? false,
+      vpRef?.poc ?? null,
       overlay,
       evalMode,
       evalMode === "live" ? (liveEvalRow?.ma20 ?? null) : null,
@@ -712,6 +927,7 @@ function Chart({
       showRsi,
       showCost,
       showForecast,
+      showVolumeProfile,
       showWaveTrend,
       theme,
       reverse,
@@ -741,57 +957,11 @@ function Chart({
       return;
     }
 
-    let old: any = null;
-    try {
-      old = instance.getOption();
-    } catch {
-      old = null;
-    }
-    const isSameSymbol = key === previousKey.current;
-    const zoom =
-      isSameSymbol && old?.xAxis?.[0]?.data?.length >= 2
-        ? old?.dataZoom?.[0]
-        : null;
     previousKey.current = key;
-    if (!isSameSymbol) {
-      setActiveRange(252);
-    }
-
-    let left = Math.max(0, rows.length - 252);
-    let right = rows.length - 1;
-    if (
-      zoom &&
-      typeof zoom.start === "number" &&
-      typeof zoom.end === "number" &&
-      Number.isFinite(zoom.start) &&
-      Number.isFinite(zoom.end)
-    ) {
-      const oldDates: string[] = old.xAxis[0].data;
-      const oldLeft = Math.max(
-        0,
-        Math.min(
-          oldDates.length - 1,
-          Math.round(((oldDates.length - 1) * zoom.start) / 100),
-        ),
-      );
-      const oldRight = Math.max(
-        oldLeft,
-        Math.min(
-          oldDates.length - 1,
-          Math.round(((oldDates.length - 1) * zoom.end) / 100),
-        ),
-      );
-      if (oldRight >= oldDates.length - 1) {
-        left = Math.max(0, right - (oldRight - oldLeft));
-      } else {
-        const mappedLeft = dates.indexOf(oldDates[oldLeft]);
-        const mappedRight = dates.indexOf(oldDates[oldRight]);
-        if (mappedLeft >= 0) left = mappedLeft;
-        if (mappedRight >= 0) right = Math.max(left, mappedRight);
-      }
-    }
-    left = Math.max(0, Math.min(left, rows.length - 1));
-    right = Math.max(left, Math.min(right, rows.length - 1));
+    // 切换不同标的或重绘时统一沿用跨股共享的缩放跨度与历史时间位置，绝不强制重置回默认窗口
+    const resolved = resolveViewWindow(dates, sharedViewWindow);
+    const left = Math.max(0, Math.min(resolved.left, rows.length - 1));
+    const right = Math.max(left, Math.min(resolved.right, rows.length - 1));
 
     const val = (field: string) =>
       rows.map((r) => safeNumber(r[field]));
@@ -819,20 +989,20 @@ function Chart({
     const panes: PaneSpec[] =
       showMacd && showRsi
         ? [
-            { kind: "price", top: 28, height: "36.5%" },
-            { kind: "vol", top: "50.5%", height: "10%" },
-            { kind: "macd", top: "67.5%", height: "10.5%" },
-            { kind: "rsi", top: "84.5%", height: "9.5%" },
+            { kind: "price", top: 24, height: "40%" },
+            { kind: "vol", top: "50%", height: "10%" },
+            { kind: "macd", top: "66%", height: "11%" },
+            { kind: "rsi", top: "82.5%", height: "11%" },
           ]
         : showMacd || showRsi
           ? [
-              { kind: "price", top: 30, height: "48%" },
-              { kind: "vol", top: "63%", height: "11%" },
-              { kind: showMacd ? "macd" : "rsi", top: "81.5%", height: "12%" },
+              { kind: "price", top: 26, height: "52%" },
+              { kind: "vol", top: "62%", height: "11%" },
+              { kind: showMacd ? "macd" : "rsi", top: "79.5%", height: "14%" },
             ]
           : [
-              { kind: "price", top: 30, height: "64%" },
-              { kind: "vol", top: "79%", height: "14%" },
+              { kind: "price", top: 26, height: "69.5%" },
+              { kind: "vol", top: "80%", height: "13.5%" },
             ];
 
     const paneIndex = (kind: PaneSpec["kind"]) =>
@@ -850,52 +1020,250 @@ function Chart({
 
     const planLines = [
       {
-        label: "失效价",
+        label: "计划失效",
         price: detail.stock.long_plan.stop,
         color: down,
+        side: "left" as const,
       },
       {
-        label: "目标价",
+        label: "计划目标",
         price: detail.stock.long_plan.target,
         color: up,
+        side: "left" as const,
       },
       {
-        label: "成本价",
+        label: "持仓成本",
         price: costPrice,
         color: "#e2b857",
+        side: "left" as const,
       },
     ]
       .filter(({ price }) => price != null)
-      .map(({ label, price, color }) => ({
+      .map(({ label, price, color, side }) => ({
         name: `${label} $${fmt(price, 2)}`,
-        yAxis: price,
-        lineStyle: { color, width: 1.5, type: "dashed" },
-        label: { position: "insideMiddleTop" },
+        yAxis: price as number,
+        _side: side,
+        lineStyle: { color, width: 1.4, type: "dashed", opacity: 0.85 },
+        label: { position: "insideStartTop" as string },
       }));
 
     const fl = detail.stock.forecast?.levels;
-    const forecastBuyColor = "#10b981";
-    const forecastSellColor = dark ? "#60a5fa" : "#1e40af";
-    const forecastStopColor = dark ? "#ef5f6c" : "#dc2626";
-    const forecastLines =
-      showForecast && fl?.available
-        ? [
-            { label: "参考买点", price: fl.buy_high, color: forecastBuyColor, showLabel: true },
-            { label: "深度买点", price: fl.buy_low, color: forecastBuyColor, showLabel: false },
-            { label: "参考卖点", price: fl.sell_low, color: forecastSellColor, showLabel: true },
-            { label: "目标卖点", price: fl.sell_high, color: forecastSellColor, showLabel: true },
-            { label: "参考止损", price: fl.stop_loss, color: forecastStopColor, showLabel: true },
-          ]
-            .filter(({ price }) => price != null)
-            .map(({ label, price, color, showLabel }) => ({
-              name: `${label} $${fmt(price, 2)}`,
-              yAxis: price,
-              lineStyle: { color, width: 1.2, type: "dotted", opacity: 0.85 },
-              label: { show: showLabel, position: "insideStartTop" },
-            }))
-        : [];
+    const vp = detail.stock.forecast?.volume_profile;
+    const wt = detail.stock.wave_trend;
+    const breakoutColor = dark ? "#60a5fa" : "#1d4ed8";
+    const defenseColor = dark ? "#f87171" : "#dc2626";
+    const pocColor = dark ? "#fbbf24" : "#d97706";
+    const labelBg = dark ? "rgba(17, 23, 32, 0.92)" : "rgba(255, 255, 255, 0.94)";
 
-    const markLines = [...planLines, ...forecastLines];
+    // 先算出初始可见 Y 轴范围，便于对所有 markLine 标签进行防重叠智能排布
+    const keyPricesForBounds: number[] = [];
+    if (showForecast && fl?.available) {
+      for (const p of [
+        fl.breakout_level,
+        fl.defense_level,
+        fl.buy_high,
+        fl.sell_low,
+      ]) {
+        if (p != null && Number.isFinite(p) && p > 0) keyPricesForBounds.push(p);
+      }
+    }
+    if (showVolumeProfile && vp?.available && vp.poc != null) {
+      keyPricesForBounds.push(vp.poc);
+    }
+    for (const p of [detail.stock.long_plan.stop, detail.stock.long_plan.target]) {
+      if (p != null && Number.isFinite(p) && p > 0) keyPricesForBounds.push(p);
+    }
+    yBoundsCtxRef.current = {
+      rows,
+      overlay,
+      keyPrices: keyPricesForBounds,
+    };
+    const initialBounds = computeTightPriceBounds(
+      rows,
+      left,
+      right,
+      overlay,
+      keyPricesForBounds,
+    );
+    const ySpan =
+      initialBounds && initialBounds.max > initialBounds.min
+        ? initialBounds.max - initialBounds.min
+        : Math.max(safeNumber(rows[rows.length - 1]?.close) ?? 100, 1) * 0.2;
+
+    // 检测右边缘活跃波浪拐点，若突破/防守标签与末端波浪胶囊同高则自动左移错开
+    const recentRightPivots =
+      showWaveTrend && wt?.available
+        ? (wt.wave.pivots ?? [])
+            .map((p) => ({ idx: dates.indexOf(p.date), price: p.price }))
+            .filter((p) => p.idx >= rows.length - 16)
+        : [];
+    const collidesRightPivot = (price: number) =>
+      recentRightPivots.some((p) => Math.abs(p.price - price) < ySpan * 0.085);
+
+    const keyLevelLines: any[] = [];
+    const forecastAreas: any[] = [];
+    if (showForecast && fl?.available) {
+      const brk = fl.breakout_level ?? fl.sell_low;
+      const def = fl.defense_level ?? fl.stop_loss;
+      if (brk != null) {
+        const shiftLeft = collidesRightPivot(brk);
+        keyLevelLines.push({
+          name: `${fl.breakout_confluence ? "▲ 共振突破" : "▲ 突破"} $${fmt(brk, 2)}`,
+          yAxis: brk,
+          _side: "right",
+          lineStyle: {
+            color: breakoutColor,
+            width: fl.breakout_confluence ? 2.0 : 1.7,
+            type: [7, 4],
+            opacity: 0.95,
+          },
+          label: {
+            show: true,
+            position: "insideEndTop",
+            offset: shiftLeft ? [-124, 0] : [0, 0],
+            color: breakoutColor,
+            backgroundColor: labelBg,
+            borderColor: breakoutColor,
+            borderWidth: 1,
+            fontWeight: 600,
+          },
+        });
+      }
+      if (def != null) {
+        const shiftLeft = collidesRightPivot(def);
+        keyLevelLines.push({
+          name: `${fl.defense_confluence ? "▼ 共振防守" : "▼ 防守"} $${fmt(def, 2)}`,
+          yAxis: def,
+          _side: "right",
+          lineStyle: {
+            color: defenseColor,
+            width: fl.defense_confluence ? 2.0 : 1.7,
+            type: [7, 4],
+            opacity: 0.95,
+          },
+          label: {
+            show: true,
+            position: "insideEndBottom",
+            offset: shiftLeft ? [-124, 0] : [0, 0],
+            color: defenseColor,
+            backgroundColor: labelBg,
+            borderColor: defenseColor,
+            borderWidth: 1,
+            fontWeight: 600,
+          },
+        });
+      }
+      // 仅当 ATR 止损位与主要防守位价差超过 1.2% 时补充细虚线，避免重复压线
+      if (
+        fl.stop_loss != null &&
+        def != null &&
+        Math.abs(fl.stop_loss - def) / Math.max(def, 1e-6) > 0.012
+      ) {
+        keyLevelLines.push({
+          name: `ATR止损 $${fmt(fl.stop_loss, 2)}`,
+          yAxis: fl.stop_loss,
+          _side: "left",
+          lineStyle: { color: defenseColor, width: 1.1, type: "dotted", opacity: 0.65 },
+          label: {
+            show: true,
+            position: "insideStartBottom",
+            color: defenseColor,
+            backgroundColor: labelBg,
+            borderColor: gridColor,
+            borderWidth: 1,
+          },
+        });
+      }
+
+      // 用柔和半透明色带表现买区与卖区，替代原先 4 条碎横线，主图更清爽直观
+      if (fl.buy_low != null && fl.buy_high != null && fl.buy_high > fl.buy_low) {
+        forecastAreas.push([
+          {
+            name: `买区 $${fmt(fl.buy_low, 2)}–$${fmt(fl.buy_high, 2)}`,
+            yAxis: fl.buy_low,
+            itemStyle: {
+              color: dark ? "rgba(16, 185, 129, 0.11)" : "rgba(16, 185, 129, 0.085)",
+              borderColor: dark ? "rgba(52, 211, 153, 0.28)" : "rgba(16, 185, 129, 0.25)",
+              borderWidth: 0.8,
+              borderType: "dashed",
+            },
+            label: {
+              show: true,
+              position: "insideLeft",
+              color: dark ? "#34d399" : "#047857",
+              fontSize: 12,
+              fontWeight: 500,
+              padding: [1, 6],
+            },
+          },
+          { yAxis: fl.buy_high },
+        ]);
+      }
+      if (fl.sell_low != null && fl.sell_high != null && fl.sell_high > fl.sell_low) {
+        forecastAreas.push([
+          {
+            name: `卖区 $${fmt(fl.sell_low, 2)}–$${fmt(fl.sell_high, 2)}`,
+            yAxis: fl.sell_low,
+            itemStyle: {
+              color: dark ? "rgba(59, 130, 246, 0.11)" : "rgba(30, 64, 175, 0.065)",
+              borderColor: dark ? "rgba(96, 165, 250, 0.28)" : "rgba(30, 64, 175, 0.22)",
+              borderWidth: 0.8,
+              borderType: "dashed",
+            },
+            label: {
+              show: true,
+              position: "insideLeft",
+              color: dark ? "#93c5fd" : "#1e40af",
+              fontSize: 12,
+              fontWeight: 500,
+              padding: [1, 6],
+            },
+          },
+          { yAxis: fl.sell_high },
+        ]);
+      }
+    }
+
+    if (showVolumeProfile && vp?.available && vp.poc != null) {
+      // 筹码峰 POC 置于中段顶部，天然避开左侧「买区/卖区/计划线」与右侧「突破/防守/波浪」
+      keyLevelLines.push({
+        name: `筹码峰POC $${fmt(vp.poc, 2)}`,
+        yAxis: vp.poc,
+        _side: "middle",
+        lineStyle: { color: pocColor, width: 1.25, type: "dotted", opacity: 0.85 },
+        label: {
+          show: true,
+          position: "insideMiddleTop",
+          color: pocColor,
+          backgroundColor: labelBg,
+          borderColor: dark ? "rgba(251, 191, 36, 0.45)" : "rgba(217, 119, 6, 0.4)",
+          borderWidth: 1,
+        },
+      });
+    }
+
+    // 左侧 markLine 防重叠调度：相邻价差 < 7% 纵轴高度时自动水平错位，杜绝「持仓成本 / 计划失效」压字
+    const allRawLines = [...planLines, ...keyLevelLines];
+    const leftGroup = allRawLines
+      .filter((item) => item._side === "left" && typeof item.yAxis === "number")
+      .sort((a, b) => b.yAxis - a.yAxis);
+    let prevLeftY: number | null = null;
+    let leftStagger = 0;
+    for (const item of leftGroup) {
+      if (prevLeftY != null && Math.abs(prevLeftY - item.yAxis) < ySpan * 0.075) {
+        leftStagger = (leftStagger + 1) % 3;
+        if (leftStagger === 1) {
+          item.label = { ...item.label, position: "insideStartBottom", offset: [112, 0] };
+        } else if (leftStagger === 2) {
+          item.label = { ...item.label, position: "insideMiddleBottom" };
+        }
+      } else {
+        leftStagger = 0;
+      }
+      prevLeftY = item.yAxis;
+    }
+
+    const markLines = allRawLines.map(({ _side, ...rest }) => rest);
 
     const series: any[] = [
       {
@@ -907,6 +1275,7 @@ function Chart({
         large: false,
         selectedMode: false,
         barMaxWidth: 28,
+        z: 3,
         data: candleData,
         markLine: {
           silent: true,
@@ -915,7 +1284,7 @@ function Chart({
             position: "insideStartTop",
             formatter: "{b}",
             color: dark ? "#edf2f7" : "#0f172a",
-            backgroundColor: dark ? "#141d28e6" : "#ffffffeb",
+            backgroundColor: labelBg,
             borderColor: gridColor,
             borderWidth: 1,
             borderRadius: 4,
@@ -924,6 +1293,12 @@ function Chart({
           },
           data: markLines,
         },
+        markArea: forecastAreas.length
+          ? {
+              silent: true,
+              data: forecastAreas,
+            }
+          : undefined,
         itemStyle: {
           color: up,
           color0: down,
@@ -950,8 +1325,81 @@ function Chart({
       },
     ];
 
+    // 右侧内嵌 126 日筹码分布直方图（低透明背景层，绝不遮挡 K 线或撑开坐标轴）
+    if (showVolumeProfile && vp?.available && vp.bins?.length) {
+      const vpData = vp.bins.map((b, idx) => [
+        idx,
+        b.price_low,
+        b.price_high,
+        b.ratio,
+        b.is_poc ? 1 : 0,
+        b.in_value_area ? 1 : 0,
+      ]);
+      const pocBarFill = dark
+        ? "rgba(251, 191, 36, 0.34)"
+        : "rgba(217, 119, 6, 0.30)";
+      const vaBarFill = dark
+        ? "rgba(96, 165, 250, 0.18)"
+        : "rgba(30, 64, 175, 0.13)";
+      const outBarFill = dark
+        ? "rgba(148, 163, 184, 0.10)"
+        : "rgba(100, 116, 139, 0.09)";
+      series.push({
+        id: "volume-profile",
+        name: "筹码分布",
+        type: "custom",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        encode: { x: -1, y: -1 },
+        silent: true,
+        clip: true,
+        z: 1,
+        animation: false,
+        data: vpData,
+        renderItem: (params: any, api: any) => {
+          const pLow = api.value(1);
+          const pHigh = api.value(2);
+          const ratio = api.value(3);
+          const isPoc = api.value(4) === 1;
+          const inVa = api.value(5) === 1;
+          const cs = params.coordSys;
+          if (!cs || !Number.isFinite(pLow) || !Number.isFinite(pHigh)) {
+            return null;
+          }
+          const ptLow = api.coord([0, pLow]);
+          const ptHigh = api.coord([0, pHigh]);
+          if (!ptLow || !ptHigh) return null;
+          const topY = Math.min(ptHigh[1], ptLow[1]);
+          const barH = Math.max(1.5, Math.abs(ptLow[1] - ptHigh[1]) - 1);
+          const maxW = Math.min(cs.width * 0.16, 120);
+          const barW = Math.max(2, Number(ratio) * maxW);
+          const rect = echarts.graphic.clipRectByRect(
+            {
+              x: cs.x + cs.width - barW,
+              y: topY + 0.5,
+              width: barW,
+              height: barH,
+            },
+            {
+              x: cs.x,
+              y: cs.y,
+              width: cs.width,
+              height: cs.height,
+            },
+          );
+          if (!rect) return null;
+          return {
+            type: "rect",
+            shape: { ...rect, r: [2, 0, 0, 2] },
+            style: {
+              fill: isPoc ? pocBarFill : inVa ? vaBarFill : outBarFill,
+            },
+          };
+        },
+      });
+    }
+
     // Elliott Wave & Parallel Trend Channel overlay (strictly causal backend coordinates)
-    const wt = detail.stock.wave_trend;
     const pivotByIndex = new Map<number, WavePivot>();
     if (showWaveTrend && wt?.available) {
       const ch = wt.trend.channel;
@@ -1136,15 +1584,16 @@ function Chart({
           const hasWave = Boolean(pivot.wave_label);
           const showLabel = hasWave || (!hasAnyWave && mIdx >= structCutoff);
           const isHigh = pivot.kind === "H";
-          const nearRightEdge = idx >= rows.length - 8;
+          const nearLeftEdge = idx <= left + 12;
+          const nearRightEdge = idx >= rows.length - 10;
           const bucket = isHigh ? shownSameKindIndices.H : shownSameKindIndices.L;
           let labelPos: string = isHigh ? "top" : "bottom";
-          let labelDist = 6;
+          let labelDist = 5;
           if (showLabel) {
             const nearCount = bucket.filter((prevIdx) => Math.abs(idx - prevIdx) <= 28).length;
             if (nearCount > 0) {
-              // 相邻同侧拐点错开左右与距离，防止带价格胶囊重叠；靠右边界拐点保持右对齐向左展开
-              labelPos = nearRightEdge
+              // 相邻同侧拐点错开左右与距离，防止带价格胶囊重叠；靠边缘拐点保持贴边对齐防裁字
+              labelPos = nearRightEdge || nearLeftEdge
                 ? isHigh
                   ? "top"
                   : "bottom"
@@ -1155,7 +1604,7 @@ function Chart({
                   : nearCount % 2 === 1
                     ? "bottomRight"
                     : "bottomLeft";
-              labelDist = 6 + nearCount * 14;
+              labelDist = 5 + nearCount * 14;
             }
             bucket.push(idx);
           }
@@ -1185,7 +1634,7 @@ function Chart({
             label: {
               show: showLabel,
               position: labelPos,
-              align: nearRightEdge ? "right" : undefined,
+              align: nearRightEdge ? "right" : nearLeftEdge ? "left" : undefined,
               distance: labelDist,
               formatter: formatPivotBadge(pivot),
               fontSize: 12,
@@ -1370,20 +1819,19 @@ function Chart({
         gridIndex: i,
         position: "right",
         splitNumber: p.kind === "price" ? 5 : 2,
-        boundaryGap: p.kind === "price" ? ["10%", "12%"] : undefined,
+        boundaryGap: undefined,
         min:
           p.kind === "rsi" || p.kind === "vol"
             ? 0
-            : p.kind === "price"
-              ? (v: { min: number; max: number }) =>
-                  Number.isFinite(v.min) &&
-                  Number.isFinite(v.max) &&
-                  v.min >= 0 &&
-                  v.min - Math.max(v.max - v.min, 0) * 0.12 <= 0
-                    ? 0
-                    : (undefined as any)
+            : p.kind === "price" && initialBounds
+              ? initialBounds.min
               : undefined,
-        max: p.kind === "rsi" ? 100 : undefined,
+        max:
+          p.kind === "rsi"
+            ? 100
+            : p.kind === "price" && initialBounds
+              ? initialBounds.max
+              : undefined,
         splitLine: {
           show: true,
           lineStyle: { color: gridColor, type: "dashed" },
@@ -1431,6 +1879,7 @@ function Chart({
     showRsi,
     showCost,
     showForecast,
+    showVolumeProfile,
     showWaveTrend,
     theme,
     reverse,
@@ -1440,26 +1889,26 @@ function Chart({
   const paneTitles = useMemo(() => {
     if (showMacd && showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "4px", isPrice: true },
-        { label: "成交量 / 股", top: "46.5%", isPrice: false },
-        { label: "MACD (12, 26, 9)", top: "63.5%", isPrice: false },
-        { label: "RSI (14)", top: "80.5%", isPrice: false },
+        { label: "日线价格 / 美元", top: "2px", isPrice: true },
+        { label: "成交量 / 股", top: "46%", isPrice: false },
+        { label: "MACD (12, 26, 9)", top: "62%", isPrice: false },
+        { label: "RSI (14)", top: "78.5%", isPrice: false },
       ];
     }
     if (showMacd || showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "4px", isPrice: true },
-        { label: "成交量 / 股", top: "58.5%", isPrice: false },
+        { label: "日线价格 / 美元", top: "2px", isPrice: true },
+        { label: "成交量 / 股", top: "58%", isPrice: false },
         {
           label: showMacd ? "MACD (12, 26, 9)" : "RSI (14)",
-          top: "77%",
+          top: "75.5%",
           isPrice: false,
         },
       ];
     }
     return [
-      { label: "日线价格 / 美元", top: "4px", isPrice: true },
-      { label: "成交量 / 股", top: "74.5%", isPrice: false },
+      { label: "日线价格 / 美元", top: "2px", isPrice: true },
+      { label: "成交量 / 股", top: "75.8%", isPrice: false },
     ];
   }, [showMacd, showRsi]);
 
@@ -1470,12 +1919,28 @@ function Chart({
     const instance = chart.current;
     if (!count || !instance || instance.isDisposed()) return;
     setActiveRange(countLimit);
+    const startValue = countLimit ? Math.max(0, count - countLimit) : 0;
+    const endValue = count - 1;
+    sharedViewWindow = {
+      spanBars: countLimit,
+      anchoredRight: true,
+      startDate: dates[startValue] ?? "",
+      endDate: dates[endValue] ?? "",
+    };
     try {
       instance.dispatchAction({
         type: "dataZoom",
-        startValue: countLimit ? Math.max(0, count - countLimit) : 0,
-        endValue: count - 1,
+        startValue,
+        endValue,
       });
+      const { rows, overlay: ov, keyPrices } = yBoundsCtxRef.current;
+      const bounds = computeTightPriceBounds(rows, startValue, endValue, ov, keyPrices);
+      if (bounds) {
+        instance.setOption(
+          { yAxis: [{ min: bounds.min, max: bounds.max }] },
+          { notMerge: false },
+        );
+      }
     } catch {
       // 忽略缩放动作在图表重建期间的瞬态异常
     }
@@ -1500,11 +1965,10 @@ function Chart({
         <div className="toolbar-group" aria-label="时间范围">
           {(
             [
-              [63, "近3月", "查看近3个月日线"],
-              [126, "近6月", "查看近6个月日线"],
-              [252, "近1年", "查看近1年日线"],
+              [63, "近3月", "查看近3个月日线（回到最新）"],
+              [126, "近6月", "查看近6个月日线（回到最新）"],
+              [252, "近1年", "查看近1年日线（回到最新）"],
               [0, "全部", "查看全部历史日线"],
-              [60, "最新", "回到最新位置"],
             ] as const
           ).map(([n, label, tip]) => (
             <button
@@ -1545,7 +2009,7 @@ function Chart({
             type="button"
             className={showMacd ? "active" : ""}
             onClick={() => setShowMacd(!showMacd)}
-            title="显示或隐藏 MACD 副图"
+            title="显示或隐藏 MACD 副图（默认关闭，留出更大主图视野）"
           >
             MACD
           </button>
@@ -1573,9 +2037,19 @@ function Chart({
               type="button"
               className={showForecast ? "active" : ""}
               onClick={() => setShowForecast(!showForecast)}
-              title="显示/隐藏预测买卖点参考线"
+              title="显示/隐藏主要突破位、防守位及买卖点参考色带"
             >
               点位
+            </button>
+          )}
+          {detail?.stock?.forecast?.volume_profile?.available && (
+            <button
+              type="button"
+              className={showVolumeProfile ? "active" : ""}
+              onClick={() => setShowVolumeProfile(!showVolumeProfile)}
+              title="显示/隐藏右侧 126 日筹码分布直方图与主筹码峰（POC）"
+            >
+              筹码
             </button>
           )}
           {activeWaveTrend?.available && (

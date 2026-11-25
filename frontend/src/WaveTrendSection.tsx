@@ -85,8 +85,8 @@ function WaveTrendGuideModal({
 
   const atrThresholdDesc =
     atr != null && close != null && close > 0
-      ? `当前约 $${fmt(Math.max(2.2 * atr, 0.045 * close), 2)}（取 2.2×ATR14=$${fmt(2.2 * atr, 2)} 与 4.5%×收盘价=$${fmt(0.045 * close, 2)} 的较大值）`
-      : "取 2.2 × ATR14 与 4.5% × 收盘价的较大值";
+      ? `当前约 $${fmt(Math.max(2.8 * atr, 0.065 * close), 2)}（取 2.8×ATR14=$${fmt(2.8 * atr, 2)} 与 6.5%×收盘价=$${fmt(0.065 * close, 2)} 的较大值，中级波浪滤网）`
+      : "取 2.8 × ATR14 与 6.5% × 收盘价的较大值（中级波浪滤网）";
 
   return createPortal(
     <div
@@ -105,7 +105,8 @@ function WaveTrendGuideModal({
           <div>
             <h2>{ticker(stock.symbol)} · 波浪理论参数与点位说明</h2>
             <p className="wt-modal-sub">
-              当前状态：{trend.label} · {wave.pattern_label}（{wave.current_wave} · 置信度{wave.confidence}）
+              当前状态：{trend.label} · {wave.pattern_label}（{wave.current_wave} · 置信度{wave.confidence}
+              {wave.degree_label ? ` · ${wave.degree_label}` : ""}）
             </p>
           </div>
           <button
@@ -167,7 +168,7 @@ function WaveTrendGuideModal({
                     </em>
                   </div>
                   <p>
-                    基于近 {ch?.window ?? 90} 个交易日收盘线性回归拟合。{slopeDesc}
+                    基于近 {ch?.window ?? 126} 个交易日收盘线性回归拟合。{slopeDesc}
                   </p>
                 </div>
 
@@ -485,7 +486,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
             {ch?.available && (
               <div
                 className="wt-channel-strip"
-                title={`近 ${ch.window ?? 90} 日线性回归平行通道在最新收盘日的精确边界`}
+                title={`近 ${ch.window ?? 126} 日线性回归平行通道在最新收盘日的精确边界`}
               >
                 <span>通道参考</span>
                 <b>

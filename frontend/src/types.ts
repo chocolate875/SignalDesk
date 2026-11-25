@@ -308,6 +308,8 @@ export type WaveTrend = {
     phase_label: string;
     tone: "danger" | "warning" | "positive" | "neutral" | "muted" | string;
     confidence: string;
+    span_days?: number | null;
+    degree_label?: string;
     rules_passed: string[];
     fib_targets: WaveFibTarget[];
     pivots: WavePivot[];
@@ -343,6 +345,12 @@ export type PriceLevels = {
   sell_low: number | null;
   sell_high: number | null;
   stop_loss: number | null;
+  defense_level?: number | null;
+  defense_anchor?: string;
+  defense_confluence?: boolean;
+  breakout_level?: number | null;
+  breakout_anchor?: string;
+  breakout_confluence?: boolean;
   buy_discount_pct: number | null;
   upside_pct: number | null;
   target_upside_pct: number | null;
@@ -353,6 +361,32 @@ export type PriceLevels = {
   buy_anchors: string[];
   sell_anchors: string[];
   stop_anchor: string;
+};
+export type VolumeProfileBin = {
+  price_low: number;
+  price_high: number;
+  price: number;
+  ratio: number;
+  is_poc: boolean;
+  in_value_area: boolean;
+};
+export type VolumeProfile = {
+  available: boolean;
+  reason?: string;
+  window_days: number;
+  poc: number | null;
+  vah: number | null;
+  val: number | null;
+  support_hvn: number | null;
+  support_zone_low: number | null;
+  resistance_hvn: number | null;
+  resistance_zone_high: number | null;
+  lvn_price: number | null;
+  profit_ratio_pct: number | null;
+  overhead_supply_pct: number | null;
+  concentration_pct: number | null;
+  position_label: string;
+  bins: VolumeProfileBin[];
 };
 export type RiskBudget = {
   available: boolean;
@@ -370,6 +404,7 @@ export type RiskBudget = {
 };
 export type StockForecast = {
   levels: PriceLevels;
+  volume_profile?: VolumeProfile;
   rating: StockRating;
   risk_budget?: RiskBudget;
 };
@@ -490,8 +525,35 @@ export type MacroRegime = {
   pillars: MacroPillar[];
   disclaimer: string;
 };
+export type ThemeMode = "light" | "dark" | "system";
+export type ResolvedTheme = "light" | "dark";
+export type ComexGold = {
+  available: boolean;
+  symbol: string;
+  name: string;
+  exchange: string;
+  currency: string;
+  unit: string;
+  price: number | null;
+  prev_close: number | null;
+  change_pct: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  prior_date?: string | null;
+  change_21d_pct: number | null;
+  as_of: string | null;
+  quote_time?: string | null;
+  fetched_at?: string | null;
+  source: string;
+  fresh: boolean;
+  refresh_failed?: boolean;
+  real_ten_year?: number | null;
+  real_rate_linkage?: string;
+  real_rate_note?: string;
+};
 export type Dashboard = {
   curve: Stock["research"]["curve"];
+  gold?: ComexGold;
   macro?: MacroRegime;
   rules?: Record<string, number>;
   mode: string;

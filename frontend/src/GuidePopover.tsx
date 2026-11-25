@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { Compass, HelpCircle, X } from "lucide-react";
-import { fmt, type Dashboard } from "./types";
+import { fmt, type ComexGold, type Dashboard } from "./types";
 
 type Curve = Dashboard["curve"] | undefined;
 
-/** 顶部美债收益率看板的可点击二级解读卡片 */
+/** 顶部美债收益率与 COMEX 黄金看板的可点击二级解读卡片 */
 export function MacroStripWithGuide({
   curve,
+  gold,
   onOpenMacroPanel,
 }: {
   curve: Curve;
+  gold?: ComexGold;
   onOpenMacroPanel?: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -22,7 +24,7 @@ export function MacroStripWithGuide({
     const updatePos = () => {
       const rect = btnRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const width = Math.min(540, window.innerWidth - 24);
+      const width = Math.min(560, window.innerWidth - 24);
       const centerLeft = rect.left + rect.width / 2 - width / 2;
       const left = Math.max(12, Math.min(centerLeft, window.innerWidth - width - 12));
       setPos({ top: Math.round(rect.bottom + 8), left: Math.round(left) });
@@ -51,6 +53,15 @@ export function MacroStripWithGuide({
   const recProb = curve?.recession_prob_12m_pct;
   const real10y = curve?.real_ten_year;
   const chg21 = curve?.ten_change_bp;
+  const goldReady = Boolean(gold?.available && gold.price != null);
+  const goldChg = gold?.change_pct;
+  const goldChg21 = gold?.change_21d_pct;
+  const warnReasons: string[] = [];
+  if (curve?.refresh_failed) warnReasons.push("美债利率更新失败");
+  else if (curve?.as_of && !curve.fresh) warnReasons.push("美债利率已过期");
+  if (gold?.refresh_failed) warnReasons.push("COMEX黄金更新失败");
+  else if (gold?.as_of && !gold.fresh) warnReasons.push("COMEX黄金行情已过期");
+
   const liveSummary = (() => {
     const parts: string[] = [];
     if (spread103m != null) {
@@ -84,10 +95,27 @@ export function MacroStripWithGuide({
         );
       }
     }
+    if (goldReady && gold) {
+      const chgTxt =
+        goldChg != null ? `（日 ${goldChg >= 0 ? "+" : ""}${fmt(goldChg, 2)}%` : "（";
+      const chg21Txt =
+        goldChg21 != null
+          ? `${goldChg != null ? "，" : ""}21日 ${goldChg21 >= 0 ? "+" : ""}${fmt(goldChg21, 1)}%）`
+          : goldChg != null
+            ? "）"
+            : "";
+      parts.push(
+        `COMEX 黄金主力现报 $${fmt(gold.price, 2)}/盎司${chgTxt}${chg21Txt}${gold.real_rate_linkage ? `，${gold.real_rate_linkage}` : ""}`,
+      );
+    }
     return parts.length
       ? parts.join("；") + "。"
-      : "正在等待美国财政部最新日度国债收益率数据。";
+      : "正在等待美国财政部国债收益率与 COMEX 黄金公开数据。";
   })();
+
+  const goldTitlePart = goldReady
+    ? `COMEX黄金 $${fmt(gold?.price, 2)}/oz${goldChg != null ? ` (${goldChg >= 0 ? "+" : ""}${fmt(goldChg, 2)}%)` : ""}`
+    : "COMEX黄金待同步";
 
   return (
     <div className="macro-wrap" ref={wrapRef}>
@@ -97,19 +125,34 @@ export function MacroStripWithGuide({
         className={`macro-strip compact ${open ? "active" : ""}`}
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label="查看美债收益率看板含义说明"
-        title={`美债2Y ${fmt(curve?.two_year, 2)}% · 10Y ${fmt(curve?.ten_year, 2)}% · 10Y-2Y ${curve?.spread_bp != null && curve.spread_bp >= 0 ? "+" : ""}${fmt(curve?.spread_bp, 0)}bp · 点击查看完整六项利率解读`}
+        aria-label="查看美债收益率与COMEX黄金看板说明"
+        title={`美债2Y ${fmt(curve?.two_year, 2)}% · 10Y ${fmt(curve?.ten_year, 2)}% · ${goldTitlePart} · 点击查看完整利率与黄金联动解读`}
       >
-        <span>
+        <span className="macro-strip-seg">
           美债10Y <b>{fmt(curve?.ten_year, 2)}%</b>
         </span>
-        {(curve?.refresh_failed || (curve?.as_of && !curve.fresh)) && (
+        <span className="macro-strip-sep" aria-hidden="true">
+          ·
+        </span>
+        <span className="macro-strip-seg macro-strip-gold">
+          COMEX金{" "}
+          <b>{goldReady ? `$${fmt(gold?.price, 0)}` : "—"}</b>
+          {goldReady && goldChg != null && (
+            <span
+              className={`macro-gold-chg ${goldChg >= 0 ? "quote-up" : "quote-down"}`}
+            >
+              ({goldChg >= 0 ? "+" : ""}
+              {fmt(goldChg, 1)}%)
+            </span>
+          )}
+        </span>
+        {warnReasons.length > 0 && (
           <span
             className="macro-warn-dot"
-            title={curve?.refresh_failed ? "美债利率更新失败" : "美债利率已过期"}
+            title={warnReasons.join("；")}
           />
         )}
-        <HelpCircle size={13} className="macro-help-ico" />
+        <HelpCircle size={13} className="macro-help-ico" aria-hidden="true" />
       </button>
 
       {open && pos && (
@@ -117,21 +160,21 @@ export function MacroStripWithGuide({
           className="guide-popover macro-popover"
           style={{ top: pos.top, left: pos.left }}
           role="region"
-          aria-label="美债收益率看板解读"
+          aria-label="美债收益率与COMEX黄金看板解读"
         >
           <div className="guide-pop-head">
             <div>
-              <b>美债收益率看板怎么看</b>
+              <b>美债收益率与 COMEX 黄金看板</b>
               <small>
-                来源：{curve?.source ?? "美国财政部"} · 观察日：
-                {curve?.as_of ?? "待更新"}（100bp = 1%）
+                美债：{curve?.source ?? "美国财政部"}（{curve?.as_of ?? "待更新"}，100bp = 1%）· 期金：
+                {gold?.source ?? "COMEX"}（{gold?.as_of ?? "待更新"}）
               </small>
             </div>
             <button
               type="button"
               className="legend-close-btn"
               onClick={() => setOpen(false)}
-              aria-label="关闭美债解读"
+              aria-label="关闭美债与黄金解读"
             >
               <X size={15} />
             </button>
@@ -205,6 +248,57 @@ export function MacroStripWithGuide({
                 扣除通胀预期后的真实资金成本。右侧个股卡片同时对照名义与实际利率利差，避免单纯 Fed Model 的通胀错配。
               </p>
             </div>
+            <div className="guide-item guide-item-wide gold-guide-card">
+              <div className="guide-item-head">
+                <b>COMEX 黄金主力与 10Y TIPS 实际利率联动</b>
+                <em>
+                  {goldReady
+                    ? `$${fmt(gold?.price, 2)}/盎司${goldChg != null ? ` (${goldChg >= 0 ? "+" : ""}${fmt(goldChg, 2)}%)` : ""}`
+                    : "待同步"}
+                </em>
+              </div>
+              <div className="gold-guide-metrics">
+                <span>
+                  近21日{" "}
+                  <b
+                    className={
+                      goldChg21 == null
+                        ? ""
+                        : goldChg21 >= 0
+                          ? "quote-up"
+                          : "quote-down"
+                    }
+                  >
+                    {goldChg21 != null
+                      ? `${goldChg21 >= 0 ? "+" : ""}${fmt(goldChg21, 2)}%`
+                      : "—"}
+                  </b>
+                </span>
+                <span>
+                  昨收 <b>{gold?.prev_close != null ? `$${fmt(gold.prev_close, 2)}` : "—"}</b>
+                </span>
+                <span>
+                  日内区间{" "}
+                  <b>
+                    {gold?.day_low != null && gold?.day_high != null
+                      ? `$${fmt(gold.day_low, 2)}–$${fmt(gold.day_high, 2)}`
+                      : "—"}
+                  </b>
+                </span>
+                {gold?.real_rate_linkage && (
+                  <span className="gold-linkage-pill">{gold.real_rate_linkage}</span>
+                )}
+                {(gold?.refresh_failed || (gold?.as_of && !gold.fresh)) && (
+                  <span className="gold-warn-pill">
+                    {gold?.refresh_failed ? "刷新失败·展示缓存" : "行情已过期"}
+                  </span>
+                )}
+              </div>
+              <p>
+                {gold?.real_rate_note ??
+                  "黄金为无息避险与抗通胀资产，传统上与 10Y TIPS 实际利率负相关；若在高实际利率下金价仍强势，往往指向央行购金或地缘避险溢价主导。"}
+              </p>
+            </div>
           </div>
 
           {onOpenMacroPanel && (
@@ -217,7 +311,7 @@ export function MacroStripWithGuide({
                   onOpenMacroPanel();
                 }}
               >
-                <Compass size={14} />
+                <Compass size={14} aria-hidden="true" />
                 <span>打开「市场大势与宏观流动性全景面板」（六分项与四象限）</span>
               </button>
             </div>
@@ -266,7 +360,7 @@ const INDICATOR_GUIDES: Record<
   momentum: [
     {
       name: "MACD 柱与快慢线",
-      tag: "动能强弱",
+      tag: "动能强弱 · 默认关闭",
       desc: "柱状图在零轴上方放大表示多头动能加速，零轴下方放大表示空头占优；快线（橙）上穿慢线（蓝）为金叉偏多，下穿为死叉偏弱。",
     },
     {
@@ -284,7 +378,7 @@ const INDICATOR_GUIDES: Record<
     {
       name: "平行趋势通道",
       tag: "绿升 / 红降 / 蓝震荡",
-      desc: "由近 90 日收盘回归拟合。顺势交易重在上升通道下轨附近低吸、上轨不追高；下降通道内以观望防守为主。",
+      desc: "由近 126 日（约 6 个月）收盘线性回归拟合，与默认看盘窗口及筹码分布同频。顺势重在上升通道下轨附近低吸、上轨不追高；下降通道内以观望防守为主。",
     },
     {
       name: "波浪胶囊（起 / 1–5浪 / A–C浪）",
@@ -304,14 +398,19 @@ const INDICATOR_GUIDES: Record<
   ],
   quant: [
     {
-      name: "参考买点 / 卖点 / 止损",
-      tag: "右侧卡片 & 左侧虚线",
-      desc: "结合均线、布林、20/60 日高低点、枢轴与 ATR14 因果测算的计划参考区，点击「采纳计划价」可快速预填个人计划。",
+      name: "主要突破位 / 主要防守位（▲ / ▼）",
+      tag: "筹码 × 波浪共振主线",
+      desc: "综合 126 日筹码价值区（VAL/VAH）、上下筹码密集峰、波浪前高/前低与 60 日移动保护位提炼的两条核心战线；若多维度在近距重合则标为「共振突破 / 共振防守」，可信度更高。K 线中买卖参考区以半透明色带呈现，减少横线干扰。",
     },
     {
-      name: "盈亏比（如 1.8:1）",
-      tag: "赔率性价比",
-      desc: "（第一卖点 − 现价）÷（现价 − 参考止损）。盈亏比越高越划算，通常 ≥ 1.5:1 代表潜在空间相对回撤风险更占优。",
+      name: "筹码分布（Volume Profile · POC / 70%价值区）",
+      tag: "主图右侧直方图 · 可开关",
+      desc: "基于近 126 个交易日前复权量价按典型价三角加权（90日半衰期）估算各价位累计成交厚度。琥珀柱为核心主筹码峰（POC），蓝灰柱为 70% 价值区（VAL–VAH）；下方密集筹码构成真实承接防守，放量越过上方筹码峰或 VAH 则阻力骤减。",
+    },
+    {
+      name: "参考买区 / 卖区 / 盈亏比",
+      tag: "色带区间 & 赔率性价比",
+      desc: "结合筹码峰、均线、布林、20/60日高低点与 ATR14 因果测算。盈亏比 =（第一卖点 − 现价）÷（现价 − 参考止损），通常 ≥ 1.5:1 代表赔率较占优。",
     },
     {
       name: "结构评分（fusion-2.0.0）与学术因子",
