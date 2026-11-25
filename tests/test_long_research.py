@@ -222,7 +222,9 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
             securities=[
                 SimpleNamespace(symbol="NVDA.US", name="英伟达"),
                 SimpleNamespace(symbol="AMD.US", name="超威半导体"),
-                SimpleNamespace(symbol="700.HK", name="腾讯控股"),
+                SimpleNamespace(symbol="00700.HK", name="腾讯控股"),
+                SimpleNamespace(symbol="600519.SH", name="贵州茅台"),
+                SimpleNamespace(symbol="000001.SZ", name="平安银行"),
                 SimpleNamespace(symbol="INVALID!", name="bad"),
             ],
         ),
@@ -238,7 +240,8 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     feed.quote_context = SimpleNamespace(watchlist=lambda: groups)
     parsed = feed.watchlist()
     assert len(parsed["groups"]) == 2
-    assert parsed["unsupported"] == ["700.HK", "INVALID!"]
+    assert parsed["unsupported"] == ["INVALID!"]
+    assert "700.HK" in parsed["groups"][0]["symbols"]
     nvda_entry = next(s for s in parsed["securities"] if s["symbol"] == "NVDA.US")
     assert nvda_entry["groups"] == ["AI 与算力", "核心持仓"]
 
@@ -269,10 +272,10 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     )
     await monitor._sync_account()
     live_items = {a.symbol: a for a in monitor.portfolio("live")}
-    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US"}
+    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US", "700.HK", "600519.SH", "000001.SZ"}
     assert live_items["NVDA.US"].broker_quantity == 10 and live_items["NVDA.US"].in_watchlist
     assert live_items["AMD.US"].watch_only and live_items["AMD.US"].watchlist_groups == ["AI 与算力"]
-    assert monitor.watchlist_unsupported == ["700.HK", "INVALID!"]
+    assert monitor.watchlist_unsupported == ["INVALID!"]
 
     # Favorite TSLA locally, leave AMD unfavorited & without stop/target; then remove both from broker watchlist.
     monitor.set_favorite("TSLA.US", True)

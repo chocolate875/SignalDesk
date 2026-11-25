@@ -6,7 +6,7 @@
 
 ## 1. 项目定位与环境栈
 
-- **定位**：本地优先（Local-First）的美股长期持仓与自选股桌面复核工作台。结合宏观流动性与美债曲线、个股估值/ETF 特征、前复权日线、严格因果学术因子（`fusion-2.0.0`）、动态风险预算以及手动触发的**本地官方多 Agent 复核（Google Antigravity ACP / OpenAI Codex exec）**辅助长期决策。
+- **定位**：本地优先（Local-First）的美股、港股与沪深 A 股长期持仓与自选股桌面复核工作台。结合宏观流动性与美债曲线、个股估值/ETF 特征、前复权日线、严格因果学术因子（`fusion-2.0.0`）、动态风险预算以及手动触发的**本地官方多 Agent 复核（Google Antigravity ACP / OpenAI Codex exec）**辅助长期决策。
 - **后端栈**：Python `3.12+`（强制由 **`uv`** 统一管理环境与锁文件 `uv.lock`），FastAPI + Uvicorn + WebSocket + SQLite（WAL 模式）+ `longbridge`（仅只读接口）+ `pandas` / `numpy` / `ta==0.11.0` + `exchange-calendars` + `httpx` + `pydantic` v2。
 - **前端栈**：React 19 + TypeScript 5.7 + Vite 6 + ECharts 6 + Lucide Icons（位于 `frontend/`，由 `package-lock.json` 锁定）。生产构建输出至 `frontend/dist/`（不入 Git，首次启动或开发构建自动生成），由 FastAPI 直接托管静态资源，零外部 CDN 依赖。
 
@@ -22,7 +22,7 @@
 | `security.py` | 本机数据目录定位、DPAPI/Fernet `Vault` 凭据库、会话令牌、`safe_child_environment()` 与 **`safe_snapshot()` 白名单** | 严禁将 `broker_quantity`、`cost_price`、`available_quantity`、`net_assets` 或任何密钥放行出白名单 |
 | `storage.py` | 线程安全 SQLite WAL 存储（`kv`、`bars`、`events`、`outbox`、`analyses`） | 前复权日线桶为 `live-fwd-v3` 与 `macro-live-fwd-v3`；拆股重对齐走原子 `replace_bars()` |
 | `providers.py` | `LongPortFeed`（长桥只读行情/持仓/自选/前复权日线/估值/换手市值）及 `.cn`/`.com` 网关自动测速择优 | **绝对只读**，严禁添加任何交易/下单/改自选接口 |
-| `calendar.py` | `XNYS` 纽交所交易日历、半日盘保守边界、K 线结束时间与会话判定 | 所有时间统一基于带时区 `datetime` 计算 |
+| `calendar.py` | `XNYS` 美股、`XHKG` 港股与 `XSHG` 沪深交易日历、午休与半日盘边界、K 线结束时间与会话判定 | 所有时间统一基于带时区 `datetime` 计算 |
 | `operators.py` | 11 个确定性历史滚动白名单算子（`delay`、`delta`、`returns`、`mean`、`std`、`clip` 等） | 仅允许正整数历史窗口，严禁 `eval` 或任意代码执行 |
 | `indicators.py` | `RULE_VERSION = "fusion-2.0.0"` 日线/分时指标富化（`enrich`）与三维平滑评分（`summarize`） | 默认权重 `45% 趋势 + 40% 动量 + 15% 10日量价顺向度`；缺交易日断档自动切断预热 |
 | `factors.py` | 严格因果学术因子引擎（`compute_academic_factors`、`compute_yang_zhang_hv`） | 残差动量（扣 `SPY` Beta 不扣自身 Alpha）、FIP `info_discreteness`、52W 高点比、日夜拉锯、MAX5、下行 Beta、偏度、Amihud |
@@ -42,7 +42,7 @@
 ### 2.2 前端模块（`frontend/src/`）
 
 - `App.tsx`：全局状态、WebSocket 增量订阅、「收盘确认 ↔ 最新行情试算」单一派生真相源（`effectiveStock`）、多 Agent 触发与脱敏预览弹窗。
-- `WatchlistRail.tsx`：左栏分组/收藏筛选、评级与异动排序、状态标签图例。
+- `WatchlistRail.tsx`：左栏市场标记与市场/分组/收藏筛选、评级与异动排序、状态标签图例。
 - `Chart.tsx`：ECharts 多窗格前复权 K 线、当日盘中实时 K 线增量刷新（`notMerge: false` 防 Tooltip 闪烁）、平行趋势通道、波浪折线与买卖点参考线。
 - `StockInspector.tsx` + `inspectorModules.ts`：右栏三标签页（「综合研判」7 大模块支持自定义显隐与拖拽排序持久化至 `localStorage`、「AI 复核」双官方 Agent 切换面板、「提醒动态」）。
 - `WaveTrendSection.tsx` / `MacroRegimePanel.tsx` / `GuidePopover.tsx` / `Settings.tsx` / `ErrorBoundary.tsx`：趋势波浪卡、宏观全景弹窗、指标与美债二级解读浮层、系统与多 Agent 设置、三级容错边界。

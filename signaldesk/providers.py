@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from .calendar import bar_end
-from .models import Allocation
+from .markets import HK, US, market_for, normalize_symbol
 
 PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "longport": ("longportapp.cn", "longportapp.com"),
@@ -159,9 +159,12 @@ class LongPortFeed:
         self.quote_context.set_on_quote(self._on_quote)
 
     def _on_quote(self, symbol, quote):
+        symbol = normalize_symbol(symbol, broker=True)
         session_key = _session_key_from_trade_session(getattr(quote, "trade_session", None))
         stamp = aware(quote.timestamp)
         if session_key != "regular":
+            if market_for(symbol) != US:
+                return
             # 盘外推送走独立通道，绝不覆盖常规盘主价或触发常规盘计划穿越
             try:
                 last = float(quote.last_done)
@@ -214,10 +217,11 @@ class LongPortFeed:
             False,
             1000 if initial else 5,
             None,
-            lp.TradeSessions.Intraday if timeframe == "day" else lp.TradeSessions.All,
+            lp.TradeSessions.Intraday if timeframe == "day" or market_for(symbol) != US else lp.TradeSessions.All,
         )
         now = datetime.now(timezone.utc)
-        return [normalize_bar(c, timeframe, bar_end(aware(c.timestamp), timeframe) <= now) for c in batch]
+        market = market_for(symbol)
+        return [normalize_bar(c, timeframe, bar_end(aware(c.timestamp), timeframe, market) <= now) for c in batch]
 
     def valuations(self, symbols: list[str]) -> dict:
         from .indicators import finite
@@ -229,11 +233,25 @@ class LongPortFeed:
             if member is not None:
                 fields.append(member)
         result = {}
-        for start in range(0, len(symbols), 100):
-            batch = self.quote_context.calc_indexes(symbols[start : start + 100], fields)
+        for group in self._market_batches(symbols):
+            currencies = {}
+            if market_for(group[0]) == HK:
+                try:
+                    currencies = {normalize_symbol(s.symbol, broker=True): s.currency
+                                  for s in self.quote_context.static_info(group)}
+                except Exception:
+                    pass
+            try:
+                batch = self.quote_context.calc_indexes(group, fields)
+            except Exception:
+                for symbol in group:
+                    result[symbol] = {"currency": currencies.get(symbol), "refresh_failed": True}
+                continue
             fetched = datetime.now(timezone.utc).isoformat()
             for item in batch:
-                result[item.symbol] = {
+                symbol = normalize_symbol(item.symbol, broker=True)
+                result[symbol] = {
+                    "currency": currencies.get(symbol),
                     "pe_ttm": finite(item.pe_ttm_ratio),
                     "pb": finite(item.pb_ratio),
                     "dividend_yield_pct": finite(item.dividend_ratio_ttm),
@@ -242,6 +260,15 @@ class LongPortFeed:
                     "fetched_at": fetched,
                 }
         return result
+
+    @staticmethod
+    def _market_batches(symbols: list[str]):
+        groups: dict[str, list[str]] = {}
+        for symbol in symbols:
+            groups.setdefault(market_for(symbol).code, []).append(symbol)
+        for group in groups.values():
+            for start in range(0, len(group), 100):
+                yield group[start:start + 100]
 
     def subscribe(self, symbols: list[str]):
         new = [symbol for symbol in dict.fromkeys(symbols) if symbol not in self.symbols]
@@ -256,8 +283,7 @@ class LongPortFeed:
         if not symbols:
             return []
         result = []
-        for start in range(0, len(symbols), 100):
-            batch = symbols[start : start + 100]
+        for batch in self._market_batches(symbols):
             try:
                 items = self.quote_context.quote(batch)
             except Exception:
@@ -289,9 +315,10 @@ class LongPortFeed:
                     "trade_status": str(quote.trade_status).split(".")[-1],
                     "session": "regular",
                 }
-                if extended:
+                symbol = normalize_symbol(quote.symbol, broker=True)
+                if extended and market_for(symbol) == US:
                     quote_payload["extended"] = extended
-                result.append({"symbol": quote.symbol, "quote": quote_payload})
+                result.append({"symbol": symbol, "quote": quote_payload})
         return result
 
     def watchlist(self) -> dict:
@@ -307,13 +334,8 @@ class LongPortFeed:
                 raw_symbol = str(getattr(sec, "symbol", "") or "").strip().upper()
                 if not raw_symbol:
                     continue
-                if not raw_symbol.endswith(".US"):
-                    if raw_symbol not in unsupported_seen:
-                        unsupported_seen.add(raw_symbol)
-                        unsupported.append(raw_symbol)
-                    continue
                 try:
-                    symbol = Allocation(symbol=raw_symbol).symbol
+                    symbol = normalize_symbol(raw_symbol, broker=True)
                 except ValueError:
                     if raw_symbol not in unsupported_seen:
                         unsupported_seen.add(raw_symbol)
@@ -343,14 +365,20 @@ class LongPortFeed:
         unsupported = []
         for channel in positions.channels:
             for pos in channel.positions:
-                if not pos.symbol.endswith(".US") or float(pos.quantity) < 0:
+                try:
+                    symbol = normalize_symbol(pos.symbol, broker=True)
+                except ValueError:
+                    unsupported.append(pos.symbol)
+                    continue
+                if float(pos.quantity) < 0:
                     unsupported.append(pos.symbol)
                     continue
                 quantity, cost = float(pos.quantity), float(pos.cost_price)
                 item = accumulated.setdefault(
-                    pos.symbol,
+                    symbol,
                     {
-                        "symbol": pos.symbol,
+                        "symbol": symbol,
+                        "currency": getattr(pos, "currency", None),
                         "name": pos.symbol_name,
                         "broker_quantity": 0.0,
                         "available_quantity": 0.0,
@@ -361,14 +389,21 @@ class LongPortFeed:
                 item["available_quantity"] += float(pos.available_quantity)
                 item["total_cost"] += quantity * cost
         for item in accumulated.values():
-            item["cost_price"] = (
-                item.pop("total_cost") / item["broker_quantity"] if item["broker_quantity"] else None
-            )
+            total_cost = item.pop("total_cost")
+            item["cost_price"] = total_cost / item["broker_quantity"] if item["broker_quantity"] else None
             if not item["cost_price"] or item["cost_price"] <= 0:
                 item["cost_price"] = None
         balances = self.trade_context.account_balance("USD")
         usd = next((b for b in balances if b.currency == "USD"), None)
+        net_by_currency = {}
+        for currency in {p["currency"] for p in accumulated.values()} - {"USD", None, ""}:
+            try:
+                balance = next(b for b in self.trade_context.account_balance(currency) if b.currency == currency)
+                net_by_currency[currency] = float(balance.net_assets)
+            except Exception:
+                continue
         return {
+            "net_assets_by_currency": net_by_currency,
             "positions": list(accumulated.values()),
             "net_assets": float(usd.net_assets) if usd else None,
             "cash": float(usd.total_cash) if usd else None,

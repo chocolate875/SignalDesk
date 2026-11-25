@@ -18,7 +18,7 @@ TIER_SPECS = {
 }
 TIER_ORDER = ["sell", "reduce", "hold", "buy", "strong_buy"]
 DISCLAIMER = "基于已确认日线、历史波动率与公开估值/利率测算，仅供复核参考，不构成投资建议。"
-ETF_DISCLAIMER = "基于已确认日线、历史回撤分位、波动率与美债利率测算（不采用失真的基金主体 PE），仅供复核参考，不构成投资建议。"
+ETF_DISCLAIMER = "基于已确认日线、历史回撤分位、波动率与可用的利率数据测算（不采用失真的基金主体 PE），仅供复核参考，不构成投资建议。"
 
 
 def _unavailable_volume_profile(reason: str = "有效成交量日线样本不足，暂不测算筹码分布") -> dict:
@@ -373,7 +373,7 @@ def _pick_anchor(
             in_range,
             key=lambda item: abs(item[1] - target) * item[2],
         )
-        return chosen_val, f"{chosen_name} ${chosen_val:.2f}"
+        return chosen_val, f"{chosen_name} {chosen_val:.2f}"
     return fallback, None
 
 
@@ -396,7 +396,7 @@ def _resolve_key_level(
             valid.append((label, float(val), priority))
 
     if not valid:
-        return round(fallback_val, 2), f"{fallback_label} ${fallback_val:.2f}", False
+        return round(fallback_val, 2), f"{fallback_label} {fallback_val:.2f}", False
 
     # 检测近距多源共振（差值 <= max(0.85*ATR, 1.8%现价)）：多个独立维度重合时可信度显著提高
     cluster_tol = max(0.85 * atr, close * 0.018)
@@ -420,7 +420,7 @@ def _resolve_key_level(
             chosen_r = min(round(close - 0.01, 2), max(0.01, chosen_r))
         else:
             chosen_r = max(round(close + 0.01, 2), chosen_r)
-        anchor_text = f"{' + '.join(distinct_labels[:2])}共振 ${chosen_r:.2f}"
+        anchor_text = f"{' + '.join(distinct_labels[:2])}共振 {chosen_r:.2f}"
         return chosen_r, anchor_text, True
 
     primary = max(best_cluster, key=lambda item: item[2])
@@ -429,7 +429,7 @@ def _resolve_key_level(
         chosen_r = min(round(close - 0.01, 2), max(0.01, chosen_r))
     else:
         chosen_r = max(round(close + 0.01, 2), chosen_r)
-    return chosen_r, f"{primary[0]} ${chosen_r:.2f}", False
+    return chosen_r, f"{primary[0]} {chosen_r:.2f}", False
 
 
 def compute_forecast(
@@ -674,31 +674,31 @@ def compute_forecast(
         position_label = "区间中段"
 
     buy_anchors = [
-        bh_anchor or f"ATR14 回调 ${buy_high:.2f}",
-        bl_anchor or f"ATR14 支撑 ${buy_low:.2f}",
+        bh_anchor or f"ATR14 回调 {buy_high:.2f}",
+        bl_anchor or f"ATR14 支撑 {buy_low:.2f}",
     ]
     if vp.get("available") and vp_val is not None and vp_val <= close:
-        val_tag = f"筹码价值区下沿 VAL ${vp_val:.2f}"
+        val_tag = f"筹码价值区下沿 VAL {vp_val:.2f}"
         if not any("VAL" in a for a in buy_anchors):
             buy_anchors.append(val_tag)
     buy_anchors = list(dict.fromkeys(buy_anchors))[:3]
 
     sell_anchors = [
-        sl_anchor or f"ATR14 一卖 ${sell_low:.2f}",
-        sh_anchor or f"ATR14 二卖 ${sell_high:.2f}",
+        sl_anchor or f"ATR14 一卖 {sell_low:.2f}",
+        sh_anchor or f"ATR14 二卖 {sell_high:.2f}",
     ]
     if vp.get("available") and vp_vah is not None and vp_vah >= close:
-        vah_tag = f"筹码价值区上沿 VAH ${vp_vah:.2f}"
+        vah_tag = f"筹码价值区上沿 VAH {vp_vah:.2f}"
         if not any("VAH" in a for a in sell_anchors):
             sell_anchors.append(vah_tag)
     sell_anchors = list(dict.fromkeys(sell_anchors))[:3]
 
     if vp.get("available") and vp_sup_low is not None and abs(stop_ref_low - vp_sup_low) <= 0.05:
-        stop_anchor = f"筹码支撑下沿(${vp_sup_low:.2f})下方 ATR14 防守"
+        stop_anchor = f"筹码支撑下沿({vp_sup_low:.2f})下方 ATR14 防守"
     elif vp.get("available") and vp_val is not None and abs(stop_ref_low - vp_val) <= 0.05:
-        stop_anchor = f"筹码价值区下沿(${vp_val:.2f})下方 ATR14 防守"
+        stop_anchor = f"筹码价值区下沿({vp_val:.2f})下方 ATR14 防守"
     else:
-        stop_anchor = f"20日低点(${low_20:.2f})下方 ATR14 防守"
+        stop_anchor = f"20日低点({low_20:.2f})下方 ATR14 防守"
 
     levels = {
         "available": True,
@@ -891,7 +891,7 @@ def compute_forecast(
                 val_detail = f"PE {pe:.1f}x，股债利差 {gap:+.2f}pp{real_note}"
             elif pe is not None and pe > 0:
                 val_score = float(np.clip(90.0 - pe * 1.15 + (4.0 if div >= 2.0 else 0.0), 20.0, 82.0))
-                val_detail = f"PE {pe:.1f}x（缺有效美债利率对照，按市盈率水平估算）"
+                val_detail = f"PE {pe:.1f}x（按市盈率水平估算）"
             else:
                 val_score = None
                 val_detail = "暂无有效市盈率，权重按其余维度归一化"
@@ -954,7 +954,7 @@ def compute_forecast(
     plan_stop = finite(long_plan.get("stop"))
     if plan_stop is not None and close <= plan_stop:
         cap_tier("reduce")
-        guardrails.append(f"已跌破个人计划失效价 ${plan_stop:.2f}，风控护栏将评级上限设为谨慎减持")
+        guardrails.append(f"已跌破个人计划失效价 {plan_stop:.2f}，风控护栏将评级上限设为谨慎减持")
 
     if not is_fund and val_fresh and pe is not None and pe <= 0:
         cap_tier("hold")
@@ -1051,8 +1051,8 @@ def compute_forecast(
     guard_note = f"（已触发风控护栏：{guardrails[0]}）" if guardrails else ""
     rating_summary = (
         f"综合评级「{label}」（{raw_score:.1f}分，置信度{confidence}）："
-        f"防守 ${defense_level:.2f} / 突破 ${breakout_level:.2f}，"
-        f"参考买点 ${buy_low:.2f}–${buy_high:.2f}，现价盈亏比 {risk_reward_ratio:.2f}:1{guard_note}。"
+        f"防守 {defense_level:.2f} / 突破 {breakout_level:.2f}，"
+        f"参考买点 {buy_low:.2f}–{buy_high:.2f}，现价盈亏比 {risk_reward_ratio:.2f}:1{guard_note}。"
     )
 
     return {

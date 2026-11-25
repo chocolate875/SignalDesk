@@ -14,6 +14,7 @@ from .calendar import bar_end
 from .demo import make_bars
 from .events import EventEngine
 from .indicators import enrich, summarize
+from .markets import market_for, normalize_symbol
 from .models import RuleSettings, utcnow
 from .storage import Store
 
@@ -51,14 +52,16 @@ def load_bars(path: Path, session: str) -> list[dict]:
 
 
 def replay(bars: list[dict], symbol: str, timeframe: str, session: str = "regular") -> dict:
-    frame = enrich(bars, timeframe, datetime(2035, 1, 1, tzinfo=timezone.utc), RuleSettings())
+    symbol = normalize_symbol(symbol)
+    venue = market_for(symbol)
+    frame = enrich(bars, timeframe, datetime(2035, 1, 1, tzinfo=timezone.utc), RuleSettings(), venue)
     with tempfile.TemporaryDirectory(prefix="signaldesk-replay-") as temporary:
         store = Store(Path(temporary))
         engine = EventEngine(store)
         valid = 0
         for ix in frame.index[frame["session"] == session]:
-            now = bar_end(frame.loc[ix, "timestamp"].to_pydatetime(), timeframe)
-            summary = summarize(frame.loc[:ix], timeframe, session, now, RuleSettings(), demo=True)
+            now = bar_end(frame.loc[ix, "timestamp"].to_pydatetime(), timeframe, venue)
+            summary = summarize(frame.loc[:ix], timeframe, session, now, RuleSettings(), demo=True, market=venue)
             valid += bool(summary["valid"])
             engine.fusion(
                 symbol,
@@ -93,7 +96,7 @@ def main():
     if args.input:
         bars = load_bars(args.input, args.session)
     else:
-        bars = make_bars(args.symbol, args.timeframe, utcnow())
+        bars = make_bars(normalize_symbol(args.symbol), args.timeframe, utcnow())
     report = replay(bars, args.symbol, args.timeframe, args.session)
     text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
     if args.output:

@@ -405,7 +405,7 @@ export default function SettingsPanel({
                       <div>
                         <b>自动同步账号自选股单</b>
                         <small>
-                          只读同步长桥自选分组中的美股标的，绝不修改券商自选。
+                          同步长桥自选分组中的美股、港股和沪深 A 股。
                         </small>
                       </div>
                       <input

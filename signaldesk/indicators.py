@@ -11,7 +11,8 @@ from ta.trend import MACD, EMAIndicator, SMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 from . import operators as op
-from .calendar import NY, bar_end, calendar, latest_expected_end
+from .calendar import bar_end, calendar, latest_expected_end
+from .markets import US, Market
 from .models import RuleSettings
 
 RULE_VERSION = "fusion-2.0.0"
@@ -46,7 +47,7 @@ def finite(value):
         return None
 
 
-def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings) -> pd.DataFrame:
+def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings, market: Market = US) -> pd.DataFrame:
     if not bars:
         return pd.DataFrame()
     frame = pd.DataFrame(bars).copy()
@@ -56,7 +57,7 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
         .sort_values("timestamp", kind="stable")
         .drop_duplicates("timestamp", keep="last")
     )
-    frame = frame[frame["timestamp"].map(lambda t: bar_end(t.to_pydatetime(), timeframe) <= now)].reset_index(
+    frame = frame[frame["timestamp"].map(lambda t: bar_end(t.to_pydatetime(), timeframe, market) <= now)].reset_index(
         drop=True
     )
     if frame.empty:
@@ -77,17 +78,25 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
     groups = frame.groupby("session", sort=False)
     for _, session_frame in groups:
         valid = session_frame["close"].notna()
-        local = session_frame["timestamp"].dt.tz_convert(NY)
+        local = session_frame["timestamp"].dt.tz_convert(market.timezone)
         dates = local.map(lambda t: (t.to_pydatetime() + timedelta(hours=4)).date())
         same_day = dates == dates.shift(1)
         if timeframe == "day":
-            sessions = calendar().sessions
+            sessions = calendar(market).sessions
             days = local.dt.tz_localize(None).dt.normalize()
             ordinals = pd.Series(sessions.get_indexer(days), index=session_frame.index)
             valid &= ordinals.ge(0)
             gaps = ordinals.diff().gt(1)
         else:
             gaps = same_day & (session_frame["timestamp"].diff().dt.total_seconds() > 900)
+            if market != US and gaps.any():
+                # The two bars either side of a scheduled lunch break are consecutive.
+                schedule = calendar(market).schedule.reindex(local.dt.tz_localize(None).dt.normalize())
+                previous_end = session_frame["timestamp"].shift() + pd.Timedelta(minutes=15)
+                lunch = (previous_end.to_numpy() == schedule["break_start"].to_numpy()) & (
+                    session_frame["timestamp"].to_numpy() == schedule["break_end"].to_numpy()
+                )
+                gaps &= ~lunch
         segments = ((~valid) | gaps).cumsum()
         for _, part in session_frame[valid].groupby(segments[valid]):
             if part.empty:
@@ -113,7 +122,7 @@ def enrich(bars: list[dict], timeframe: str, now: datetime, rules: RuleSettings)
             )
             atr = atr.where(np.arange(len(part)) >= 13).replace(0, np.nan)
             values["atr"] = atr
-            local_time = part["timestamp"].dt.tz_convert(NY)
+            local_time = part["timestamp"].dt.tz_convert(market.timezone)
             trading_dates = local_time.map(lambda t: (t.to_pydatetime() + timedelta(hours=4)).date())
             typical = (h + low + c) / 3
             if timeframe == "day":
@@ -173,6 +182,7 @@ def summarize(
     rules: RuleSettings,
     quote: dict | None = None,
     demo: bool = False,
+    market: Market = US,
 ) -> dict:
     part = frame[frame["session"] == session] if not frame.empty else frame
     empty = {
@@ -201,9 +211,9 @@ def summarize(
     risks = []
     if score is None:
         risks.append("预热数据不足或因子缺失")
-    expected = latest_expected_end(now, timeframe, session)
-    end = bar_end(row["timestamp"].to_pydatetime(), timeframe)
-    stale = expected is not None and end + timedelta(seconds=90) < expected
+    expected = latest_expected_end(now, timeframe, session, market)
+    end = bar_end(row["timestamp"].to_pydatetime(), timeframe, market)
+    stale = expected is None or end + timedelta(seconds=90) < expected
     if stale and not demo:
         risks.append("行情过期：最近应完成K线缺失")
     status = (quote or {}).get("trade_status", "normal").lower()

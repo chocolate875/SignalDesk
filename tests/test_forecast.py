@@ -6,6 +6,7 @@ import pytest
 from signaldesk.demo import DEMO_NAMES, DEMO_PLANS, make_bars, yield_curve
 from signaldesk.forecast import TIER_ORDER, compute_forecast, compute_volume_profile
 from signaldesk.indicators import enrich, summarize
+from signaldesk.markets import market_for
 from signaldesk.models import RuleSettings
 from signaldesk.research import research_context
 
@@ -38,8 +39,9 @@ def test_forecast_monotonic_and_all_demo_scenarios():
     rules = RuleSettings()
     for symbol, _, _, _, _, _ in DEMO_NAMES:
         bars = make_bars(symbol, "day", now)
-        frame = enrich(bars, "day", now, rules)
-        summary = summarize(frame, "day", "regular", now, rules, demo=True)
+        venue = market_for(symbol)
+        frame = enrich(bars, "day", now, rules, venue)
+        summary = summarize(frame, "day", "regular", now, rules, demo=True, market=venue)
         last_ts = datetime.fromisoformat(bars[-1]["timestamp"])
         research = research_context(_sample_valuation(symbol, now, pe_ttm=26.0), yield_curve(last_ts), now, demo=True)
         close = float(frame.iloc[-1]["close"])

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   fmt,
+  pricePrefix,
   ticker,
   time,
   type Stock,
@@ -56,6 +57,7 @@ export default function WatchlistRail({
   mode: string;
 }) {
   const [tab, setTab] = useState<RailTab>("all");
+  const [market, setMarket] = useState<"all" | Stock["market"]["code"]>("all");
   const [selectedGroup, setSelectedGroup] = useState<string>("__all__");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("rating");
@@ -79,6 +81,7 @@ export default function WatchlistRail({
   const visibleStocks = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filtered = allStocks.filter((s) => {
+      if (market !== "all" && s.market.code !== market) return false;
       if (tab === "favorite" && !s.favorite) return false;
       if (tab === "held" && s.broker_quantity <= 0) return false;
       if (tab === "watchlist") {
@@ -90,7 +93,8 @@ export default function WatchlistRail({
           return false;
         }
       }
-      if (q && !`${s.symbol} ${s.name}`.toLowerCase().includes(q)) return false;
+      const paddedHK = s.market.code === "HK" ? s.symbol.padStart(8, "0") : "";
+      if (q && !`${s.symbol} ${paddedHK} ${s.name}`.toLowerCase().includes(q)) return false;
       return true;
     });
 
@@ -145,7 +149,7 @@ export default function WatchlistRail({
       if (favDiff !== 0) return favDiff;
       return b.broker_quantity - a.broker_quantity;
     });
-  }, [allStocks, tab, currentGroup, query, sort]);
+  }, [allStocks, market, tab, currentGroup, query, sort]);
 
   return (
     <aside className="rail-panel" id="holdings" aria-label="行情与自选列表">
@@ -200,6 +204,14 @@ export default function WatchlistRail({
           >
             <span>{label}</span>
             <em>{count}</em>
+          </button>
+        ))}
+      </div>
+
+      <div className="rail-markets" role="group" aria-label="按市场筛选">
+        {([["all", "全部市场"], ["US", "美股"], ["HK", "港股"], ["CN", "A股"]] as const).map(([id, label]) => (
+          <button key={id} type="button" aria-pressed={market === id} onClick={() => setMarket(id)}>
+            {label}
           </button>
         ))}
       </div>
@@ -299,7 +311,7 @@ export default function WatchlistRail({
                 ? time(watchlistSync.last_sync)
                 : "等待首次同步"}
               {(watchlistSync?.unsupported_count ?? 0) > 0
-                ? ` · 已忽略 ${watchlistSync?.unsupported_count} 只非美股`
+                ? ` · ${watchlistSync?.unsupported_count} 个代码暂不支持`
                 : ""}
             </span>
           )}
@@ -328,7 +340,7 @@ export default function WatchlistRail({
               className={`stock-row ${isSelected ? "selected" : ""}`}
               onClick={() => onSelect(s.symbol)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
+                if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
                   e.preventDefault();
                   onSelect(s.symbol);
                 }
@@ -355,7 +367,7 @@ export default function WatchlistRail({
                       fill={s.favorite ? "currentColor" : "none"}
                     />
                   </button>
-                  <b className="stock-row-ticker">{ticker(s.symbol)}</b>
+                  <b className="stock-row-ticker" title={s.symbol}>{s.symbol.slice(0, -3)}</b>
                   <span
                     className={`verdict-chip tone-${tone}`}
                     title={`${actionText}：${actionTip}`}
@@ -364,12 +376,15 @@ export default function WatchlistRail({
                   </span>
                 </div>
                 <strong className="stock-row-price">
-                  {s.quote?.last != null ? "$" + fmt(s.quote.last, 2) : "—"}
+                  {s.quote?.last != null ? pricePrefix(s.currency) + fmt(s.quote.last, 2) : "—"}
                 </strong>
               </div>
 
               <div className="stock-row-line2">
                 <div className="stock-row-sub">
+                  <span className="market-badge" data-market={s.market.code} title={`${s.market.name} · ${s.symbol}`}>
+                    {s.market.code === "CN" ? (s.symbol.endsWith(".SH") ? "沪A" : "深A") : s.market.name}
+                  </span>
                   <span className="stock-row-name" title={s.name || "观察标的"}>
                     {s.name || "观察标的"}
                   </span>
@@ -453,19 +468,19 @@ export default function WatchlistRail({
           <div className="rail-empty">
             <Star size={24} />
             <b>
-              {tab === "favorite"
+              {market !== "all" || query.trim() ? "没有匹配的股票" : tab === "favorite"
                 ? "还没有收藏股票"
                 : tab === "watchlist"
-                  ? "暂无账号自选美股"
+                  ? "暂无账号自选股票"
                   : tab === "held"
                     ? "当前模式暂无持仓"
                     : "没有匹配的股票"}
             </b>
             <p>
-              {tab === "favorite"
+              {market !== "all" || query.trim() ? "可以切换市场或调整搜索条件。" : tab === "favorite"
                 ? "点击任意股票左侧的星标即可加入本地收藏，方便集中复核。"
                 : tab === "watchlist"
-                  ? "连接 LongPort 后会自动同步您的美股自选股单，也可手动添加观察股。"
+                  ? "连接 LongPort 后可同步账号自选股，也可手动添加观察股。"
                   : "可以调整筛选条件，或添加本地观察股票。"}
             </p>
             <div className="rail-empty-actions">

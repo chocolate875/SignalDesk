@@ -16,7 +16,7 @@ def test_api_local_session_and_cross_origin_boundary(client):
     assert client.get("/api/settings").status_code == 401
     response = client.get("/api/bootstrap")
     assert response.status_code == 200 and response.json()["mode"] == "demo"
-    assert len(response.json()["stocks"]) == 8
+    assert {s["market"]["code"] for s in response.json()["stocks"]} == {"US", "HK", "CN"}
     assert client.get("/api/settings").status_code == 200
     assert client.get("/api/dashboard", headers={"Origin": "https://evil.invalid"}).status_code == 403
     assert client.get("/api/bootstrap", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
@@ -31,6 +31,23 @@ def test_detail_and_send_preview_do_not_expose_account_fields(client):
     assert "broker_quantity" not in str(preview) and "cost_price" not in str(preview)
     assert client.get("/api/stock/NVDA.US?timeframe=1s").status_code == 400
     assert client.post("/api/orders", json={}).status_code in [404, 405]
+
+
+def test_multi_market_detail_and_manual_watch(client):
+    client.get("/api/bootstrap")
+    for symbol, currency in (("00700.HK", "HKD"), ("600519.SH", "CNY"), ("000001.SZ", "CNY")):
+        detail = client.get(f"/api/stock/{symbol}").json()
+        stock = detail["stock"]
+        assert stock["currency"] == currency and detail["summary"]["valid"] and detail["rows"]
+        assert stock["wave_trend"]["available"]
+        assert stock["academic_factors"]["beta_spy"] is None
+        assert stock["forecast"]["risk_budget"]["macro_red_count"] is None
+        assert stock["research"]["yield_gap_pp"] is None
+    added = client.put("/api/allocations", json={"symbol": "00941.hk", "watch_only": True})
+    assert added.status_code == 200 and added.json()["symbol"] == "941.HK"
+    assert client.put("/api/favorites/00941.HK", json={"favorite": True}).json()["symbol"] == "941.HK"
+    assert client.delete("/api/watchlist/941.HK").status_code == 200
+    assert client.put("/api/allocations", json={"symbol": "000001"}).status_code == 422
 
 
 def test_weights_invalid_and_oversubscribed_allocation_rejected(client):

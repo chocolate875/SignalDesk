@@ -29,6 +29,7 @@ import WatchlistRail from "./WatchlistRail";
 import {
   api,
   fmt,
+  pricePrefix,
   isValidDashboard,
   ticker,
   type AgentProviderId,
@@ -103,13 +104,13 @@ function AllocationEditor({
         <div className="small-modal-body">
           <div className="field-grid">
             <label className="field">
-              美股代码
+              证券代码
               <input
                 autoFocus
                 value={symbol}
                 disabled={!!stock}
                 onChange={(e) => setSymbol(e.target.value)}
-                placeholder="例如 AAPL"
+                placeholder="AAPL / 700.HK / 600519.SH"
               />
             </label>
             <label className="field">
@@ -162,7 +163,7 @@ function AllocationEditor({
           )}
           <div className="field-grid">
             <label className="field">
-              计划失效观察价（美元）
+              计划失效观察价（{stock?.currency || "报价币种"}）
               <input
                 type="number"
                 min="0"
@@ -173,7 +174,7 @@ function AllocationEditor({
               />
             </label>
             <label className="field">
-              目标观察价（美元）
+              目标观察价（{stock?.currency || "报价币种"}）
               <input
                 type="number"
                 min="0"
@@ -199,7 +200,7 @@ function AllocationEditor({
           </div>
 
           <p className="muted">
-            以上价格用于长期计划。盘中触价时提醒，收盘后用日线复核。
+            代码支持美股、港股（700.HK）、沪市（600519.SH）和深市（000001.SZ）。盘中触价时提醒，收盘后用日线复核。
           </p>
         </div>
         <footer className="modal-footer">
@@ -896,6 +897,8 @@ export default function App() {
         ? "quote-up"
         : "quote-down";
 
+  const unit = pricePrefix(stock?.currency);
+  const market = stock?.market;
   const verdict = effectiveStock?.verdict ?? stock?.verdict;
   const activeForecast = effectiveStock?.forecast ?? stock?.forecast;
   const canDeleteSelected = Boolean(
@@ -928,7 +931,7 @@ export default function App() {
               className={`session-dot ${
                 !connected
                   ? "offline"
-                  : data?.market?.session === "regular"
+                  : market?.session === "regular"
                     ? "open"
                     : ""
               }`}
@@ -937,9 +940,9 @@ export default function App() {
               {!connected
                 ? "重连中"
                 : data?.mode === "live"
-                  ? `实盘 · ${data?.market?.label ?? "同步中"}`
+                  ? `实盘 · ${market ? market.name + market.label : "同步中"}`
                   : "演示工作区"}
-              {connected && data?.market?.early_close ? " · 提前收" : ""}
+              {connected && market?.early_close ? " · 提前收" : ""}
             </span>
           </button>
         </div>
@@ -1039,8 +1042,8 @@ export default function App() {
                   <div className="hero-identity">
                     <div className="hero-title-line">
                       <h1>{ticker(stock.symbol)}</h1>
-                      <span className="hero-name" title={stock.name || "美股标的"}>
-                        {stock.name || "美股标的"}
+                      <span className="hero-name" title={stock.name || "观察标的"}>
+                        {stock.name || "观察标的"}
                       </span>
                       {stock.instrument?.is_fund && (
                         <span
@@ -1130,7 +1133,7 @@ export default function App() {
                   <div className="hero-quote">
                     <strong className="hero-price">
                       {stock.quote?.last != null
-                        ? "$" + fmt(stock.quote.last, 2)
+                        ? unit + fmt(stock.quote.last, 2)
                         : "—"}
                     </strong>
                     <span className={`hero-chg ${changeClass}`}>
@@ -1257,7 +1260,7 @@ export default function App() {
                               : "突破位"}
                           </span>
                           <strong className="accent-val">
-                            ${fmt(activeForecast.levels.breakout_level, 2)}
+                            {unit}{fmt(activeForecast.levels.breakout_level, 2)}
                           </strong>
                         </div>
                       )}
@@ -1275,14 +1278,14 @@ export default function App() {
                               : "防守位"}
                           </span>
                           <strong className="down">
-                            ${fmt(activeForecast.levels.defense_level, 2)}
+                            {unit}{fmt(activeForecast.levels.defense_level, 2)}
                           </strong>
                         </div>
                       )}
                       <div className="forecast-strip-item">
                         <span>买区</span>
                         <strong className="up">
-                          ${fmt(activeForecast.levels.buy_low, 2)}–$
+                          {unit}{fmt(activeForecast.levels.buy_low, 2)}–{unit}
                           {fmt(activeForecast.levels.buy_high, 2)}
                         </strong>
                       </div>
@@ -1290,11 +1293,11 @@ export default function App() {
                         activeForecast.volume_profile.poc != null && (
                           <div
                             className="forecast-strip-item forecast-strip-chip"
-                            title={`近${activeForecast.volume_profile.window_days}日筹码分布 · 70%价值区 $${fmt(activeForecast.volume_profile.val, 2)}–$${fmt(activeForecast.volume_profile.vah, 2)} · ${activeForecast.volume_profile.position_label}`}
+                            title={`近${activeForecast.volume_profile.window_days}日筹码分布 · 70%价值区 ${unit}${fmt(activeForecast.volume_profile.val, 2)}–${unit}${fmt(activeForecast.volume_profile.vah, 2)} · ${activeForecast.volume_profile.position_label}`}
                           >
                             <span>筹码峰</span>
                             <strong className="amber-text">
-                              ${fmt(activeForecast.volume_profile.poc, 2)}
+                              {unit}{fmt(activeForecast.volume_profile.poc, 2)}
                               {activeForecast.volume_profile.profit_ratio_pct !=
                                 null &&
                                 ` (${fmt(activeForecast.volume_profile.profit_ratio_pct, 0)}%获利)`}
@@ -1351,7 +1354,7 @@ export default function App() {
                             {stock.extended_hours.active_label}
                           </span>
                           <strong className="ext-strip-price">
-                            ${fmt(stock.extended_hours.price, 2)}
+                            {unit}{fmt(stock.extended_hours.price, 2)}
                           </strong>
                           {stock.extended_hours.gap_pct != null && (
                             <span
@@ -1368,7 +1371,7 @@ export default function App() {
                           {stock.extended_hours.low != null &&
                             stock.extended_hours.high != null && (
                               <span className="ext-strip-meta">
-                                区间 ${fmt(stock.extended_hours.low, 2)}–$
+                                区间 {unit}{fmt(stock.extended_hours.low, 2)}–{unit}
                                 {fmt(stock.extended_hours.high, 2)}
                               </span>
                             )}
@@ -1383,7 +1386,7 @@ export default function App() {
                           {stock.extended_hours.active_session === "pre" &&
                             stock.extended_hours.sessions?.overnight?.is_fresh && (
                               <span className="ext-strip-prev-sess">
-                                夜盘 $
+                                夜盘 {unit}
                                 {fmt(
                                   stock.extended_hours.sessions.overnight.price,
                                   2,
@@ -1430,7 +1433,7 @@ export default function App() {
                   <Chart
                     detail={effectiveDetail}
                     liveQuote={stock?.quote}
-                    marketSession={data?.market?.session}
+                    marketSession={market?.session}
                     evalMode={isLiveEvalActive ? "live" : "confirmed"}
                     liveEvalRow={isLiveEvalActive ? (activeLiveEval?.live_row ?? null) : null}
                     theme={resolvedTheme}
@@ -1445,7 +1448,7 @@ export default function App() {
               <h2>欢迎使用 SignalDesk 看盘工作台</h2>
               <p>
                 {data?.mode === "live"
-                  ? "尚未同步到持仓或自选美股，请点击右上角「设置」接入 LongPort，或手动添加观察标的。"
+                  ? "尚未同步到持仓或自选股票，请点击右上角「设置」接入 LongPort，或手动添加观察标的。"
                   : "正在加载演示数据…"}
               </p>
               <div className="center-empty-actions">

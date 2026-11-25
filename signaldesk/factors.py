@@ -142,6 +142,7 @@ def compute_academic_factors(
     valuation: dict | None = None,
     is_fund: bool = False,
     is_leveraged: bool = False,
+    usd_turnover: bool = True,
 ) -> dict[str, Any]:
     """计算严格因果的多维度学术量化因子（全零付费数据源、窗口不足返回 None）。"""
     empty: dict[str, Any] = {
@@ -357,7 +358,7 @@ def compute_academic_factors(
     amihud_20d = None
     avg_dollar_vol_20d = None
     illiquid_flag = False
-    if "volume" in tail.columns and len(simple_rets) >= 20:
+    if usd_turnover and "volume" in tail.columns and len(simple_rets) >= 20:
         vol_arr = tail["volume"].to_numpy(dtype=float)[1:]
         typ_arr = ((highs[1:] + lows[1:] + closes[1:]) / 3.0) * vol_arr
         if "turnover" in tail.columns:

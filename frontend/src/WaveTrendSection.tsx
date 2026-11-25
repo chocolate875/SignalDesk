@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { BookOpen, Check, ChevronRight, HelpCircle, X } from "lucide-react";
-import { fmt, ticker, type Stock, type WavePivot, type WaveTrend } from "./types";
+import { fmt, pricePrefix, ticker, type Stock, type WavePivot, type WaveTrend } from "./types";
 
 const STRUCTURE_CN: Record<string, string> = {
   HH: "高点抬高",
@@ -49,6 +49,7 @@ function WaveTrendGuideModal({
   wt: WaveTrend;
   onClose: () => void;
 }) {
+  const unit = pricePrefix(stock.currency);
   const [tab, setTab] = useState<ModalTab>("current");
   const trend = wt.trend;
   const wave = wt.wave;
@@ -85,7 +86,7 @@ function WaveTrendGuideModal({
 
   const atrThresholdDesc =
     atr != null && close != null && close > 0
-      ? `当前约 $${fmt(Math.max(2.8 * atr, 0.065 * close), 2)}（取 2.8×ATR14=$${fmt(2.8 * atr, 2)} 与 6.5%×收盘价=$${fmt(0.065 * close, 2)} 的较大值，中级波浪滤网）`
+      ? `当前约 ${unit}${fmt(Math.max(2.8 * atr, 0.065 * close), 2)}（取 2.8×ATR14=${unit}${fmt(2.8 * atr, 2)} 与 6.5%×收盘价=${unit}${fmt(0.065 * close, 2)} 的较大值，中级波浪滤网）`
       : "取 2.8 × ATR14 与 6.5% × 收盘价的较大值（中级波浪滤网）";
 
   return createPortal(
@@ -177,7 +178,7 @@ function WaveTrendGuideModal({
                     <b>通道下 / 中 / 上轨</b>
                     <em>
                       {ch?.available
-                        ? `$${fmt(ch.end_lower, 2)} / $${fmt(ch.end_mid, 2)} / $${fmt(ch.end_upper, 2)}`
+                        ? `${unit}${fmt(ch.end_lower, 2)} / ${unit}${fmt(ch.end_mid, 2)} / ${unit}${fmt(ch.end_upper, 2)}`
                         : "—"}
                     </em>
                   </div>
@@ -253,7 +254,7 @@ function WaveTrendGuideModal({
                     <b>
                       前高突破位
                       {trend.breakout_level != null && (
-                        <em>${fmt(trend.breakout_level, 2)}</em>
+                        <em>{unit}{fmt(trend.breakout_level, 2)}</em>
                       )}
                     </b>
                     <p>
@@ -264,7 +265,7 @@ function WaveTrendGuideModal({
                     <b>
                       {isDown ? "前高反转位" : "前低失效位"}
                       {trend.invalidation_level != null && (
-                        <em>${fmt(trend.invalidation_level, 2)}</em>
+                        <em>{unit}{fmt(trend.invalidation_level, 2)}</em>
                       )}
                     </b>
                     <p>
@@ -276,7 +277,7 @@ function WaveTrendGuideModal({
                   <div className="wt-compare-item">
                     <b>
                       左侧「参考止损」（ATR 止损）
-                      {forecastStop != null && <em>${fmt(forecastStop, 2)}</em>}
+                      {forecastStop != null && <em>{unit}{fmt(forecastStop, 2)}</em>}
                     </b>
                     <p>
                       按近期 14 日平均波幅（ATR14）测算的<strong>单笔仓位止损参考</strong>；它与上面的「{isDown ? "前高反转位" : "前低失效位"}」衡量维度不同——前者管仓位回撤，后者看大趋势结构是否走坏。
@@ -378,6 +379,7 @@ function WaveTrendGuideModal({
 
 /** 右侧「波浪与趋势结构」一级简洁视图 + 二级说明弹窗入口 */
 export default function WaveTrendCard({ stock }: { stock: Stock }) {
+  const unit = pricePrefix(stock.currency);
   const [guideOpen, setGuideOpen] = useState(false);
   const wt = stock.wave_trend;
   if (!wt) return null;
@@ -453,7 +455,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
                 <div className="wt-key-val">
                   <b>
                     {trend.breakout_level != null
-                      ? `$${fmt(trend.breakout_level, 2)}`
+                      ? `${unit}${fmt(trend.breakout_level, 2)}`
                       : "—"}
                   </b>
                   {trend.breakout_level != null && close != null && (
@@ -473,7 +475,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
                 <div className="wt-key-val">
                   <b className={isDown ? "accent-val" : "down"}>
                     {trend.invalidation_level != null
-                      ? `$${fmt(trend.invalidation_level, 2)}`
+                      ? `${unit}${fmt(trend.invalidation_level, 2)}`
                       : "—"}
                   </b>
                   {trend.invalidation_level != null && close != null && (
@@ -490,7 +492,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
               >
                 <span>通道参考</span>
                 <b>
-                  下 ${fmt(ch.end_lower, 2)} · 中 ${fmt(ch.end_mid, 2)} · 上 $
+                  下 {unit}{fmt(ch.end_lower, 2)} · 中 {unit}{fmt(ch.end_mid, 2)} · 上 {unit}
                   {fmt(ch.end_upper, 2)}
                 </b>
               </div>
@@ -557,7 +559,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
                               {shortDate(p.date)}
                             </span>
                             <strong className="wt-pivot-price">
-                              ${fmt(p.price, 2)}
+                              {unit}{fmt(p.price, 2)}
                             </strong>
                             <span
                               className={`wt-pivot-chg ${
@@ -585,7 +587,7 @@ export default function WaveTrendCard({ stock }: { stock: Stock }) {
                       <div className="wt-fib-row" key={`${t.label}-${idx}`}>
                         <span>{t.label}</span>
                         <div className="wt-fib-nums">
-                          <b>${fmt(t.price, 2)}</b>
+                          <b>{unit}{fmt(t.price, 2)}</b>
                           {close != null && <em>{pctDiff(t.price, close)}</em>}
                         </div>
                       </div>
