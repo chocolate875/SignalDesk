@@ -13,7 +13,7 @@ while read -r source_ref source_oid destination_ref destination_oid; do
     # Allow deletion of a previously published temporary ref.
     [ "$source_ref" = '(delete)' ] && continue
     if forbidden_branch "$checked_out" || forbidden_branch "$source_ref" || forbidden_branch "$destination_ref"; then
-        echo 'Agent 临时分支仅限本地。经授权交付时，请切换到正式任务分支并推送已审阅的改动。' >&2
+        echo 'Agent 临时分支仅限本地。日常交付请切换到 develop，快进合并后推送 develop。' >&2
         exit 1
     fi
 done

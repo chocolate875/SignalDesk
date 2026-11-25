@@ -101,6 +101,6 @@ uv run signaldesk --headless --port 8765
 1. 每次完成功能、口径或 UI 变更后，同步更新 [README.md](README.md)、[TODO.md](TODO.md)、[docs/signals.md](docs/signals.md) 与 [docs/verification.md](docs/verification.md)。
 2. 提交前运行 `git status --short` 与 `uv run pytest tests/test_integrations.py -k test_no_private_runtime_files_tracked -q`，确保 `.runtime/`、`data/`、`*.sqlite*`、`*.encrypted`、`**/codex-exports/`、`**/agent-exports/`、`frontend/dist/`、`.env` 等绝不进入 Git 追踪区。
 3. 提交和 PR 标题统一使用 `类型(范围): 中文摘要`，正文用中文说明原因与验证。日常任务从 `develop` 建分支，发布目标为 `main`。分支流向、示例和初始化命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-4. **Agent 只在本地临时分支工作**，从当前任务基线用 `git switch --no-track -c codex/<主题>` 建分支，或使用 `agent/<主题>`。临时分支不设置 upstream，不推到任何远程。任务完成后切回长期分支。
-   仅在用户明确授权交付时，从目标分支新建 `feat/*`、`fix/*`、`docs/*` 或 `chore/*` 正式分支，挑选已审阅的改动，通过该正式分支提交 PR。禁止使用 `git push --all`、`--mirror` 或将临时 HEAD 改名推送。
+4. **Agent 只在本地临时分支工作**，日常从最新 `develop` 创建无 upstream 的 `codex/<主题>` 或 `agent/<主题>`。完成后把临时分支 rebase 到最新本地 `develop`，验证后切回 `develop` 快进合并，直接执行 `git push origin develop`。确认推送成功后用 `git branch -d <临时分支>` 清理，保留仍有未交付改动的分支。
+   日常任务交付到 `develop` 即结束。外部贡献或需要独立评审的改动走正式分支 PR，发布到 `main` 走受保护的发布 PR。禁止推送 Agent 临时分支、改名推送临时 HEAD、镜像推送或批量推送分支。
 5. 外部贡献从个人 fork 向上游 `develop` 发起 PR。提交者审阅 Agent 的最终差异，在 PR 中记录实际执行的验证及仍待核验的部分，由 `@chocolate875` 复核。发布与热修复按 [协作指南](CONTRIBUTING.md) 合入 `main`。
