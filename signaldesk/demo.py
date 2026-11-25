@@ -113,6 +113,35 @@ def yield_curve(last_close: datetime) -> dict:
     return curve_summary(observations)
 
 
+def comex_gold(last_close: datetime) -> dict:
+    """为演示模式生成确定性的合成 COMEX 黄金主力参考行情（不代表真实市场）。"""
+    end = pd.Timestamp(last_close.astimezone(NY).date())
+    days = calendar().sessions_in_range(end - pd.Timedelta(days=45), end)[-22:]
+    as_of = days[-1].date().isoformat() if len(days) else last_close.astimezone(NY).date().isoformat()
+    prior_date = days[0].date().isoformat() if len(days) >= 22 else None
+    price = 2684.50
+    prev_close = 2662.20
+    prior_close = 2602.50
+    return {
+        "symbol": "GC=F",
+        "name": "COMEX 黄金主力",
+        "exchange": "COMEX",
+        "currency": "USD",
+        "unit": "美元/盎司",
+        "price": price,
+        "prev_close": prev_close,
+        "change_pct": round((price / prev_close - 1.0) * 100.0, 2),
+        "day_high": 2692.40,
+        "day_low": 2655.80,
+        "prior_date": prior_date,
+        "change_21d_pct": round((price / prior_close - 1.0) * 100.0, 2) if prior_date else None,
+        "as_of": as_of,
+        "quote_time": last_close.isoformat(),
+        "fetched_at": last_close.isoformat(),
+        "source": "合成期金",
+    }
+
+
 def demo_extended_quote(symbol: str, regular_close: float, regular_end: datetime, now: datetime) -> dict:
     """为演示模式生成确定性的合成夜盘/盘前报价，用于离线展示盘外跳空与流动性门控效果。"""
     presets: dict[str, tuple[float, float, float]] = {

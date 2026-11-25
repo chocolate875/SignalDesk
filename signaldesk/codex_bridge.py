@@ -166,6 +166,7 @@ class CodexBridge:
         automatic: bool = False,
         event_id: str | None = None,
         macro: dict | None = None,
+        gold: dict | None = None,
     ):
         if not self.settings.enabled:
             raise ValueError("Codex分析未启用")
@@ -197,7 +198,7 @@ class CodexBridge:
             "automatic": automatic,
             "result": None,
             "error": None,
-            "snapshot": safe_snapshot(stock, source, macro),
+            "snapshot": safe_snapshot(stock, source, macro, gold),
         }
         if automatic:
             self.store.set(f"codex-budget:{today}", used + 1)

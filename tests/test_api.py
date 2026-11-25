@@ -58,6 +58,9 @@ def test_default_daily_view_quote_and_codex_share_the_same_close(client):
     assert preview["investment_horizon"] == "long"
     assert preview["technical"]["day:regular"]["as_of"] == detail["summary"]["as_of"]
     assert preview["research"]["curve"]["as_of"] == dashboard["curve"]["as_of"]
+    assert dashboard["gold"]["available"] is True and dashboard["gold"]["price"] > 0
+    assert preview["research"]["gold"]["available"] is True
+    assert preview["research"]["gold"]["price"] == dashboard["gold"]["price"]
     assert all(event["sleeve"] == "long" for event in dashboard["events"])
 
 

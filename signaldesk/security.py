@@ -127,7 +127,12 @@ def safe_child_environment() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key.upper() in allowed}
 
 
-def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
+def safe_snapshot(
+    stock: dict,
+    mode: str,
+    macro: dict | None = None,
+    gold: dict | None = None,
+) -> dict:
     """Explicit allowlist instead of trying to redact an unbounded account object."""
     summaries = stock.get("summaries", {})
     plan = stock.get("long_plan", {})
@@ -342,6 +347,34 @@ def safe_snapshot(stock: dict, mode: str, macro: dict | None = None) -> dict:
                     "refresh_failed",
                 )
             },
+            "gold": (
+                {
+                    k: gold.get(k)
+                    for k in (
+                        "available",
+                        "symbol",
+                        "name",
+                        "exchange",
+                        "currency",
+                        "unit",
+                        "price",
+                        "prev_close",
+                        "change_pct",
+                        "day_high",
+                        "day_low",
+                        "prior_date",
+                        "change_21d_pct",
+                        "as_of",
+                        "source",
+                        "fresh",
+                        "refresh_failed",
+                        "real_ten_year",
+                        "real_rate_linkage",
+                    )
+                }
+                if isinstance(gold, dict) and gold
+                else {}
+            ),
             "earnings_yield_pct": None if is_fund else research.get("earnings_yield_pct"),
             "yield_gap_pp": None if is_fund else research.get("yield_gap_pp"),
             "real_ten_year": research.get("real_ten_year"),

@@ -51,6 +51,7 @@ class OfficialAgentBridge(Protocol):
         automatic: bool = False,
         event_id: str | None = None,
         macro: dict | None = None,
+        gold: dict | None = None,
     ) -> str | None: ...
     async def run(self) -> None: ...
 
@@ -410,6 +411,7 @@ class AntigravityAcpBridge:
         automatic: bool = False,
         event_id: str | None = None,
         macro: dict | None = None,
+        gold: dict | None = None,
     ) -> str | None:
         if automatic:
             # 严格手动触发：ACP 通道绝不在后台事件循环中自动发起请求
@@ -436,7 +438,7 @@ class AntigravityAcpBridge:
             "automatic": False,
             "result": None,
             "error": None,
-            "snapshot": safe_snapshot(stock, source, macro),
+            "snapshot": safe_snapshot(stock, source, macro, gold),
         }
         self.store.analysis(job)
         self.queue.put_nowait(job)
@@ -599,6 +601,7 @@ class AgentHub:
         automatic: bool = False,
         event_id: str | None = None,
         macro: dict | None = None,
+        gold: dict | None = None,
     ) -> tuple[str | None, AgentProviderId]:
         chosen: AgentProviderId = agent or self.settings.default_agent
         bridge = self.get_bridge(chosen)
@@ -608,5 +611,6 @@ class AgentHub:
             automatic=automatic,
             event_id=event_id,
             macro=macro,
+            gold=gold,
         )
         return job_id, chosen

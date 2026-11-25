@@ -26,7 +26,7 @@ from .macro import (
 from .models import Allocation, RuleSettings, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed, probe_fastest_broker_domain
-from .research import fetch_curve, research_context
+from .research import fetch_comex_gold, fetch_curve, gold_context, research_context
 from .security import Vault
 from .storage import Store
 from .wave_trend import compute_wave_trend
@@ -83,6 +83,8 @@ class Monitor:
         self.valuations = store.get("valuations:live", {})
         self.curve = store.get("treasury:live", {})
         self.demo_curve = {}
+        self.gold = store.get("comex_gold:live", {})
+        self.demo_gold = {}
         self.fred = store.get("macro-fred:live", {})
         self.demo_fred = {}
         self.macro_frames = {}
@@ -239,6 +241,7 @@ class Monitor:
         now = utcnow()
         end = latest_expected_end(now, "day", "regular")
         self.demo_curve = demo.yield_curve(end)
+        self.demo_gold = demo.comex_gold(end)
         self.demo_fred = demo_fred_bundle(now)
         for sym in MACRO_BENCHMARK_SYMBOLS:
             bm_bars = demo.make_benchmark_bars(sym, now)
@@ -1033,6 +1036,20 @@ class Monitor:
             "dimension_notes": dimension_notes,
         }
 
+    def gold_snapshot(self, macro: dict | None = None) -> dict:
+        """合成当前模式下的 COMEX 黄金公开市场上下文，并结合 10Y TIPS 实际利率输出联动解读。"""
+        mode = self.settings.mode
+        macro_data = macro if macro is not None else self.macro_regime()
+        real_rate = macro_data.get("real_rate") or {}
+        raw = self.demo_gold if mode == "demo" else self.gold
+        return gold_context(
+            raw,
+            utcnow(),
+            demo=mode == "demo",
+            real_ten_year=real_rate.get("ten_year_real"),
+            real_rate_fresh=bool(real_rate.get("fresh")),
+        )
+
     def stocks(self, macro: dict | None = None) -> list[dict]:
         macro_data = macro if macro is not None else self.macro_regime()
         return [self.stock(a, macro=macro_data) for a in self.portfolio()]
@@ -1040,6 +1057,7 @@ class Monitor:
     async def snapshot(self) -> dict:
         macro = self.macro_regime()
         real_rate = macro.get("real_rate") or {}
+        gold = self.gold_snapshot(macro=macro)
         stocks = self.stocks(macro=macro)
         scores = [s["primary"]["score"] for s in stocks if s["primary"].get("valid")]
         # Split a dual-sleeve position proportionally, never count it twice.
@@ -1061,6 +1079,7 @@ class Monitor:
                 real_ten_year=real_rate.get("ten_year_real"),
                 real_rate_fresh=real_rate.get("fresh"),
             )["curve"],
+            "gold": gold,
             "macro": macro,
             "mode": self.settings.mode,
             "status": self.status,
@@ -1726,6 +1745,7 @@ class Monitor:
     async def refresh_macro(self):
         curve_retry = 0.0
         fred_retry = 0.0
+        gold_retry = 0.0
         while True:
             if self.settings.mode == "live":
                 now_mono = time.monotonic()
@@ -1757,6 +1777,18 @@ class Monitor:
                         with self.frame_lock:
                             self.macro_cache = None
                         fred_retry = time.monotonic() + (900 if fred.get("refresh_failed") else 21600)
+                if time.monotonic() >= gold_retry:
+                    try:
+                        gold = await fetch_comex_gold(utcnow())
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self.gold = {**self.gold, "refresh_failed": True}
+                        gold_retry = time.monotonic() + 180
+                    else:
+                        self.gold = gold
+                        self.store.set("comex_gold:live", gold)
+                        gold_retry = time.monotonic() + 300
             await asyncio.sleep(15)
 
     async def _sync_account(self):

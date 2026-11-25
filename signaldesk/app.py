@@ -285,10 +285,11 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
     @app.get("/api/analysis/preview/{symbol}")
     async def preview(symbol: str):
         normalized = Allocation(symbol=symbol).symbol
-        item = next((s for s in monitor.stocks() if s["symbol"] == normalized), None)
+        macro = monitor.macro_regime()
+        item = next((s for s in monitor.stocks(macro=macro) if s["symbol"] == normalized), None)
         if not item:
             raise HTTPException(404, "未找到股票")
-        return safe_snapshot(item, monitor.settings.mode, monitor.macro_regime())
+        return safe_snapshot(item, monitor.settings.mode, macro, monitor.gold_snapshot(macro=macro))
 
     @app.post("/api/analysis/{symbol}")
     async def analyze(
@@ -297,7 +298,8 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         agent: AgentProviderId | None = None,
     ):
         normalized = Allocation(symbol=symbol).symbol
-        item = next((s for s in monitor.stocks() if s["symbol"] == normalized), None)
+        macro = monitor.macro_regime()
+        item = next((s for s in monitor.stocks(macro=macro) if s["symbol"] == normalized), None)
         if not item:
             raise HTTPException(404, "未找到股票")
         chosen_agent: AgentProviderId | None = agent
@@ -313,7 +315,8 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
             item,
             monitor.settings.mode,
             agent=chosen_agent,
-            macro=monitor.macro_regime(),
+            macro=macro,
+            gold=monitor.gold_snapshot(macro=macro),
         )
         return {"job_id": job_id, "agent": resolved_agent, "status": "queued"}
 

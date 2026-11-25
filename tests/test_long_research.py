@@ -12,7 +12,14 @@ from signaldesk.demo import make_bars
 from signaldesk.indicators import chart_rows, enrich, summarize
 from signaldesk.models import Allocation, RuleSettings
 from signaldesk.providers import LongPortFeed, normalize_bar
-from signaldesk.research import research_context, treasury_observations
+from signaldesk.research import (
+    fetch_comex_gold,
+    gold_context,
+    parse_eastmoney_comex_gold,
+    parse_yahoo_comex_gold,
+    research_context,
+    treasury_observations,
+)
 from signaldesk.security import safe_snapshot
 from signaldesk.service import Monitor
 from signaldesk.storage import Store
@@ -319,3 +326,138 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     tsla_verdict = monitor.stock(after_items["TSLA.US"])["verdict"]
     assert tsla_verdict["headline"] and tsla_verdict["next_step"]
     await monitor.stop()
+
+
+def _sample_yahoo_gold_payload(now: datetime) -> dict:
+    # 构造 24 个交易日的日线序列，同时故意放入误导性的 chartPreviousClose（2个月前）与未来异常时间戳
+    base_day = date(2026, 10, 15)
+    timestamps = []
+    closes = []
+    highs = []
+    lows = []
+    for i in range(24):
+        d = base_day + timedelta(days=i)
+        dt = datetime(d.year, d.month, d.day, 18, 0, tzinfo=timezone.utc)
+        timestamps.append(int(dt.timestamp()))
+        c = 2500.0 + i * 10.0
+        closes.append(c)
+        highs.append(c + 12.0)
+        lows.append(c - 8.0)
+    # 末尾附加一条异常远期时间戳，验证会被过滤
+    future_dt = now + timedelta(days=10)
+    timestamps.append(int(future_dt.timestamp()))
+    closes.append(9999.0)
+    highs.append(10000.0)
+    lows.append(9900.0)
+    return {
+        "chart": {
+            "result": [
+                {
+                    "meta": {
+                        "currency": "USD",
+                        "symbol": "GC=F",
+                        "exchangeName": "CMX",
+                        "fullExchangeName": "COMEX",
+                        "regularMarketPrice": 2740.0,
+                        "regularMarketDayHigh": 2755.0,
+                        "regularMarketDayLow": 2718.0,
+                        "regularMarketTime": timestamps[23],
+                        "chartPreviousClose": 2300.0,
+                    },
+                    "timestamp": timestamps,
+                    "indicators": {"quote": [{"close": closes, "high": highs, "low": lows}]},
+                }
+            ]
+        }
+    }
+
+
+def _sample_eastmoney_gold_payload() -> dict:
+    base_day = date(2026, 10, 15)
+    klines = []
+    for i in range(24):
+        d = (base_day + timedelta(days=i)).isoformat()
+        c = 2500.0 + i * 10.0
+        klines.append(f"{d},{c - 5:.2f},{c:.2f},{c + 11:.2f},{c - 9:.2f},12000")
+    return {"data": {"code": "GC00Y", "name": "COMEX黄金", "klines": klines}}
+
+
+def test_comex_gold_parsers_and_context_linkage():
+    now = datetime(2026, 11, 8, 20, 0, tzinfo=timezone.utc)
+    yahoo = parse_yahoo_comex_gold(_sample_yahoo_gold_payload(now), now)
+    assert yahoo["exchange"] == "COMEX"
+    assert yahoo["price"] == 2740.0
+    # 昨收应取倒数第 2 根日线（2720），绝不是 2 个月前的 chartPreviousClose（2300）
+    assert yahoo["prev_close"] == 2720.0
+    assert yahoo["change_pct"] == pytest.approx((2740.0 / 2720.0 - 1.0) * 100.0, abs=0.01)
+    assert yahoo["prior_date"] == "2026-10-17"
+    assert yahoo["change_21d_pct"] == pytest.approx((2740.0 / 2520.0 - 1.0) * 100.0, abs=0.01)
+    assert yahoo["as_of"] == "2026-11-07"
+
+    em = parse_eastmoney_comex_gold(_sample_eastmoney_gold_payload(), now)
+    assert em["symbol"] == "GC00Y"
+    assert em["price"] == 2730.0
+    assert em["prev_close"] == 2720.0
+    assert em["change_21d_pct"] == pytest.approx((2730.0 / 2520.0 - 1.0) * 100.0, abs=0.01)
+
+    ctx = gold_context(yahoo, now, demo=False, real_ten_year=2.05, real_rate_fresh=True)
+    assert ctx["available"] is True and ctx["fresh"] is True
+    assert "高实际利率下偏强" in ctx["real_rate_linkage"]
+
+    stale_ctx = gold_context(yahoo, now + timedelta(days=9), demo=False, real_ten_year=2.05, real_rate_fresh=True)
+    assert stale_ctx["available"] is True and stale_ctx["fresh"] is False
+
+    empty_ctx = gold_context({}, now, demo=False)
+    assert empty_ctx["available"] is False and empty_ctx["fresh"] is False and empty_ctx["price"] is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_comex_gold_dual_source_fallback(monkeypatch):
+    import httpx
+
+    now = datetime(2026, 11, 8, 20, 0, tzinfo=timezone.utc)
+    yahoo_payload = _sample_yahoo_gold_payload(now)
+    em_payload = _sample_eastmoney_gold_payload()
+
+    class FakeResp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("err", request=None, response=self)
+
+        def json(self):
+            return self._payload
+
+    calls: list[str] = []
+
+    async def fake_get_yahoo_fallback(self, url, params=None):
+        calls.append(url)
+        if "query1" in url:
+            raise httpx.ConnectTimeout("timeout")
+        return FakeResp(200, yahoo_payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get_yahoo_fallback)
+    res1 = await fetch_comex_gold(now)
+    assert res1["source"] == "Yahoo Finance (COMEX)" and len(calls) == 2
+
+    calls.clear()
+
+    async def fake_get_eastmoney_fallback(self, url, params=None):
+        calls.append(url)
+        if "yahoo.com" in url:
+            return FakeResp(429, {})
+        return FakeResp(200, em_payload)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get_eastmoney_fallback)
+    res2 = await fetch_comex_gold(now)
+    assert res2["source"] == "东方财富 (COMEX黄金)" and res2["symbol"] == "GC00Y" and len(calls) == 3
+
+    async def fake_get_all_fail(self, url, params=None):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get_all_fail)
+    with pytest.raises(ValueError, match="COMEX 黄金公开行情获取失败"):
+        await fetch_comex_gold(now)
