@@ -149,6 +149,9 @@ def evaluate_factor_panel(
     skipped_leveraged: list[str] = []
 
     for sym, raw_bars in sorted(bars_by_symbol.items()):
+        # This SPY-based cross section uses one market closing time and USD turnover.
+        if not sym.endswith(".US"):
+            continue
         inst = classify_instrument(sym)
         if inst.get("is_leveraged"):
             skipped_leveraged.append(sym)
@@ -379,6 +382,7 @@ def evaluate_factor_panel(
 
     return {
         "rule_version": RULE_VERSION,
+        "market": "US",
         "included_symbols_count": len(included_symbols),
         "skipped_leveraged_count": len(skipped_leveraged),
         "panel_observations": int(len(panel)),

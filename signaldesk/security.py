@@ -134,6 +134,8 @@ def safe_snapshot(
     gold: dict | None = None,
 ) -> dict:
     """Explicit allowlist instead of trying to redact an unbounded account object."""
+    if (stock.get("market") or {}).get("code", "US") != "US":
+        macro = None
     summaries = stock.get("summaries", {})
     plan = stock.get("long_plan", {})
     close = plan.get("close")
@@ -194,6 +196,7 @@ def safe_snapshot(
     return {
         "source": mode,
         "symbol": stock["symbol"],
+        "currency": stock.get("currency"),
         "name": stock.get("name", ""),
         "instrument": {
             k: instrument.get(k)

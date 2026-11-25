@@ -23,6 +23,7 @@ from .macro import (
     demo_fred_bundle,
     fetch_fred_bundle,
 )
+from .markets import CN, HK, US, Market, market_for
 from .models import Allocation, RuleSettings, Settings, utcnow
 from .notifications import NotificationDispatcher
 from .providers import LongPortFeed, probe_fastest_broker_domain
@@ -122,6 +123,7 @@ class Monitor:
             raise ValueError("分类数量不能超过券商持仓数量；观察股请保持数量为0")
         data = incoming.model_dump()
         data.update(
+            currency=old.currency if old else None,
             broker_quantity=actual,
             available_quantity=old.available_quantity if old else 0,
             cost_price=old.cost_price if old else None,
@@ -201,7 +203,7 @@ class Monitor:
             close_last = float(last_row["close"])
             if not math.isfinite(close_last) or close_last <= 0:
                 return
-            ts = bar_end(last_row["timestamp"].to_pydatetime(), "day").isoformat()
+            ts = bar_end(last_row["timestamp"].to_pydatetime(), "day", market_for(symbol)).isoformat()
             prev_close = None
             if len(reg) >= 2:
                 prev_val = float(reg.iloc[-2]["close"])
@@ -243,6 +245,14 @@ class Monitor:
         self.demo_curve = demo.yield_curve(end)
         self.demo_gold = demo.comex_gold(end)
         self.demo_fred = demo_fred_bundle(now)
+        # Seed the new demo examples once in existing demo portfolios; preserve local edits and deletions.
+        if not self.store.get("demo-markets-seeded-v1"):
+            existing = {a.symbol: a for a in self.portfolio("demo")}
+            for example in demo.allocations():
+                if market_for(example.symbol) != US:
+                    existing.setdefault(example.symbol, example)
+            self.store.set("portfolio:demo", [a.model_dump() for a in existing.values()])
+            self.store.set("demo-markets-seeded-v1", True)
         for sym in MACRO_BENCHMARK_SYMBOLS:
             bm_bars = demo.make_benchmark_bars(sym, now)
             frame = enrich(bm_bars, "day", now, self.settings.rules)
@@ -258,7 +268,7 @@ class Monitor:
             regular = self.frames[("demo", item.symbol, "day")]
             if not regular.empty:
                 row = regular.iloc[-1]
-                reg_end = bar_end(row["timestamp"].to_pydatetime(), "day")
+                reg_end = bar_end(row["timestamp"].to_pydatetime(), "day", market_for(item.symbol))
                 reg_close = float(row["close"])
                 demo_ext = demo.demo_extended_quote(item.symbol, reg_close, reg_end, now)
                 quote_entry = {
@@ -283,7 +293,7 @@ class Monitor:
                     self.store.set(f"state:demo:{item.symbol}:{sleeve}:{tf}:regular", None)
                     indexes = frame.index[frame["session"] == "regular"][-45:]
                     for ix in indexes:
-                        end = bar_end(frame.loc[ix, "timestamp"].to_pydatetime(), tf)
+                        end = bar_end(frame.loc[ix, "timestamp"].to_pydatetime(), tf, market_for(item.symbol))
                         summary = summarize(
                             frame.loc[:ix],
                             tf,
@@ -292,6 +302,7 @@ class Monitor:
                             self.settings.rules,
                             self.quotes.get(("demo", item.symbol)),
                             demo=True,
+                            market=market_for(item.symbol),
                         )
                         self.engine.fusion(
                             item.symbol, sleeve, summary, self.settings.rules, "demo", historical=True
@@ -305,9 +316,10 @@ class Monitor:
         mode, settings, now = mode or self.settings.mode, self.settings, utcnow()
         quote = self.quotes.get((mode, symbol), {})
         bars = self.store.bars(mode, symbol, "day")
-        frame = enrich(bars, "day", now, settings.rules)
-        summary = summarize(frame, "day", "regular", now, settings.rules, demo=mode == "demo")
-        wave_trend = compute_wave_trend(frame, summary)
+        venue = market_for(symbol)
+        frame = enrich(bars, "day", now, settings.rules, venue)
+        summary = summarize(frame, "day", "regular", now, settings.rules, demo=mode == "demo", market=venue)
+        wave_trend = compute_wave_trend(frame, summary, venue)
         fund_metrics = compute_fund_metrics(frame, summary)
         frame_sig = (id(frame), summary.get("as_of"), summary.get("rule_version"))
         with self.frame_lock:
@@ -415,12 +427,13 @@ class Monitor:
                     r for r in value.get("risks", []) if r != "停牌或交易状态受限"
                 ]
         now = utcnow()
-        market = session_for(now)
-        expected = latest_expected_end(now, "day", "regular") if mode == "live" else None
+        venue = market_for(allocation.symbol)
+        market = session_for(now, venue)
+        expected = latest_expected_end(now, "day", "regular", venue) if mode == "live" else None
         primary = "day:regular"
         day = summaries.get(primary)
         if mode == "live" and day and day.get("confirmed_price_available") and day.get("as_of"):
-            if expected and datetime.fromisoformat(day["as_of"]) < expected:
+            if expected is None or datetime.fromisoformat(day["as_of"]) < expected:
                 day.update(
                     valid=False,
                     confirmed_price_available=False,
@@ -453,6 +466,13 @@ class Monitor:
             try:
                 stamp = datetime.fromisoformat(quote["timestamp"])
                 reference = now if market["session"] == "regular" else expected
+                if market["session"] == "break":
+                    reference = datetime.fromisoformat(market["break_start"])
+                elif market["session"] == "closing_auction":
+                    reference = datetime.fromisoformat(market["regular_close"])
+                elif market["session"] == "closed" and expected is not None:
+                    # Securities without an auction can have their final print at continuous close.
+                    reference = expected - venue.closing_auction
                 quote_stale = stamp > now or reference is None or (reference - stamp).total_seconds() > 120
             except (ValueError, KeyError, TypeError):
                 quote_stale = True
@@ -460,14 +480,18 @@ class Monitor:
         if quote_stale and "报价过期或尚未确认" not in summary["risks"]:
             summary["risks"] = ["报价过期或尚未确认"] + summary["risks"]
         last = quote.get("last")
-        net = self.store.get(f"account:{mode}", {}).get("net_assets")
-        if mode == "demo":
-            net = 50_000
         qty = allocation.broker_quantity
         stop, target = allocation.long_levels()
         instrument = classify_instrument(allocation.symbol, allocation.name)
         is_fund = bool(instrument.get("is_fund"))
         valuation = self.valuations.get(allocation.symbol, {}) if mode == "live" else {}
+        currency = valuation.get("currency") or allocation.currency
+        if not currency:
+            currency = {US: "USD", CN: "CNY", HK: "HKD" if mode == "demo" else None}[venue]
+        account = self.store.get(f"account:{mode}", {})
+        net = account.get("net_assets") if currency == "USD" else account.get("net_assets_by_currency", {}).get(currency)
+        if mode == "demo" and currency == "USD":
+            net = 50_000
         curve = self.curve if mode == "live" else self.demo_curve
         if mode == "demo" and summary.get("as_of") and not is_fund:
             index = next((i for i, d in enumerate(demo.DEMO_NAMES) if d[0] == allocation.symbol), None)
@@ -477,10 +501,14 @@ class Monitor:
                     "pb": 3.5 + index,
                     "dividend_yield_pct": index / 3,
                     "turnover_rate_pct": round(1.2 + index * 0.4, 2),
-                    "market_cap": float((800 - index * 80) * 1_000_000_000),
+                    "market_cap": float(max(80, 800 - index * 80) * 1_000_000_000),
                     "fetched_at": summary["as_of"],
                 }
-        macro_data = macro if macro is not None else self.macro_regime()
+        macro_data = {}
+        if venue == US:
+            macro_data = macro if macro is not None else self.macro_regime()
+        else:
+            curve = {}
         real_rate = macro_data.get("real_rate") or {}
         research = research_context(
             valuation,
@@ -508,7 +536,7 @@ class Monitor:
             and valuation["pe_ttm"] <= 0
         ):
             review = "复核盈利情况"
-        elif not is_fund and research["yield_gap_pp"] is None:
+        elif venue == US and not is_fund and research["yield_gap_pp"] is None:
             review = "补齐估值或利率依据"
         else:
             review = "按计划观察" if allocation.watch_only else "例行持仓复核"
@@ -528,7 +556,7 @@ class Monitor:
         if cached_wt is not None and cached_wt[0] == frame_sig:
             wave_trend = cached_wt[1]
         else:
-            wave_trend = compute_wave_trend(frame, summary)
+            wave_trend = compute_wave_trend(frame, summary, venue)
             with self.frame_lock:
                 self.wave_trends[(mode, allocation.symbol)] = (frame_sig, wave_trend)
 
@@ -539,7 +567,7 @@ class Monitor:
             with self.frame_lock:
                 self.fund_metrics[(mode, allocation.symbol)] = (frame_sig, fund_metrics)
 
-        spy_frame = self._spy_frame(mode)
+        spy_frame = self._spy_frame(mode) if venue == US else None
         factor_sig = (
             frame_sig,
             id(spy_frame) if spy_frame is not None else 0,
@@ -548,6 +576,7 @@ class Monitor:
             bool(instrument.get("is_leveraged")),
             valuation.get("turnover_rate_pct"),
             valuation.get("market_cap"),
+            currency,
         )
         with self.frame_lock:
             cached_af = self.academic_factors.get((mode, allocation.symbol))
@@ -557,6 +586,7 @@ class Monitor:
             factors = compute_academic_factors(
                 frame,
                 spy_frame=spy_frame,
+                usd_turnover=currency == "USD",
                 valuation=valuation,
                 is_fund=is_fund,
                 is_leveraged=bool(instrument.get("is_leveraged")),
@@ -623,7 +653,7 @@ class Monitor:
             forecast=forecast,
         )
         extended_hours = summarize_extended_hours(
-            quote,
+            quote if venue == US else {},
             market,
             long_plan,
             wave_trend,
@@ -634,6 +664,8 @@ class Monitor:
         )
         result = {
             **allocation.model_dump(),
+            "market": {k: market[k] for k in ("code", "name", "timezone", "session", "label", "early_close")},
+            "currency": currency,
             "sleeves": allocation.sleeves(),
             "reconciled": allocation.reconciled,
             "instrument": instrument,
@@ -735,7 +767,7 @@ class Monitor:
             else:
                 plan_status, plan_tone = "区间内运行", "positive"
             plan_detail = (
-                f"失效 ${stop:.2f}（{stop_dist:+.1f}%）· 目标 ${target:.2f}（{target_dist:+.1f}%）"
+                f"失效 {stop:.2f}（{stop_dist:+.1f}%）· 目标 {target:.2f}（{target_dist:+.1f}%）"
             )
         elif stop is not None:
             if close is not None and close <= stop:
@@ -743,14 +775,14 @@ class Monitor:
             else:
                 plan_status, plan_tone = "已设失效价", "neutral"
             dist = f"（{stop_dist:+.1f}%）" if stop_dist is not None else ""
-            plan_detail = f"失效 ${stop:.2f}{dist} · 建议补充目标价"
+            plan_detail = f"失效 {stop:.2f}{dist} · 建议补充目标价"
         elif target is not None:
             if close is not None and close >= target:
                 plan_status, plan_tone = "已达目标价", "warning"
             else:
                 plan_status, plan_tone = "已设目标价", "neutral"
             dist = f"（{target_dist:+.1f}%）" if target_dist is not None else ""
-            plan_detail = f"目标 ${target:.2f}{dist} · 建议补充失效价"
+            plan_detail = f"目标 {target:.2f}{dist} · 建议补充失效价"
         else:
             plan_status, plan_tone = "未设计划价", "muted"
             plan_detail = "点击「编辑计划」设置失效价与目标价"
@@ -796,7 +828,7 @@ class Monitor:
                 val_detail = f"PE {pe:.1f}x · 盈利收益率 {ey:.2f}%"
             elif pe is not None:
                 val_status, val_tone = f"PE {pe:.1f}x", "neutral"
-                val_detail = "等待完整美债利率以计算股债利差"
+                val_detail = "等待完整美债利率以计算股债利差" if market_for(allocation.symbol) == US else "按本地市场估值观察"
             else:
                 val_status, val_tone = "估值缺失", "muted"
                 val_detail = "等待券商更新滚动市盈率"
@@ -830,13 +862,13 @@ class Monitor:
         price_noun = "净值/价格" if is_fund else "股价"
         if close is not None and ma200 is not None and ema20 is not None and ema50 is not None:
             if close >= ma200 and ema20 >= ema50:
-                trend_note = f"收盘高于200日线（${ma200:.2f}），EMA20强于EMA50，中长期趋势完整"
+                trend_note = f"收盘高于200日线（{ma200:.2f}），EMA20强于EMA50，中长期趋势完整"
             elif close >= ma200:
-                trend_note = f"收盘高于200日线（${ma200:.2f}），但EMA20弱于EMA50，短期偏整理"
+                trend_note = f"收盘高于200日线（{ma200:.2f}），但EMA20弱于EMA50，短期偏整理"
             elif ema20 >= ema50:
-                trend_note = f"{price_noun}仍在200日线（${ma200:.2f}）下方，EMA20上穿呈修复态势"
+                trend_note = f"{price_noun}仍在200日线（{ma200:.2f}）下方，EMA20上穿呈修复态势"
             else:
-                trend_note = f"{price_noun}位于200日线（${ma200:.2f}）下方且均线空头排列，趋势偏弱"
+                trend_note = f"{price_noun}位于200日线（{ma200:.2f}）下方且均线空头排列，趋势偏弱"
         else:
             trend_note = "日线样本不足200根，暂无法评估200日长期均线"
 
@@ -898,16 +930,16 @@ class Monitor:
         if in_long and stop is not None and confirmed and close <= stop:
             action, tone, priority = "跌破止损", "danger", 0
             action_meaning = "最新收盘已跌破您设定的止损/失效价，建议立即复核是否止损或减仓"
-            headline = f"收盘价 ${close:.2f} 已跌破计划失效价 ${stop:.2f}（{stop_dist:+.1f}%），需立即复核持有逻辑。"
+            headline = f"收盘价 {close:.2f} 已跌破计划失效价 {stop:.2f}（{stop_dist:+.1f}%），需立即复核持有逻辑。"
             next_step = (
-                f"核对宏观利率与追踪赛道趋势是否走坏；若后续收盘仍未能收回 ${stop:.2f} 上方，按计划评估止损或减仓。"
+                f"核对宏观利率与追踪赛道趋势是否走坏；若后续收盘仍未能收回 {stop:.2f} 上方，按计划评估止损或减仓。"
                 if is_fund
-                else f"核对基本面是否恶化；若后续收盘仍未能收回 ${stop:.2f} 上方，按长期计划评估止损或减仓。"
+                else f"核对基本面是否恶化；若后续收盘仍未能收回 {stop:.2f} 上方，按长期计划评估止损或减仓。"
             )
         elif in_long and target is not None and confirmed and close >= target:
             action, tone, priority = "触及目标", "warning", 1
             action_meaning = "最新收盘已达到或超过您设定的目标价，可评估分批止盈或上移目标"
-            headline = f"收盘价 ${close:.2f} 已达到计划目标价 ${target:.2f}（{target_dist:+.1f}%），当前 {val_brief}。"
+            headline = f"收盘价 {close:.2f} 已达到计划目标价 {target:.2f}（{target_dist:+.1f}%），当前 {val_brief}。"
             next_step = "评估是否分批兑现收益；若继续看好趋势延续，可在「编辑计划」上移目标价与保护线。"
         elif not allocation.reconciled:
             action, tone, priority = "仓位待核", "warning", 2
@@ -961,7 +993,7 @@ class Monitor:
                 risk_brief = "；".join(risks[:2]) if risks else "趋势与动能走弱"
                 headline = f"持仓需关注：{risk_brief}（{val_brief}）。"
                 next_step = (
-                    f"重点盯住失效价 ${stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。{exp_note}"
+                    f"重点盯住失效价 {stop:.2f}（距离 {stop_dist:+.1f}%），观察量价能否企稳修复。{exp_note}"
                     if stop is not None and stop_dist is not None
                     else (
                         f"高波动基金建议尽快设置止损防守位并控制杠杆仓位。{exp_note}"
@@ -974,7 +1006,7 @@ class Monitor:
                 action_meaning = "观察标的日线趋势偏强且无明显技术风险，可结合参考买点关注入场节奏"
                 headline = f"趋势与动能结构偏强{trait_suffix}，无额外技术风险（{val_brief}）。"
                 next_step = (
-                    f"结合趋势通道与参考买点区间（目标 ${target:.2f}）评估分批介入节奏。{exp_note}"
+                    f"结合趋势通道与参考买点区间（目标 {target:.2f}）评估分批介入节奏。{exp_note}"
                     if target is not None
                     else (
                         f"可结合回撤分位与美债利率环境分批关注回踩买点；杠杆类产品须严设止损。{exp_note}"
@@ -987,7 +1019,7 @@ class Monitor:
                 action_meaning = "持仓标的处于上升趋势且无明显技术风险，可顺势持有跟踪"
                 headline = f"多头结构完整{trait_suffix}，趋势与量价健康（{val_brief}）。"
                 next_step = (
-                    f"继续按计划持有，上方关注目标价 ${target:.2f}（距当前 {target_dist:+.1f}%）。{exp_note}"
+                    f"继续按计划持有，上方关注目标价 {target:.2f}（距当前 {target_dist:+.1f}%）。{exp_note}"
                     if target is not None and target_dist is not None
                     else (
                         f"趋势结构良好，留意回撤分位与美债利率变动；可参考移动保护位防范回吐。{exp_note}"
@@ -1001,7 +1033,7 @@ class Monitor:
                 extra = f"存在提示：{risks[0]}" if risks else "结构处于中性区间"
                 headline = f"日线结构中性平稳{trait_suffix}，{extra}（{val_brief}）。"
                 next_step = (
-                    f"维持计划跟踪：失效价 ${stop:.2f} / 目标价 ${target:.2f}。{exp_note}"
+                    f"维持计划跟踪：失效价 {stop:.2f} / 目标价 {target:.2f}。{exp_note}"
                     if stop is not None and target is not None
                     else f"建议补齐计划失效价与目标价，后续收盘按计划复核即可。{exp_note}"
                 )
@@ -1069,6 +1101,9 @@ class Monitor:
             )
             for sleeve in ["long", "short"]
         }
+        for sleeve in weights:
+            if any(s[f"{sleeve}_quantity"] > 0 and s["weight_percent"] is None for s in stocks):
+                weights[sleeve] = None
         return {
             "rules": self.settings.rules.model_dump(),
             "curve": research_context(
@@ -1139,7 +1174,7 @@ class Monitor:
 
     @staticmethod
     def _forming_daily_row(stock: dict, rows: list[dict], now: datetime) -> dict | None:
-        """在美股交易日盘中或收盘确认前，基于实时常规报价生成当日未收盘 K 线（仅用于图表展示，不污染正式指标）。"""
+        """在当地交易日盘中或收盘确认前，基于实时常规报价生成当日未收盘 K 线（仅用于图表展示，不污染正式指标）。"""
         quote = stock.get("quote") or {}
         if quote.get("seeded"):
             return None
@@ -1154,18 +1189,19 @@ class Monitor:
         except (TypeError, ValueError):
             return None
 
-        q_day = q_dt.astimezone(NY).date()
+        venue = market_for(stock.get("symbol", "SPY.US"))
+        q_day = q_dt.astimezone(venue.timezone).date()
         if rows:
             try:
-                last_row_day = datetime.fromisoformat(rows[-1]["timestamp"]).astimezone(NY).date()
+                last_row_day = datetime.fromisoformat(rows[-1]["timestamp"]).astimezone(venue.timezone).date()
                 if q_day <= last_row_day:
                     return None
             except (KeyError, TypeError, ValueError):
                 pass
         import pandas as pd
 
-        cal = calendar()
-        if not cal.is_session(pd.Timestamp(q_day)):
+        cal = calendar(venue)
+        if pd.Timestamp(q_day) not in cal.sessions or q_dt > now:
             return None
         # 当日尚未到开盘时间（例如盘前仅停留在旧常规时间戳）不生成今日常规 K 线
         session_open = cal.session_open(pd.Timestamp(q_day)).to_pydatetime()
@@ -1203,7 +1239,7 @@ class Monitor:
 
     @staticmethod
     def _detect_split_adjustment(
-        existing_bars: list[dict], incoming_bars: list[dict], tolerance: float = 0.005
+        existing_bars: list[dict], incoming_bars: list[dict], tolerance: float = 0.005, market: Market = US
     ) -> bool:
         """比对重叠交易日的已确认前复权收盘价，若变动超过容差（0.5%）说明发生拆股/合股/大额除权，需全量重写历史。"""
         if not existing_bars or not incoming_bars:
@@ -1211,7 +1247,7 @@ class Monitor:
         existing_by_day: dict[str, float] = {}
         for b in existing_bars[-30:]:
             try:
-                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(NY).date().isoformat()
+                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(market.timezone).date().isoformat()
                 close = float(b["close"])
                 if math.isfinite(close) and close > 0:
                     existing_by_day[day_key] = close
@@ -1221,7 +1257,7 @@ class Monitor:
             if not b.get("confirmed"):
                 continue
             try:
-                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(NY).date().isoformat()
+                day_key = datetime.fromisoformat(b["timestamp"]).astimezone(market.timezone).date().isoformat()
                 new_close = float(b["close"])
             except (KeyError, TypeError, ValueError):
                 continue
@@ -1234,6 +1270,7 @@ class Monitor:
     def live_evaluation_for(self, symbol: str, now: datetime | None = None) -> dict:
         """基于最新盘中或盘外行情临时拼装当日未收盘 K 线，复用完整系统规则引擎实时试算指标、评级、买卖点与波浪（绝不污染正式日线与告警）。"""
         now = now or utcnow()
+        venue = market_for(symbol)
         mode = self.settings.mode
         allocation = next((a for a in self.portfolio(mode) if a.symbol == symbol), None)
         if allocation is None:
@@ -1291,8 +1328,8 @@ class Monitor:
             ):
                 import pandas as pd
 
-                cal = calendar()
-                last_day = datetime.fromisoformat(last_confirmed["timestamp"]).astimezone(NY).date()
+                cal = calendar(venue)
+                last_day = datetime.fromisoformat(last_confirmed["timestamp"]).astimezone(venue.timezone).date()
                 next_sess_day = cal.next_session(pd.Timestamp(last_day))
                 next_open = cal.session_open(next_sess_day).to_pydatetime()
                 sess_map = ext.get("sessions") or {}
@@ -1321,7 +1358,7 @@ class Monitor:
         if prov_bar is None:
             return {"available": False, "reason": "当前最新报价已反映在最近已确认收盘日线中"}
 
-        macro_data = self.macro_regime()
+        macro_data = self.macro_regime() if venue == US else {}
         cache_sig = (
             id(frame),
             basis_kind,
@@ -1342,9 +1379,9 @@ class Monitor:
                 return cached[1]
 
         prov_dt = datetime.fromisoformat(prov_bar["timestamp"])
-        eval_now = max(now, bar_end(prov_dt, "day"))
+        eval_now = max(now, bar_end(prov_dt, "day", venue))
         prov_bars = [*confirmed_bars, prov_bar]
-        prov_frame = enrich(prov_bars, "day", eval_now, self.settings.rules)
+        prov_frame = enrich(prov_bars, "day", eval_now, self.settings.rules, venue)
         prov_quote = {
             **(stock.get("quote") or {}),
             "last": prov_bar["close"],
@@ -1359,6 +1396,7 @@ class Monitor:
             self.settings.rules,
             prov_quote,
             demo=False,
+            market=venue,
         )
         prov_close = prov_bar["close"]
         stop, target = allocation.long_levels()
@@ -1374,11 +1412,12 @@ class Monitor:
         is_fund = bool(instrument.get("is_fund"))
         research = stock["research"]
         valuation = self.valuations.get(symbol, {}) if mode == "live" else (research.get("valuation") or {})
-        prov_wave_trend = compute_wave_trend(prov_frame, prov_summary)
+        prov_wave_trend = compute_wave_trend(prov_frame, prov_summary, venue)
         prov_fund_metrics = compute_fund_metrics(prov_frame, prov_summary)
         prov_factors = compute_academic_factors(
             prov_frame,
-            spy_frame=self._spy_frame(mode),
+            spy_frame=self._spy_frame(mode) if venue == US else None,
+            usd_turnover=stock["currency"] == "USD",
             valuation=valuation,
             is_fund=is_fund,
             is_leveraged=bool(instrument.get("is_leveraged")),
@@ -1432,9 +1471,9 @@ class Monitor:
         change_pct = ((prov_close / ref_close - 1.0) * 100.0) if ref_close and ref_close > 0 else None
 
         disclaimer = (
-            "基于最新未收盘行情临时试算（盘外成交偏薄时参考性更低），用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以纽约已确认收盘日线为准。"
+            "基于最新未收盘行情临时试算（盘外成交偏薄时参考性更低），用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以当地已确认收盘日线为准。"
             if not liquid
-            else "基于最新未收盘行情临时试算，用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以纽约已确认收盘日线为准。"
+            else "基于最新未收盘行情临时试算，用于盘中/盘外即时参考；正式复核、风控告警与历史记录仍以当地已确认收盘日线为准。"
         )
         payload = {
             "available": True,
@@ -1476,7 +1515,7 @@ class Monitor:
             bars = self.store.bars(self.settings.mode, symbol, timeframe)
             if not bars and self.settings.mode == "demo" and symbol in {d[0] for d in demo.DEMO_NAMES}:
                 bars = demo.make_bars(symbol, timeframe, utcnow())
-            frame = enrich(bars, timeframe, utcnow(), self.settings.rules)
+            frame = enrich(bars, timeframe, utcnow(), self.settings.rules, market_for(symbol))
         now = utcnow()
         rows = chart_rows(frame, session, count=1000) if frame is not None else []
         if timeframe == "day" and session == "regular" and self.settings.mode == "live":
@@ -1498,6 +1537,7 @@ class Monitor:
                 self.settings.rules,
                 stock["quote"],
                 demo=self.settings.mode == "demo",
+                market=market_for(symbol),
             )
         return {
             "stock": stock,
@@ -1545,7 +1585,8 @@ class Monitor:
 
     def _frame_has_recent_daily(self, symbol: str, now: datetime) -> bool:
         """检查本机缓存日线是否已对齐至最近应完成常规交易日且近200日无交易日缺口。"""
-        expected = latest_expected_end(now, "day", "regular")
+        venue = market_for(symbol)
+        expected = latest_expected_end(now, "day", "regular", venue)
         if expected is None:
             return False
         with self.frame_lock:
@@ -1555,13 +1596,13 @@ class Monitor:
         reg = frame[frame["session"] == "regular"] if "session" in frame.columns else frame
         if reg.empty:
             return False
-        last_end = bar_end(reg["timestamp"].iloc[-1].to_pydatetime(), "day")
+        last_end = bar_end(reg["timestamp"].iloc[-1].to_pydatetime(), "day", venue)
         if last_end < expected:
             return False
-        dates = set(reg["timestamp"].tail(200).dt.tz_convert(NY).dt.date)
+        dates = set(reg["timestamp"].tail(200).dt.tz_convert(venue.timezone).dt.date)
         if not dates:
             return False
-        cal_sessions = calendar().sessions_in_range(min(dates), max(dates))
+        cal_sessions = calendar(venue).sessions_in_range(min(dates), max(dates))
         return all(session.date() in dates for session in cal_sessions)
 
     async def _create_feed_with_fallback(self, credentials: dict) -> LongPortFeed:
@@ -1678,9 +1719,7 @@ class Monitor:
             except Exception:
                 self.valuation_retry = time.monotonic() + 900
             else:
-                self.valuations = valuations
-                self.store.set("valuations:live", valuations)
-                self.valuation_retry = time.monotonic() + 3600
+                self._save_valuations(valuations)
         if self.settings.mode != "live":
             return
         node_note = f"（{self.broker_domain}）" if self.broker_domain else ""
@@ -1791,6 +1830,19 @@ class Monitor:
                         gold_retry = time.monotonic() + 300
             await asyncio.sleep(15)
 
+    def _save_valuations(self, updates: dict):
+        values = {}
+        for symbol, incoming in updates.items():
+            previous = self.valuations.get(symbol, {})
+            current = {**previous, **incoming} if incoming.get("refresh_failed") else dict(incoming)
+            if previous.get("currency") and not current.get("currency"):
+                current["currency"] = previous["currency"]
+            values[symbol] = current
+        self.valuations = values
+        self.store.set("valuations:live", values)
+        failed = any(v.get("refresh_failed") for v in values.values())
+        self.valuation_retry = time.monotonic() + (900 if failed else 3600)
+
     async def _sync_account(self):
         account = await asyncio.to_thread(self.feed.account)
         current = {a.symbol: a.model_dump() for a in self.portfolio("live")}
@@ -1803,7 +1855,8 @@ class Monitor:
             if symbol not in seen:
                 old.update(broker_quantity=0, available_quantity=0, watch_only=True)
         self.store.set("portfolio:live", list(current.values()))
-        self.store.set("account:live", {key: account[key] for key in ["net_assets", "cash"]})
+        self.store.set("account:live", {"net_assets": account["net_assets"], "cash": account["cash"],
+                                        "net_assets_by_currency": account.get("net_assets_by_currency", {})})
         self.unsupported = account["unsupported"]
         self.last_sync = utcnow().isoformat()
         await self._sync_watchlist()
@@ -1934,15 +1987,13 @@ class Monitor:
                     }
                     self.valuation_retry = time.monotonic() + 900
                 else:
-                    self.valuations = valuations
-                    self.store.set("valuations:live", valuations)
-                    self.valuation_retry = time.monotonic() + 3600
+                    self._save_valuations(valuations)
         watchlist_count = sum(1 for a in self.portfolio("live") if a.in_watchlist)
         unsupported_count = len(self.watchlist_unsupported)
         self.last_probe = time.monotonic()
-        msg = f"已同步 {len(self.watchlist_groups)} 个自选分组，共 {watchlist_count} 只美股"
+        msg = f"已同步 {len(self.watchlist_groups)} 个自选分组，共 {watchlist_count} 只标的"
         if unsupported_count:
-            msg += f"（已忽略 {unsupported_count} 只非美股或无效代码）"
+            msg += f"（已忽略 {unsupported_count} 个暂不支持或无效的代码）"
         return {
             "ok": True,
             "mode": "live",
@@ -1985,9 +2036,7 @@ class Monitor:
                 self.valuations = {s: {**self.valuations.get(s, {}), "refresh_failed": True} for s in symbols}
                 self.valuation_retry = time.monotonic() + 900
             else:
-                self.valuations = valuations
-                self.store.set("valuations:live", valuations)
-                self.valuation_retry = time.monotonic() + 3600
+                self._save_valuations(valuations)
         now = utcnow()
         daily_targets = [
             symbol
@@ -2021,7 +2070,8 @@ class Monitor:
             return
         # 检测到拆股、合股或大额除权导致前复权历史价跳变时，全量重写整段前复权日线，杜绝新旧口径拼接断崖
         existing_tail = self.store.bars("live", symbol, "day", count=30)
-        split_shifted = self._detect_split_adjustment(existing_tail, confirmed)
+        venue = market_for(symbol)
+        split_shifted = self._detect_split_adjustment(existing_tail, confirmed, market=venue)
         if split_shifted:
             history = await asyncio.to_thread(self.feed.history, symbol, "day", True)
             full_ok = [b for b in history if b.get("confirmed")]
@@ -2035,9 +2085,9 @@ class Monitor:
             frame = self.frames.get(("live", symbol, "day"))
         cached = set()
         if frame is not None and not frame.empty:
-            cached = set(frame["timestamp"].tail(200).dt.tz_convert(NY).dt.date)
-        observed = cached | {datetime.fromisoformat(b["timestamp"]).astimezone(NY).date() for b in confirmed}
-        expected = calendar().sessions_in_range(min(observed), max(observed))
+            cached = set(frame["timestamp"].tail(200).dt.tz_convert(venue.timezone).dt.date)
+        observed = cached | {datetime.fromisoformat(b["timestamp"]).astimezone(venue.timezone).date() for b in confirmed}
+        expected = calendar(venue).sessions_in_range(min(observed), max(observed))
         missing = not cached or any(session.date() not in observed for session in expected)
         if missing and time.monotonic() >= self.history_retry_at.get(symbol, 0):
             history = await asyncio.to_thread(self.feed.history, symbol, "day", True)
@@ -2073,7 +2123,7 @@ class Monitor:
     async def _extended_quote(self, symbol: str, session_key: str, ext_quote: dict):
         """接收夜盘/盘前/盘后实时推送，仅更新独立 extended 字段，绝不修改常规主价或触发常规盘计划价穿越。"""
         mode = "live"
-        if self.settings.mode != mode or session_key not in {"overnight", "pre", "post"}:
+        if self.settings.mode != mode or market_for(symbol) != US or session_key not in {"overnight", "pre", "post"}:
             return
         try:
             last = float(ext_quote.get("last"))
@@ -2099,7 +2149,7 @@ class Monitor:
         if reg.empty:
             return None
         try:
-            dates = reg["timestamp"].dt.tz_convert(NY).dt.date
+            dates = reg["timestamp"].dt.tz_convert(market_for(symbol).timezone).dt.date
             prior = reg[dates < trade_day]
             if prior.empty:
                 return None
@@ -2113,6 +2163,7 @@ class Monitor:
         if self.settings.mode != mode:
             return
         old = self.quotes.get((mode, symbol), {})
+        zone = market_for(symbol).timezone
         merged_ext = self._merge_extended_maps(old.get("extended"), quote.get("extended"))
         value = {**old, **quote}
         if not quote.get("seeded"):
@@ -2135,13 +2186,13 @@ class Monitor:
                     if merged_ext and merged_ext != old.get("extended"):
                         self.quotes[(mode, symbol)] = {**old, "extended": merged_ext}
                     return  # Late delivery must not rewind price crossing state or the displayed quote.
-                if stamp.astimezone(NY).date() != previous.astimezone(NY).date():
+                if stamp.astimezone(zone).date() != previous.astimezone(zone).date():
                     # 跨交易日时清理上一交易日的盘中 OHLCV，避免旧日开高低混入新一日实时 K 线
                     for k in ("open", "high", "low", "volume", "turnover"):
                         if quote.get(k) is None:
                             value.pop(k, None)
                     if "prev_close" not in quote:
-                        fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
+                        fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(zone).date())
                         if fallback is not None:
                             value["prev_close"] = fallback
                         else:
@@ -2160,7 +2211,7 @@ class Monitor:
                         if cand:
                             value[k] = max(cand)
             elif "prev_close" not in quote and value.get("prev_close") is None:
-                fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(NY).date())
+                fallback = self._fallback_prev_close(mode, symbol, stamp.astimezone(zone).date())
                 if fallback is not None:
                     value["prev_close"] = fallback
                 self.quote_resync_needed = True
@@ -2193,39 +2244,27 @@ class Monitor:
         if self.settings.mode != "live" or self.settings.pause_ordinary:
             return
         now = utcnow()
-        day = now.astimezone(NY).date()
-        cal = calendar()
-        import pandas as pd
-
-        if not cal.is_session(pd.Timestamp(day)):
-            return
-        close = cal.session_close(pd.Timestamp(day)).to_pydatetime()
-        key = f"closing-digest:{day}"
-        if now.timestamp() < close.timestamp() + 600 or self.store.get(key):
-            return
-        longs = [s for s in self.stocks() if "long" in s["sleeves"]]
-        if not longs:
-            return
-        lines = [f"{s['symbol']} {s['long_plan']['status']}" for s in longs]
-        event = EventEngine._event(
-            "live",
-            "PORTFOLIO",
-            "long",
-            "day",
-            "regular",
-            close.isoformat(),
-            "closing_digest",
-            "info",
-            "长期仓收盘摘要",
-            "；".join(lines)[:350],
-            None,
-            [],
-            False,
-            "digest-1.0.0",
-        )
-        self.store.event(event)
-        self.notifications.enqueue(event, self.settings.desktop_notifications, self.settings.qq.enabled)
-        self.store.set(key, True)
+        for venue in (US, HK, CN):
+            cal = calendar(venue)
+            day = now.astimezone(venue.timezone).date().isoformat()
+            if day not in cal.sessions:
+                continue
+            close = cal.session_close(day).to_pydatetime() + venue.closing_auction
+            key = f"closing-digest:{day}" if venue == US else f"closing-digest:{venue.code}:{day}"
+            if now.timestamp() < close.timestamp() + 600 or self.store.get(key):
+                continue
+            allocations = [a for a in self.portfolio() if market_for(a.symbol) == venue and "long" in a.sleeves()]
+            if not allocations:
+                continue
+            lines = [f"{a.symbol} {self.stock(a)['long_plan']['status']}" for a in allocations]
+            event = EventEngine._event(
+                "live", "PORTFOLIO" if venue == US else f"PORTFOLIO.{venue.code}", "long", "day", "regular", close.isoformat(),
+                "closing_digest", "info", f"{venue.name}长期仓收盘摘要", "；".join(lines)[:350],
+                None, [], False, "digest-1.0.0",
+            )
+            self.store.event(event)
+            self.notifications.enqueue(event, self.settings.desktop_notifications, self.settings.qq.enabled)
+            self.store.set(key, True)
 
     async def run(self):
         while True:

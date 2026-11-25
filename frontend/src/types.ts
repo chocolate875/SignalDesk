@@ -167,6 +167,15 @@ export type ExtendedHoursSummary = {
 };
 export type Stock = {
   symbol: string;
+  currency: string | null;
+  market: {
+    code: "US" | "HK" | "CN";
+    name: string;
+    timezone: string;
+    session: string;
+    label: string;
+    early_close: boolean;
+  };
   name: string;
   sleeves: string[];
   instrument?: InstrumentInfo;
@@ -580,7 +589,7 @@ export type Dashboard = {
     weak: number;
     average: number | null;
     risk_count: number;
-    sleeve_weights: Record<string, number>;
+    sleeve_weights: Record<string, number | null>;
     buy_rated?: number;
     hold_rated?: number;
     sell_rated?: number;
@@ -670,6 +679,15 @@ export const fmt = (n: number | null | undefined, digits = 1) =>
         maximumFractionDigits: digits,
       });
 export const ticker = (s: string) => s.replace(".US", "");
+export function pricePrefix(currency?: string | null) {
+  switch (currency) {
+    case "USD": return "$";
+    case "HKD": return "HK$";
+    case "CNY":
+    case "CNH": return "¥";
+    default: return currency ? currency + " " : "";
+  }
+}
 export const time = (s: string | null | undefined, zone = "Asia/Shanghai") =>
   s && Number.isFinite(Date.parse(s))
     ? new Date(s).toLocaleString("zh-CN", {

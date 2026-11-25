@@ -113,7 +113,7 @@ def antigravity_acp_command(executable: str) -> list[str]:
 def build_analysis_prompt(snapshot_json: str, schema_dict: dict | None = None) -> str:
     """构建统一的中文长期多头计划复核提示词（所有官方 Agent 共用同一套严谨约束）。"""
     instructions = (
-        "复核美股长期多头计划，只使用下方脱敏JSON。不要调用工具、读取其他文件、联网或执行交易。"
+        "按证券上市市场复核长期多头计划，只使用下方脱敏JSON。不要调用工具、读取其他文件、联网或执行交易。"
         "用中文先给出继续持有、观察、等待、复核止损或分批止盈等一项意见，再给支持和反对证据。"
         "先检查 instrument.asset_type 与 instrument.is_fund："
         "若是上市公司个股，以市盈率、市净率、盈利收益率和利率环境讨论估值（同时参考名义股债利差 yield_gap_pp 与扣除通胀后的实际利率利差 real_yield_gap_pp；两者均不能单独充当预期回报），缺少盈利增长/现金流依据时说明局限；"

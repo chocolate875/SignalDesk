@@ -5,6 +5,7 @@ import numpy as np
 from signaldesk.calendar import NY, calendar
 from signaldesk.demo import DEMO_NAMES, make_bars
 from signaldesk.indicators import enrich, summarize
+from signaldesk.markets import market_for
 from signaldesk.models import RuleSettings
 from signaldesk.wave_trend import compute_wave_trend
 
@@ -50,9 +51,10 @@ def test_wave_trend_all_demo_stocks_and_channel_ordering():
     rules = RuleSettings()
     for symbol, _, _, _, _, _ in DEMO_NAMES:
         bars = make_bars(symbol, "day", now)
-        frame = enrich(bars, "day", now, rules)
-        summary = summarize(frame, "day", "regular", now, rules, demo=True)
-        wt = compute_wave_trend(frame, summary)
+        venue = market_for(symbol)
+        frame = enrich(bars, "day", now, rules, venue)
+        summary = summarize(frame, "day", "regular", now, rules, demo=True, market=venue)
+        wt = compute_wave_trend(frame, summary, venue)
         assert wt["available"] is True
         assert wt["trend"]["direction"] in {"uptrend", "downtrend", "sideways"}
         ch = wt["trend"]["channel"]

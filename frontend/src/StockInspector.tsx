@@ -32,6 +32,7 @@ import {
 } from "./inspectorModules";
 import {
   fmt,
+  pricePrefix,
   labels,
   ticker,
   time,
@@ -86,6 +87,7 @@ function PlanRangeBar({
   onEditPlan: () => void;
   onAdoptTrailingStop?: (stopLoss: number) => void;
 }) {
+  const unit = pricePrefix(stock.currency);
   const stop = stock.long_plan?.stop ?? null;
   const target = stock.long_plan?.target ?? null;
   const close = stock.long_plan?.close ?? stock.quote?.last ?? null;
@@ -154,28 +156,28 @@ function PlanRangeBar({
                 <span
                   className="plan-pin pin-stop"
                   style={{ left: `${stopPct}%` }}
-                  title={`失效价 $${fmt(stop, 2)}`}
+                  title={`失效价 ${unit}${fmt(stop, 2)}`}
                 />
               )}
               {costPct != null && (
                 <span
                   className="plan-pin pin-cost"
                   style={{ left: `${costPct}%` }}
-                  title={`持仓成本 $${fmt(cost, 2)}`}
+                  title={`持仓成本 ${unit}${fmt(cost, 2)}`}
                 />
               )}
               {targetPct != null && (
                 <span
                   className="plan-pin pin-target"
                   style={{ left: `${targetPct}%` }}
-                  title={`目标价 $${fmt(target, 2)}`}
+                  title={`目标价 ${unit}${fmt(target, 2)}`}
                 />
               )}
               {closePct != null && (
                 <span
                   className="plan-pin pin-close"
                   style={{ left: `${closePct}%` }}
-                  title={`已确认收盘 $${fmt(close, 2)}`}
+                  title={`已确认收盘 ${unit}${fmt(close, 2)}`}
                 />
               )}
             </div>
@@ -186,7 +188,7 @@ function PlanRangeBar({
               <small>
                 <i className="dot stop" /> 计划失效价
               </small>
-              <strong>{stop != null ? `$${fmt(stop, 2)}` : "未设置"}</strong>
+              <strong>{stop != null ? `${unit}${fmt(stop, 2)}` : "未设置"}</strong>
               <span>
                 {stopDist != null
                   ? stopDist >= 0
@@ -199,10 +201,10 @@ function PlanRangeBar({
               <small>
                 <i className="dot close" /> 常规收盘
               </small>
-              <strong>{close != null ? `$${fmt(close, 2)}` : "—"}</strong>
+              <strong>{close != null ? `${unit}${fmt(close, 2)}` : "—"}</strong>
               <span>
                 {cost != null
-                  ? `成本 $${fmt(cost, 2)}`
+                  ? `成本 ${unit}${fmt(cost, 2)}`
                   : stock.long_plan.status}
               </span>
             </div>
@@ -210,7 +212,7 @@ function PlanRangeBar({
               <small>
                 <i className="dot target" /> 目标观察价
               </small>
-              <strong>{target != null ? `$${fmt(target, 2)}` : "未设置"}</strong>
+              <strong>{target != null ? `${unit}${fmt(target, 2)}` : "未设置"}</strong>
               <span>
                 {targetDist != null
                   ? targetDist >= 0
@@ -242,8 +244,8 @@ function PlanRangeBar({
           title="近60日峰值减去2.5×ATR14的客观移动保护位（防盈利回吐参考）"
         >
           <span>
-            60日峰值 <b>${fmt(rb.peak_60d, 2)}</b> · 移动保护{" "}
-            <b>${fmt(rb.trailing_stop, 2)}</b>
+            60日峰值 <b>{unit}{fmt(rb.peak_60d, 2)}</b> · 移动保护{" "}
+            <b>{unit}{fmt(rb.trailing_stop, 2)}</b>
             {rb.trailing_breached && <em>（已跌破）</em>}
           </span>
           {canAdoptTrailing && (
@@ -263,6 +265,7 @@ function PlanRangeBar({
 }
 
 function ExtendedHoursCard({ stock }: { stock: Stock }) {
+  const unit = pricePrefix(stock.currency);
   const ext = stock.extended_hours;
   if (!ext || !ext.available || ext.price == null) return null;
 
@@ -298,7 +301,7 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
 
   const conclusion = (() => {
     if (!isLive) {
-      return `今晨${ext.active_label ?? "盘前"}参考 $${fmt(ext.price, 2)}${
+      return `今晨${ext.active_label ?? "盘前"}参考 ${unit}${fmt(ext.price, 2)}${
         gapText ? `（${gapText}）` : ""
       }，当前以常规盘中实时走势为准。`;
     }
@@ -308,7 +311,7 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
         ? `${main}；成交偏薄（${ext.turnover_text}），谨防虚晃。`
         : `${main}。`;
     }
-    return `${ext.active_label ?? "盘外"} $${fmt(ext.price, 2)}${
+    return `${ext.active_label ?? "盘外"} ${unit}${fmt(ext.price, 2)}${
       gapText ? `（${gapText}）` : ""
     }，成交额 ${ext.turnover_text}（${ext.liquidity_label}），波动平稳。`;
   })();
@@ -372,7 +375,7 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
               const sessTag = isAct
                 ? "当前"
                 : s.timestamp
-                  ? time(s.timestamp, "America/New_York").slice(5, 10)
+                  ? time(s.timestamp, stock?.market.timezone).slice(5, 10)
                   : "上日";
               return (
                 <div
@@ -385,7 +388,7 @@ function ExtendedHoursCard({ stock }: { stock: Stock }) {
                     <span>{s.label}</span>
                     <em>{sessTag}</em>
                   </div>
-                  <strong>${fmt(s.price, 2)}</strong>
+                  <strong>{unit}{fmt(s.price, 2)}</strong>
                   <small
                     className={
                       s.gap_pct == null
@@ -421,6 +424,7 @@ function ForecastCard({
   onApplyForecastLevels: (stopLoss: number, sellLow?: number | null) => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const unit = pricePrefix(stock.currency);
   const forecast = stock.forecast;
   const rating = forecast?.rating;
   const levels = forecast?.levels;
@@ -474,7 +478,7 @@ function ForecastCard({
                 </div>
                 <strong>
                   {levels!.breakout_level != null
-                    ? `$${fmt(levels!.breakout_level, 2)}`
+                    ? `${unit}${fmt(levels!.breakout_level, 2)}`
                     : "—"}
                 </strong>
                 <span>
@@ -491,7 +495,7 @@ function ForecastCard({
                 </div>
                 <strong>
                   {levels!.defense_level != null
-                    ? `$${fmt(levels!.defense_level, 2)}`
+                    ? `${unit}${fmt(levels!.defense_level, 2)}`
                     : "—"}
                 </strong>
                 <span>
@@ -505,17 +509,17 @@ function ForecastCard({
             <div className="forecast-level-cell buy">
               <small>参考买区</small>
               <strong>
-                ${fmt(levels!.buy_low, 2)}–${fmt(levels!.buy_high, 2)}
+                {unit}{fmt(levels!.buy_low, 2)}–{unit}{fmt(levels!.buy_high, 2)}
               </strong>
               <span>
-                距买区 {fmt(levels!.buy_discount_pct, 1)}% · 中枢 $
+                距买区 {fmt(levels!.buy_discount_pct, 1)}% · 中枢 {unit}
                 {fmt(levels!.ideal_buy, 2)}
               </span>
             </div>
             <div className="forecast-level-cell sell">
               <small>参考卖区</small>
               <strong>
-                ${fmt(levels!.sell_low, 2)}–${fmt(levels!.sell_high, 2)}
+                {unit}{fmt(levels!.sell_low, 2)}–{unit}{fmt(levels!.sell_high, 2)}
               </strong>
               <span>
                 空间 +{fmt(levels!.upside_pct, 1)}% / +
@@ -524,7 +528,7 @@ function ForecastCard({
             </div>
             <div className="forecast-level-cell stop">
               <small>ATR止损 &amp; 赔率</small>
-              <strong>${fmt(levels!.stop_loss, 2)}</strong>
+              <strong>{unit}{fmt(levels!.stop_loss, 2)}</strong>
               <span>
                 回撤 {fmt(levels!.downside_pct, 1)}% · 赔率{" "}
                 {fmt(levels!.risk_reward_ratio, 2)}:1
@@ -539,10 +543,10 @@ function ForecastCard({
             >
               <div className="vp-summary-row">
                 <span>
-                  筹码峰 POC <b className="amber-text">${fmt(vp.poc, 2)}</b>
+                  筹码峰 POC <b className="amber-text">{unit}{fmt(vp.poc, 2)}</b>
                 </span>
                 <span>
-                  70%价值区 <b>${fmt(vp.val, 2)}–${fmt(vp.vah, 2)}</b>
+                  70%价值区 <b>{unit}{fmt(vp.val, 2)}–{unit}{fmt(vp.vah, 2)}</b>
                 </span>
               </div>
               <div className="vp-summary-row sub">
@@ -648,11 +652,11 @@ function ForecastCard({
                   <div>
                     <b>筹码结构：</b>
                     <span>
-                      近{vp.window_days}日 70%价值区 ${fmt(vp.val, 2)}–${fmt(vp.vah, 2)}
+                      近{vp.window_days}日 70%价值区 {unit}{fmt(vp.val, 2)}–{unit}{fmt(vp.vah, 2)}
                       （集中度 {fmt(vp.concentration_pct, 1)}%）
-                      {vp.support_hvn != null ? ` · 下方筹码峰 $${fmt(vp.support_hvn, 2)}` : ""}
-                      {vp.resistance_hvn != null ? ` · 上方筹码峰 $${fmt(vp.resistance_hvn, 2)}` : ""}
-                      {vp.lvn_price != null ? ` · 低量真空 $${fmt(vp.lvn_price, 2)}` : ""}
+                      {vp.support_hvn != null ? ` · 下方筹码峰 ${unit}${fmt(vp.support_hvn, 2)}` : ""}
+                      {vp.resistance_hvn != null ? ` · 上方筹码峰 ${unit}${fmt(vp.resistance_hvn, 2)}` : ""}
+                      {vp.lvn_price != null ? ` · 低量真空 ${unit}${fmt(vp.lvn_price, 2)}` : ""}
                     </span>
                   </div>
                 )}
@@ -682,16 +686,19 @@ function ForecastCard({
 
 /** 日线结构评分与学术因子模块：一级展示总分、三维进度条与 2×3 学术因子微网格，二级收纳维度解读与辅助指标 */
 function DailyScoreCard({
+  stock,
   activeSummary,
   dimensionNotes,
   isLiveEvalView,
   academicFactors,
 }: {
   activeSummary: Summary | null;
+  stock: Stock;
   dimensionNotes: Record<string, string>;
   isLiveEvalView: boolean;
   academicFactors?: AcademicFactors | null;
 }) {
+  const unit = pricePrefix(stock.currency);
   return (
     <section className="insp-card">
       <div className="insp-card-head">
@@ -700,7 +707,7 @@ function DailyScoreCard({
           {isLiveEvalView
             ? "实时试算 · 未收盘"
             : activeSummary?.as_of
-              ? time(activeSummary.as_of, "America/New_York").slice(0, 10)
+              ? time(activeSummary.as_of, stock?.market.timezone).slice(0, 10)
               : "待更新"}
         </span>
       </div>
@@ -809,7 +816,7 @@ function DailyScoreCard({
           </div>
           <div
             className="acad-cell"
-            title={`George-Hwang 52周高点比：现价 / 近一年最高价 ($${fmt(academicFactors.high_52w, 2)})，越高越贴近主升强趋势锚点`}
+            title={`George-Hwang 52周高点比：现价 / 近一年最高价 (${unit}${fmt(academicFactors.high_52w, 2)})，越高越贴近主升强趋势锚点`}
           >
             <span>52W高点比</span>
             <strong>
@@ -899,7 +906,7 @@ function DailyScoreCard({
               "ATR14",
               "atr",
               2,
-              "14日平均真实波幅（美元）：衡量该股日常正常波动幅度，用于测算合理止损与买卖区间",
+              "14日平均真实波幅（报价币种）：衡量该股日常正常波动幅度，用于测算合理止损与买卖区间",
             ],
             [
               "相对量能 RVOL",
@@ -936,16 +943,17 @@ function DailyScoreCard({
   );
 }
 
-function formatMarketCap(cap: number | null | undefined): string | null {
+function formatMarketCap(cap: number | null | undefined, unit: string): string | null {
   if (cap == null || !Number.isFinite(cap) || cap <= 0) return null;
-  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}T`;
-  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(1)}B`;
-  if (cap >= 1e6) return `$${(cap / 1e6).toFixed(0)}M`;
-  return `$${cap.toFixed(0)}`;
+  if (cap >= 1e12) return `${unit}${(cap / 1e12).toFixed(2)}T`;
+  if (cap >= 1e9) return `${unit}${(cap / 1e9).toFixed(1)}B`;
+  if (cap >= 1e6) return `${unit}${(cap / 1e6).toFixed(0)}M`;
+  return `${unit}${cap.toFixed(0)}`;
 }
 
 /** 估值与资产特征独立模块：个股自动展示估值与美债对照，ETF 自动展示基金与指数特征 */
 function ValuationOrFundCard({ stock }: { stock: Stock }) {
+  const unit = pricePrefix(stock.currency);
   if (stock.instrument?.is_fund) {
     return (
       <section className="insp-card fund-profile-card">
@@ -968,7 +976,7 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
             title={
               stock.fund_metrics?.high_52w != null &&
               stock.fund_metrics?.low_52w != null
-                ? `近${stock.fund_metrics.window_days}日区间：$${fmt(stock.fund_metrics.low_52w, 2)} – $${fmt(stock.fund_metrics.high_52w, 2)}`
+                ? `近${stock.fund_metrics.window_days}日区间：${unit}${fmt(stock.fund_metrics.low_52w, 2)} – ${unit}${fmt(stock.fund_metrics.high_52w, 2)}`
                 : "最新收盘距近1年（252交易日）高点的回撤幅度"
             }
           >
@@ -1057,7 +1065,7 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
   return (
     <section className="insp-card">
       <div className="insp-card-head">
-        <h3>估值与美债对照</h3>
+        <h3>{stock.market.code === "US" ? "估值与美债对照" : "个股估值"}</h3>
         <span
           className={`fresh-tag ${stock.research?.valuation?.fresh ? "ok" : "stale"}`}
         >
@@ -1087,7 +1095,7 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
             <em>%</em>
           </strong>
         </div>
-        <div className="val-cell">
+        {stock.market.code === "US" && <div className="val-cell">
           <small>盈利收益率 − 10Y美债</small>
           <strong
             className={
@@ -1105,10 +1113,10 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
             {fmt(stock.research?.yield_gap_pp, 2)}
             <em>pp</em>
           </strong>
-        </div>
+        </div>}
       </div>
       {(() => {
-        const capText = formatMarketCap(stock.research?.valuation?.market_cap);
+        const capText = formatMarketCap(stock.research?.valuation?.market_cap, unit);
         const turnPct = stock.research?.valuation?.turnover_rate_pct;
         return (
           <p className="val-footnote">
@@ -1120,7 +1128,7 @@ function ValuationOrFundCard({ stock }: { stock: Stock }) {
             {capText ? ` · 总市值 ${capText}` : ""}
             {turnPct != null ? ` · 换手率 ${fmt(turnPct, 2)}%` : ""}
             （取数 {time(stock.research?.valuation?.fetched_at)}
-            ）。名义与实际利差仅作收益率水平参照，非预期回报。
+            ）。{stock.market.code === "US" && "名义与实际利差仅作收益率水平参照。"}
           </p>
         );
       })()}
@@ -1401,6 +1409,7 @@ export default function StockInspector({
     return true;
   });
 
+  const unit = pricePrefix(stock?.currency);
   const activeSummary = summary ?? stock?.primary ?? null;
   const dimensionNotes = stock?.verdict?.dimension_notes ?? {};
   const agyStatus: AgentProviderStatus | undefined =
@@ -1437,7 +1446,7 @@ export default function StockInspector({
     if (!hasLiveEval || !liveEval) {
       return liveEval?.reason || "当前暂无更新的未收盘行情可试算";
     }
-    const parts = [`按最新价 $${fmt(liveEval.price, 2)} 临时试算指标、买卖点与波浪`];
+    const parts = [`按最新价 ${unit}${fmt(liveEval.price, 2)} 临时试算指标、买卖点与波浪`];
     if (liveScoreDelta != null) {
       parts.push(
         `日线分 ${liveScoreDelta >= 0 ? "+" : ""}${fmt(liveScoreDelta, 1)}`,
@@ -1478,6 +1487,7 @@ export default function StockInspector({
       case "daily_score":
         return (
           <DailyScoreCard
+            stock={stock}
             activeSummary={activeSummary}
             dimensionNotes={dimensionNotes}
             isLiveEvalView={isLiveEvalView}
@@ -1544,7 +1554,7 @@ export default function StockInspector({
                       type="button"
                       className={!isLiveEvalView ? "active" : ""}
                       onClick={() => onEvalModeChange("confirmed")}
-                      title="以最近已确认的纽约收盘前复权日线计算（长期复核与告警基准）"
+                      title="以最近已确认的当地收盘前复权日线计算（长期复核与告警基准）"
                     >
                       收盘确认
                     </button>
@@ -1609,7 +1619,7 @@ export default function StockInspector({
               >
                 <div className="eval-mode-banner-head">
                   <span>
-                    {liveEval.basis_label || "盘中试算"} · $
+                    {liveEval.basis_label || "盘中试算"} · {unit}
                     {fmt(liveEval.price, 2)}
                     {liveEval.change_pct != null
                       ? ` (${liveEval.change_pct >= 0 ? "+" : ""}${fmt(liveEval.change_pct, 1)}%)`
@@ -1842,7 +1852,7 @@ export default function StockInspector({
                       : "Codex CLI"}
                   </span>
                   <span>
-                    依据 {time(analysis.result.data_as_of, "America/New_York")}
+                    依据 {time(analysis.result.data_as_of, stock?.market.timezone)}
                   </span>
                 </div>
                 <p className="codex-conclusion">{analysis.result.conclusion}</p>
@@ -1957,7 +1967,7 @@ export default function StockInspector({
                   </span>
                   <div className="event-body">
                     <div className="event-top">
-                      <b>{e.symbol === "PORTFOLIO" ? "组合摘要" : ticker(e.symbol)}</b>
+                      <b>{e.kind === "closing_digest" || e.symbol === "PORTFOLIO" ? "组合摘要" : ticker(e.symbol)}</b>
                       <small>{time(e.data_as_of)}</small>
                     </div>
                     <strong>{e.title}</strong>

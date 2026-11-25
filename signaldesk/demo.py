@@ -7,7 +7,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from .calendar import NY, bar_end, calendar
+from .calendar import NY, bar_end, calendar, regular_intervals
+from .markets import US, market_for
 from .models import Allocation
 from .research import curve_summary
 
@@ -29,6 +30,9 @@ DEMO_NAMES = [
     ("META.US", "Meta", 582.5, 0, 6, -0.0010),
     ("TSLA.US", "特斯拉", 268.7, 0, 10, -0.0014),
     ("AMD.US", "超威半导体", 153.6, 0, 14, 0.0009),
+    ("700.HK", "腾讯控股", 420.0, 0, 0, 0.0005),
+    ("600519.SH", "贵州茅台", 1450.0, 0, 0, 0.0003),
+    ("000001.SZ", "平安银行", 11.5, 0, 0, 0.0002),
 ]
 
 
@@ -60,6 +64,9 @@ DEMO_PLANS = {
         "stop": 240.0,
         "target": 300.0,
     },
+    "700.HK": {"groups": ["港股观察"]},
+    "600519.SH": {"groups": ["沪深观察"]},
+    "000001.SZ": {"groups": ["沪深观察"]},
     "AMD.US": {"favorite": False, "groups": ["AI 与算力", "成长观察"]},
 }
 
@@ -237,25 +244,29 @@ def make_bars(symbol: str, timeframe: str, now: datetime) -> list[dict]:
     )
     _, _, base, _, _, drift = DEMO_NAMES[n]
     rng = np.random.default_rng(2000 + n + (0 if timeframe == "day" else 100))
-    cal = calendar()
-    end_day = pd.Timestamp(now.astimezone(NY).date())
-    days = cal.sessions_in_range(end_day - pd.Timedelta(days=1500 if timeframe == "day" else 55), end_day)
+    venue = market_for(symbol)
+    cal = calendar(venue)
+    end_day = min(pd.Timestamp(now.astimezone(venue.timezone).date()), cal.last_session)
+    days = cal.sessions_in_range(max(cal.first_session, end_day - pd.Timedelta(days=1500 if timeframe == "day" else 55)), end_day)
     clocks = []
     if timeframe == "day":
         for day in days[-1000:]:
             ts = cal.session_open(day).to_pydatetime()
-            if bar_end(ts, "day") <= now:
+            if bar_end(ts, "day", venue) <= now:
                 clocks.append((ts, "regular"))
     else:
         for day in days[-32:]:
-            midnight = datetime.combine(day.date(), datetime.min.time(), NY)
-            close = cal.session_close(day).to_pydatetime()
-            bounds = [
-                (midnight - timedelta(hours=4), midnight + timedelta(hours=4), "overnight"),
-                (midnight + timedelta(hours=4), midnight + timedelta(hours=9, minutes=30), "pre"),
-                (cal.session_open(day).to_pydatetime(), close, "regular"),
-                (close, midnight + timedelta(hours=17 if close.astimezone(NY).hour < 16 else 20), "post"),
-            ]
+            if venue != US:
+                bounds = [(start, finish, "regular") for start, finish in regular_intervals(cal, day)]
+            else:
+                midnight = datetime.combine(day.date(), datetime.min.time(), NY)
+                close = cal.session_close(day).to_pydatetime()
+                bounds = [
+                    (midnight - timedelta(hours=4), midnight + timedelta(hours=4), "overnight"),
+                    (midnight + timedelta(hours=4), midnight + timedelta(hours=9, minutes=30), "pre"),
+                    (cal.session_open(day).to_pydatetime(), close, "regular"),
+                    (close, midnight + timedelta(hours=17 if close.astimezone(NY).hour < 16 else 20), "post"),
+                ]
             for start, finish, session in bounds:
                 while start + timedelta(minutes=15) <= finish and start + timedelta(minutes=15) <= now:
                     clocks.append((start, session))

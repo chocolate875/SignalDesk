@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .markets import normalize_symbol
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -22,6 +24,7 @@ class StrictModel(BaseModel):
 class Allocation(StrictModel):
     symbol: str
     name: str = ""
+    currency: str | None = None
     long_quantity: float = Field(default=0, ge=0)
     short_quantity: float = Field(default=0, ge=0)
     # Unallocated broker quantity is reconciled by the service, never guessed.
@@ -55,14 +58,7 @@ class Allocation(StrictModel):
     @field_validator("symbol")
     @classmethod
     def validate_symbol(cls, value: str) -> str:
-        import re
-
-        value = value.strip().upper()
-        if not value.endswith(".US"):
-            value += ".US"
-        if not re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}\.US", value):
-            raise ValueError("请输入美股代码，例如 AAPL.US")
-        return value
+        return normalize_symbol(value)
 
     @property
     def reconciled(self) -> bool:

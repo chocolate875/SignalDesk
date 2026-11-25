@@ -146,12 +146,12 @@ def _risk_notice(asset_type: str, leverage: float | None, is_inverse: bool) -> s
     if asset_type == "fund":
         return "属于多标的组合或封闭式基金，需关注底层组合持仓与二级市场折溢价，不适用单一公司 PE/PB 口径。"
     if asset_type in {"broad_etf", "sector_etf"}:
-        return "指数/行业 ETF 持有成分股篮子，券商单股口径 PE/PB 易失真；本栏自动改用回撤分位、历史波动率与美债利率环境评估。"
+        return "指数/行业 ETF 持有成分股篮子，券商单股口径 PE/PB 易失真；本栏自动改用回撤分位、历史波动率等基金特征评估。"
     return ""
 
 
 def classify_instrument(symbol: str, name: str = "") -> dict:
-    """确定性识别美股标的是上市公司个股，还是宽基/行业/商品/杠杆 ETF 或基金。"""
+    """确定性识别标的是上市公司个股，还是宽基/行业/商品/杠杆 ETF 或基金。"""
     sym = (symbol or "").strip().upper()
     clean_name = (name or "").strip()
 

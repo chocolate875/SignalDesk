@@ -19,7 +19,7 @@ import { CanvasRenderer } from "echarts/renderers";
 import { HelpCircle, Maximize2, Minimize2, X } from "lucide-react";
 import { IndicatorGuideMenu } from "./GuidePopover";
 import type { ChartRow, Detail, EvalMode, Stock, WavePivot, WaveTrend } from "./types";
-import { fmt, ticker, time } from "./types";
+import { fmt, pricePrefix, ticker, time } from "./types";
 
 echarts.use([
   CandlestickChart,
@@ -117,12 +117,6 @@ function inferPresetRange(
   return -1;
 }
 
-const NY_DATE_FMT = new Intl.DateTimeFormat("sv-SE", {
-  timeZone: "America/New_York",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
 
 function safeNumber(v: unknown): number | null {
   if (v == null || v === "") return null;
@@ -391,10 +385,12 @@ function OhlcHud({
 
 function WaveTrendSummaryPill({
   wt,
+  unit,
   symbol,
   forecastStop,
 }: {
   wt: WaveTrend;
+  unit: string;
   symbol: string;
   forecastStop: number | null | undefined;
 }) {
@@ -444,8 +440,8 @@ function WaveTrendSummaryPill({
   const invShort =
     inv != null
       ? isDown
-        ? ` · 站上前高 $${fmt(inv, 2)} 反转`
-        : ` · 破前低 $${fmt(inv, 2)} 失效`
+        ? ` · 站上前高 ${unit}${fmt(inv, 2)} 反转`
+        : ` · 破前低 ${unit}${fmt(inv, 2)} 失效`
       : "";
 
   // 查找对应这条结构线的已确认波段拐点，标明来源日期与浪号
@@ -467,8 +463,8 @@ function WaveTrendSummaryPill({
   const quickTip =
     inv != null
       ? isDown
-        ? `点击查看说明：$${fmt(inv, 2)} 是最近已确认波段前高，有效站上才代表空头下降结构反转`
-        : `点击查看说明：$${fmt(inv, 2)} 是最近已确认波段前低（如前回调低点），收盘跌破代表当前趋势结构失效`
+        ? `点击查看说明：${unit}${fmt(inv, 2)} 是最近已确认波段前高，有效站上才代表空头下降结构反转`
+        : `点击查看说明：${unit}${fmt(inv, 2)} 是最近已确认波段前低（如前回调低点），收盘跌破代表当前趋势结构失效`
       : "点击查看当前波浪与趋势结构说明";
 
   return (
@@ -501,8 +497,8 @@ function WaveTrendSummaryPill({
               <b>
                 {inv != null
                   ? isDown
-                    ? `「站上前高 $${fmt(inv, 2)} 反转」是什么意思？`
-                    : `「破前低 $${fmt(inv, 2)} 失效」是什么意思？`
+                    ? `「站上前高 ${unit}${fmt(inv, 2)} 反转」是什么意思？`
+                    : `「破前低 ${unit}${fmt(inv, 2)} 失效」是什么意思？`
                   : "当前波浪与趋势结构说明"}
               </b>
               <small>
@@ -526,23 +522,23 @@ function WaveTrendSummaryPill({
                   <b>1. 这个价格从哪来的？</b>
                   <p>
                     {sourcePivot
-                      ? `取自 ${sourcePivot.date} 已确认的${pivotLabelText}（$${fmt(sourcePivot.price, 2)}），由严格因果拐点算法从历史日线中自动识别。`
-                      : `取自近期已确认波段${isDown ? "高点" : "低点"}（$${fmt(inv, 2)}），由严格因果拐点算法自动识别。`}
+                      ? `取自 ${sourcePivot.date} 已确认的${pivotLabelText}（${unit}${fmt(sourcePivot.price, 2)}），由严格因果拐点算法从历史日线中自动识别。`
+                      : `取自近期已确认波段${isDown ? "高点" : "低点"}（${unit}${fmt(inv, 2)}），由严格因果拐点算法自动识别。`}
                   </p>
                 </div>
                 <div className="wt-explain-row">
                   <b>2. 它在看盘时代表什么？</b>
                   <p>
                     {isDown
-                      ? `这是空头「高点降低」结构的压制位。只有日线有效站上 $${fmt(inv, 2)} 上方，才说明空头下降结构被打破、出现趋势反转信号。`
-                      : `这是道氏「低点抬高」多头结构的最后底线。只要不破 $${fmt(inv, 2)}，上升/震荡波段结构仍成立；若收盘有效跌破该前低，说明当前上涨趋势结构已失效。`}
+                      ? `这是空头「高点降低」结构的压制位。只有日线有效站上 ${unit}${fmt(inv, 2)} 上方，才说明空头下降结构被打破、出现趋势反转信号。`
+                      : `这是道氏「低点抬高」多头结构的最后底线。只要不破 ${unit}${fmt(inv, 2)}，上升/震荡波段结构仍成立；若收盘有效跌破该前低，说明当前上涨趋势结构已失效。`}
                   </p>
                 </div>
                 <div className="wt-explain-row">
                   <b>3. 和图上左侧「参考止损」有什么区别？</b>
                   <p>
                     {forecastStop != null
-                      ? `图上左侧「参考止损 $${fmt(forecastStop, 2)}」是按近期日均波幅（ATR14）测算的单笔交易风控止损线；而这里的 $${fmt(inv, 2)} 是按波段高低拐点划出的大趋势结构线。前者偏仓位止损，后者看大趋势是否破坏，因此两者数值可能不同。`
+                      ? `图上左侧「参考止损 ${unit}${fmt(forecastStop, 2)}」是按近期日均波幅（ATR14）测算的单笔交易风控止损线；而这里的 ${unit}${fmt(inv, 2)} 是按波段高低拐点划出的大趋势结构线。前者偏仓位止损，后者看大趋势是否破坏，因此两者数值可能不同。`
                       : "图上左侧「参考止损」是按近期日均波幅（ATR14）测算的单笔风控止损线；而本价位是按波段高低拐点划出的趋势结构分水岭，两者衡量维度不同。"}
                   </p>
                 </div>
@@ -572,6 +568,10 @@ function Chart({
   theme: string;
   reverse: boolean;
 }) {
+  const zone = detail?.stock.market.timezone ?? "Asia/Shanghai";
+  const dateFmt = useMemo(() => new Intl.DateTimeFormat("sv-SE", { timeZone: zone }), [zone]);
+  const currency = detail?.stock.currency;
+  const unit = pricePrefix(currency);
   const root = useRef<HTMLDivElement>(null);
   const wrapper = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
@@ -657,10 +657,10 @@ function Chart({
     }
     const qMs = Date.parse(liveQuote.timestamp);
     if (!Number.isFinite(qMs)) return base;
-    const qDay = NY_DATE_FMT.format(new Date(qMs));
+    const qDay = dateFmt.format(new Date(qMs));
     const lastRow = base[base.length - 1];
     const lastMs = lastRow?.timestamp ? Date.parse(lastRow.timestamp) : Number.NaN;
-    const lastDay = Number.isFinite(lastMs) ? NY_DATE_FMT.format(new Date(lastMs)) : "";
+    const lastDay = Number.isFinite(lastMs) ? dateFmt.format(new Date(lastMs)) : "";
 
     const pos = (v: unknown) => {
       const n = safeNumber(v);
@@ -731,22 +731,22 @@ function Chart({
         return [...base.slice(0, -1), withLiveIndicators(lastRow)];
       }
       const evMs = liveEvalRow.timestamp ? Date.parse(liveEvalRow.timestamp) : Number.NaN;
-      const evDay = Number.isFinite(evMs) ? NY_DATE_FMT.format(new Date(evMs)) : "";
+      const evDay = Number.isFinite(evMs) ? dateFmt.format(new Date(evMs)) : "";
       if (evDay && (!lastDay || evDay > lastDay)) {
         return [...base, { ...liveEvalRow, intraday_forming: true }];
       }
     }
 
     return base;
-  }, [detail?.rows, detail?.mode, detail?.timeframe, liveQuote, marketSession, evalMode, liveEvalRow]);
+  }, [detail?.rows, detail?.mode, detail?.timeframe, liveQuote, marketSession, evalMode, liveEvalRow, dateFmt]);
 
   const dates = useMemo(() => {
     if (!displayRows.length) return [];
     return displayRows.map((r) => {
       const ms = r?.timestamp ? Date.parse(r.timestamp) : Number.NaN;
-      return Number.isFinite(ms) ? NY_DATE_FMT.format(new Date(ms)) : "";
+      return Number.isFinite(ms) ? dateFmt.format(new Date(ms)) : "";
     });
-  }, [displayRows]);
+  }, [displayRows, dateFmt]);
 
   latestRowsRef.current = displayRows;
   latestDatesRef.current = dates;
@@ -1040,7 +1040,7 @@ function Chart({
     ]
       .filter(({ price }) => price != null)
       .map(({ label, price, color, side }) => ({
-        name: `${label} $${fmt(price, 2)}`,
+        name: `${label} ${unit}${fmt(price, 2)}`,
         yAxis: price as number,
         _side: side,
         lineStyle: { color, width: 1.4, type: "dashed", opacity: 0.85 },
@@ -1108,7 +1108,7 @@ function Chart({
       if (brk != null) {
         const shiftLeft = collidesRightPivot(brk);
         keyLevelLines.push({
-          name: `${fl.breakout_confluence ? "▲ 共振突破" : "▲ 突破"} $${fmt(brk, 2)}`,
+          name: `${fl.breakout_confluence ? "▲ 共振突破" : "▲ 突破"} ${unit}${fmt(brk, 2)}`,
           yAxis: brk,
           _side: "right",
           lineStyle: {
@@ -1132,7 +1132,7 @@ function Chart({
       if (def != null) {
         const shiftLeft = collidesRightPivot(def);
         keyLevelLines.push({
-          name: `${fl.defense_confluence ? "▼ 共振防守" : "▼ 防守"} $${fmt(def, 2)}`,
+          name: `${fl.defense_confluence ? "▼ 共振防守" : "▼ 防守"} ${unit}${fmt(def, 2)}`,
           yAxis: def,
           _side: "right",
           lineStyle: {
@@ -1160,7 +1160,7 @@ function Chart({
         Math.abs(fl.stop_loss - def) / Math.max(def, 1e-6) > 0.012
       ) {
         keyLevelLines.push({
-          name: `ATR止损 $${fmt(fl.stop_loss, 2)}`,
+          name: `ATR止损 ${unit}${fmt(fl.stop_loss, 2)}`,
           yAxis: fl.stop_loss,
           _side: "left",
           lineStyle: { color: defenseColor, width: 1.1, type: "dotted", opacity: 0.65 },
@@ -1179,7 +1179,7 @@ function Chart({
       if (fl.buy_low != null && fl.buy_high != null && fl.buy_high > fl.buy_low) {
         forecastAreas.push([
           {
-            name: `买区 $${fmt(fl.buy_low, 2)}–$${fmt(fl.buy_high, 2)}`,
+            name: `买区 ${unit}${fmt(fl.buy_low, 2)}–${unit}${fmt(fl.buy_high, 2)}`,
             yAxis: fl.buy_low,
             itemStyle: {
               color: dark ? "rgba(16, 185, 129, 0.11)" : "rgba(16, 185, 129, 0.085)",
@@ -1202,7 +1202,7 @@ function Chart({
       if (fl.sell_low != null && fl.sell_high != null && fl.sell_high > fl.sell_low) {
         forecastAreas.push([
           {
-            name: `卖区 $${fmt(fl.sell_low, 2)}–$${fmt(fl.sell_high, 2)}`,
+            name: `卖区 ${unit}${fmt(fl.sell_low, 2)}–${unit}${fmt(fl.sell_high, 2)}`,
             yAxis: fl.sell_low,
             itemStyle: {
               color: dark ? "rgba(59, 130, 246, 0.11)" : "rgba(30, 64, 175, 0.065)",
@@ -1227,7 +1227,7 @@ function Chart({
     if (showVolumeProfile && vp?.available && vp.poc != null) {
       // 筹码峰 POC 置于中段顶部，天然避开左侧「买区/卖区/计划线」与右侧「突破/防守/波浪」
       keyLevelLines.push({
-        name: `筹码峰POC $${fmt(vp.poc, 2)}`,
+        name: `筹码峰POC ${unit}${fmt(vp.poc, 2)}`,
         yAxis: vp.poc,
         _side: "middle",
         lineStyle: { color: pocColor, width: 1.25, type: "dotted", opacity: 0.85 },
@@ -1569,7 +1569,7 @@ function Chart({
         };
         const formatPivotBadge = (p: WavePivot) => {
           const suffix = p.confirmed ? "" : "*";
-          const priceStr = `$${fmt(p.price, 2)}`;
+          const priceStr = `${unit}${fmt(p.price, 2)}`;
           if (p.wave_label) {
             if (p.wave_label === "0") return `起 ${priceStr}`;
             return `${p.wave_label}浪${suffix} ${priceStr}`;
@@ -1751,9 +1751,9 @@ function Chart({
                 ? isLiveEval
                   ? `<b>${liveDates[i] ?? "—"}</b> · 最新行情试算（未收盘临时预览）`
                   : `<b>${liveDates[i] ?? "—"}</b> · 盘中实时（未收盘，不计入正式指标）`
-                : `<b>${liveDates[i] ?? "—"}</b> · 纽约收盘（前复权）`,
+                : `<b>${liveDates[i] ?? "—"}</b> · 当地收盘（前复权）`,
               `开 ${value("open")} · 高 ${value("high")} · 低 ${value("low")} · ${isForming ? "现" : "收"} ${value("close")}`,
-              `成交量 ${formatVolume(row.volume)} · 成交额 $${formatVolume(row.turnover)}`,
+              `成交量 ${formatVolume(row.volume)} · 成交额 ${unit}${formatVolume(row.turnover)}`,
               isForming && !isLiveEval
                 ? "MA / MACD / RSI / 波浪评级仍按最近已确认收盘日线计算"
                 : `RSI14 ${value("rsi")} · MACD柱 ${value("macd_hist", 3)}${isLiveEval ? "（试算）" : ""}`,
@@ -1767,7 +1767,7 @@ function Chart({
                 : "波段拐点";
               const stateText = pv.confirmed ? "已确认" : "进行中";
               lines.push(
-                `<b>${wText}</b> · ${structFull[pv.structure] ?? pv.structure} · $${fmt(pv.price, 2)}（${stateText}）`,
+                `<b>${wText}</b> · ${structFull[pv.structure] ?? pv.structure} · ${unit}${fmt(pv.price, 2)}（${stateText}）`,
               );
             }
             return lines.join("<br>");
@@ -1889,7 +1889,7 @@ function Chart({
   const paneTitles = useMemo(() => {
     if (showMacd && showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "2px", isPrice: true },
+        { label: `日线价格 / ${currency || "本币"}`, top: "2px", isPrice: true },
         { label: "成交量 / 股", top: "46%", isPrice: false },
         { label: "MACD (12, 26, 9)", top: "62%", isPrice: false },
         { label: "RSI (14)", top: "78.5%", isPrice: false },
@@ -1897,7 +1897,7 @@ function Chart({
     }
     if (showMacd || showRsi) {
       return [
-        { label: "日线价格 / 美元", top: "2px", isPrice: true },
+        { label: `日线价格 / ${currency || "本币"}`, top: "2px", isPrice: true },
         { label: "成交量 / 股", top: "58%", isPrice: false },
         {
           label: showMacd ? "MACD (12, 26, 9)" : "RSI (14)",
@@ -1907,10 +1907,10 @@ function Chart({
       ];
     }
     return [
-      { label: "日线价格 / 美元", top: "2px", isPrice: true },
+      { label: `日线价格 / ${currency || "本币"}`, top: "2px", isPrice: true },
       { label: "成交量 / 股", top: "75.8%", isPrice: false },
     ];
-  }, [showMacd, showRsi]);
+  }, [showMacd, showRsi, currency]);
 
   const activeWaveTrend = detail?.stock?.wave_trend;
 
@@ -1956,8 +1956,8 @@ function Chart({
               {detail.mode === "demo" ? "合成行情" : "常规时段 · 前复权"}
             </span>
             <span>
-              {evalMode === "live" ? "试算" : "收盘"} ${fmt(detail.summary?.close, 2)} ·{" "}
-              {time(detail.summary?.as_of, "America/New_York")}（纽约）
+              {evalMode === "live" ? "试算" : "收盘"} {unit}{fmt(detail.summary?.close, 2)} ·{" "}
+              {time(detail.summary?.as_of, zone)}（交易所当地时间）
             </span>
           </div>
         )}
@@ -2105,6 +2105,7 @@ function Chart({
                 {showWaveTrend && activeWaveTrend?.available && (
                   <WaveTrendSummaryPill
                     wt={activeWaveTrend}
+                    unit={unit}
                     symbol={detail?.stock?.symbol ?? ""}
                     forecastStop={detail?.stock?.forecast?.levels?.stop_loss}
                   />

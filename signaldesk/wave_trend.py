@@ -1,4 +1,4 @@
-"""Causal Elliott Wave & Trend Channel analysis for US daily candlesticks."""
+"""Causal Elliott Wave & Trend Channel analysis for regular daily candlesticks."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .calendar import NY
 from .forecast import _contiguous_regular_tail
 from .indicators import finite
+from .markets import US, Market
 
 WAVE_DISCLAIMER = "基于已确认日线与因果拐点算法测算中级波浪（126日回归通道 + 2.8×ATR14/6.5%滤网），仅作结构复核参考，不构成投资建议。"
 TREND_CHANNEL_WINDOW = 126
@@ -55,15 +55,15 @@ def _unavailable_wave_trend(reason: str = "有效连续常规日线不足 60 根
     }
 
 
-def _ny_date_str(ts) -> str:
+def _date_str(ts, market: Market) -> str:
     if isinstance(ts, pd.Timestamp):
         dt = ts.to_pydatetime()
     else:
         dt = ts
-    return dt.astimezone(NY).date().isoformat()
+    return dt.astimezone(market.timezone).date().isoformat()
 
 
-def _causal_swings(tail: pd.DataFrame) -> list[dict]:
+def _causal_swings(tail: pd.DataFrame, market: Market = US) -> list[dict]:
     """Strictly causal ATR-adaptive swing detection (no future bar lookahead)."""
     if tail is None or tail.empty:
         return []
@@ -82,7 +82,7 @@ def _causal_swings(tail: pd.DataFrame) -> list[dict]:
     highs = clean["high"].to_numpy(dtype=float)
     lows = clean["low"].to_numpy(dtype=float)
     closes = clean["close"].to_numpy(dtype=float)
-    dates = [_ny_date_str(ts) for ts in clean["timestamp"]]
+    dates = [_date_str(ts, market) for ts in clean["timestamp"]]
     n = len(clean)
     if n < 20:
         return []
@@ -219,7 +219,7 @@ def _causal_swings(tail: pd.DataFrame) -> list[dict]:
     return swings
 
 
-def _compute_trend_channel(tail: pd.DataFrame, atr: float) -> dict:
+def _compute_trend_channel(tail: pd.DataFrame, atr: float, market: Market = US) -> dict:
     """Linear regression parallel trend channel over the recent confirmed window (126 trading days ≈ 6M)."""
     win = min(len(tail), TREND_CHANNEL_WINDOW)
     if win < 30:
@@ -260,8 +260,8 @@ def _compute_trend_channel(tail: pd.DataFrame, atr: float) -> dict:
     return {
         "available": True,
         "window": win,
-        "start_date": _ny_date_str(seg["timestamp"].iloc[0]),
-        "end_date": _ny_date_str(seg["timestamp"].iloc[-1]),
+        "start_date": _date_str(seg["timestamp"].iloc[0], market),
+        "end_date": _date_str(seg["timestamp"].iloc[-1], market),
         "start_upper": start_upper,
         "end_upper": end_upper,
         "start_mid": start_mid_r,
@@ -315,9 +315,9 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "tone": "warning" if done else "positive",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})不破浪1底(${p0:.2f})",
+                        f"浪2({p2:.2f})不破浪1底({p0:.2f})",
                         "浪3非最短推动浪",
-                        f"浪4(${p4:.2f})未跌入浪1顶(${p1:.2f})区间",
+                        f"浪4({p4:.2f})未跌入浪1顶({p1:.2f})区间",
                     ],
                     "fib_targets": [
                         {"label": "5浪等长(1.0×W1)", "price": round(p4 + w1, 2), "ratio": 1.0},
@@ -341,9 +341,9 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "tone": "danger",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})未越浪1顶(${p0:.2f})",
+                        f"浪2({p2:.2f})未越浪1顶({p0:.2f})",
                         "主跌浪3非最短推动浪",
-                        f"浪4(${p4:.2f})未越过浪1底(${p1:.2f})",
+                        f"浪4({p4:.2f})未越过浪1底({p1:.2f})",
                     ],
                     "fib_targets": [
                         {"label": "下跌5浪等长参考", "price": round(max(0.01, p4 - w1), 2), "ratio": 1.0},
@@ -364,13 +364,13 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "pattern": "impulse_up",
                     "pattern_label": "上升推动 · 第4浪",
                     "current_wave": "第4浪休整",
-                    "phase_label": f"主升3浪后的强势回踩，未跌破1浪顶 ${p1:.2f}，关注第5浪启动机会",
+                    "phase_label": f"主升3浪后的强势回踩，未跌破1浪顶 {p1:.2f}，关注第5浪启动机会",
                     "tone": "positive",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})不破起涨点(${p0:.2f})",
-                        f"浪3(${p3:.2f})突破浪1顶(${p1:.2f})",
-                        f"浪4(${p4:.2f})不与浪1重叠",
+                        f"浪2({p2:.2f})不破起涨点({p0:.2f})",
+                        f"浪3({p3:.2f})突破浪1顶({p1:.2f})",
+                        f"浪4({p4:.2f})不与浪1重叠",
                     ],
                     "fib_targets": [
                         {"label": "5浪目标(0.618×W1)", "price": round(p4 + 0.618 * w1, 2), "ratio": 0.618},
@@ -386,13 +386,13 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "pattern": "impulse_down",
                     "pattern_label": "下降推动 · 第4浪",
                     "current_wave": "下跌第4浪反抽",
-                    "phase_label": f"空头主跌后的弱反弹，受制于1浪底 ${p1:.2f} 压力，防范第5浪再下探",
+                    "phase_label": f"空头主跌后的弱反弹，受制于1浪底 {p1:.2f} 压力，防范第5浪再下探",
                     "tone": "danger",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})低于起跌点(${p0:.2f})",
-                        f"浪3(${p3:.2f})跌破浪1底(${p1:.2f})",
-                        f"反抽浪4(${p4:.2f})未站回浪1底",
+                        f"浪2({p2:.2f})低于起跌点({p0:.2f})",
+                        f"浪3({p3:.2f})跌破浪1底({p1:.2f})",
+                        f"反抽浪4({p4:.2f})未站回浪1底",
                     ],
                     "fib_targets": [
                         {"label": "1浪底反压位", "price": round(p1, 2), "ratio": 0.0},
@@ -418,8 +418,8 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                         "tone": "warning",
                         "confidence": "中",
                         "rules_passed": [
-                            f"B浪回踩(${p2:.2f})高于起弹点(${p0:.2f})",
-                            f"C浪已越过A浪高点(${p1:.2f})",
+                            f"B浪回踩({p2:.2f})高于起弹点({p0:.2f})",
+                            f"C浪已越过A浪高点({p1:.2f})",
                         ],
                         "fib_targets": [
                             {"label": "C=1.0×A 等长位", "price": round(p2 + w1, 2), "ratio": 1.0},
@@ -431,12 +431,12 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "pattern": "impulse_up",
                     "pattern_label": "上升推动 · 第3浪",
                     "current_wave": "第3浪主升",
-                    "phase_label": f"已突破1浪高点 ${p1:.2f}，处于主升动能释放段，顺势持有为主",
+                    "phase_label": f"已突破1浪高点 {p1:.2f}，处于主升动能释放段，顺势持有为主",
                     "tone": "positive",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})守住浪1起点(${p0:.2f})",
-                        f"浪3(${p3:.2f})有效突破浪1高点(${p1:.2f})",
+                        f"浪2({p2:.2f})守住浪1起点({p0:.2f})",
+                        f"浪3({p3:.2f})有效突破浪1高点({p1:.2f})",
                     ],
                     "fib_targets": [
                         {"label": "3浪扩展(1.618×W1)", "price": round(p2 + 1.618 * w1, 2), "ratio": 1.618},
@@ -456,8 +456,8 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                         "tone": "warning",
                         "confidence": "中",
                         "rules_passed": [
-                            f"B浪反抽(${p2:.2f})未越高点(${p0:.2f})",
-                            f"C浪(${p3:.2f})跌破A浪低点(${p1:.2f})释放回撤",
+                            f"B浪反抽({p2:.2f})未越高点({p0:.2f})",
+                            f"C浪({p3:.2f})跌破A浪低点({p1:.2f})释放回撤",
                         ],
                         "fib_targets": [
                             {"label": "C=0.618×A 支撑", "price": round(max(0.01, p2 - 0.618 * wa), 2), "ratio": 0.618},
@@ -469,12 +469,12 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                     "pattern": "impulse_down",
                     "pattern_label": "下降推动 · 第3浪",
                     "current_wave": "下跌第3浪",
-                    "phase_label": f"跌破1浪低点 ${p1:.2f}，空头主跌动能占优，优先防守观望",
+                    "phase_label": f"跌破1浪低点 {p1:.2f}，空头主跌动能占优，优先防守观望",
                     "tone": "danger",
                     "confidence": "高",
                     "rules_passed": [
-                        f"浪2(${p2:.2f})低于起跌点(${p0:.2f})",
-                        f"浪3(${p3:.2f})跌破浪1低点(${p1:.2f})",
+                        f"浪2({p2:.2f})低于起跌点({p0:.2f})",
+                        f"浪3({p3:.2f})跌破浪1低点({p1:.2f})",
                     ],
                     "fib_targets": [
                         {"label": "下跌3浪(1.618×W1)", "price": round(max(0.01, p2 - 1.618 * wa), 2), "ratio": 1.618},
@@ -495,11 +495,11 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                 "pattern": "impulse_up",
                 "pattern_label": "潜在第2浪回踩",
                 "current_wave": "第2浪蓄势",
-                "phase_label": f"回撤1浪涨幅的 {retrace * 100:.0f}%，守住起涨点 ${p0:.2f} 上方可关注第3浪突破",
+                "phase_label": f"回撤1浪涨幅的 {retrace * 100:.0f}%，守住起涨点 {p0:.2f} 上方可关注第3浪突破",
                 "tone": "positive" if trend_dir != "downtrend" else "neutral",
                 "confidence": "中",
                 "rules_passed": [
-                    f"回踩低点(${p2:.2f})未破起涨点(${p0:.2f})",
+                    f"回踩低点({p2:.2f})未破起涨点({p0:.2f})",
                     f"回撤比例 {retrace * 100:.0f}% 处于常规回调区间",
                 ],
                 "fib_targets": [
@@ -517,11 +517,11 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
                 "pattern": "impulse_down",
                 "pattern_label": "潜在下跌第2浪反抽",
                 "current_wave": "反抽第2浪",
-                "phase_label": f"反弹修复跌幅的 {retrace * 100:.0f}%，受压于起跌点 ${p0:.2f} 下方，防再次回落",
+                "phase_label": f"反弹修复跌幅的 {retrace * 100:.0f}%，受压于起跌点 {p0:.2f} 下方，防再次回落",
                 "tone": "warning",
                 "confidence": "中",
                 "rules_passed": [
-                    f"反抽高点(${p2:.2f})未越起跌点(${p0:.2f})",
+                    f"反抽高点({p2:.2f})未越起跌点({p0:.2f})",
                     f"反抽比例 {retrace * 100:.0f}% 处于弱势修复区",
                 ],
                 "fib_targets": [
@@ -542,7 +542,7 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
     }
 
 
-def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
+def compute_wave_trend(frame: pd.DataFrame | None, summary: dict, market: Market = US) -> dict:
     """Compute causal Elliott Wave count + Dow/Channel trend structure."""
     tail = _contiguous_regular_tail(frame)
     if len(tail) < 60:
@@ -557,8 +557,8 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
     if close is None or close <= 0 or atr is None or atr <= 0:
         return _unavailable_wave_trend("价格或波动率数据无效，暂不识别波浪与趋势结构")
 
-    swings = _causal_swings(tail)
-    channel = _compute_trend_channel(tail, atr)
+    swings = _causal_swings(tail, market)
+    channel = _compute_trend_channel(tail, atr, market)
 
     # Dow Theory structure summary from recent confirmed swings.
     confirmed_h = [s for s in swings if s["kind"] == "H" and s["confirmed"]]
@@ -670,7 +670,7 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
     if direction == "uptrend":
         if pos_pct is not None and pos_pct <= 30:
             action_guide = (
-                f"顺势回踩通道下轨支撑，适合关注低吸节奏；若跌破前低失效位 ${invalidation_level:.2f} 则退出观察。"
+                f"顺势回踩通道下轨支撑，适合关注低吸节奏；若跌破前低失效位 {invalidation_level:.2f} 则退出观察。"
                 if invalidation_level is not None
                 else "顺势回踩通道下轨支撑，适合结合量能关注低吸节奏。"
             )
@@ -678,19 +678,19 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
             action_guide = "处于上升通道上沿偏热区，不宜追高，耐心等回踩中轨/下轨或借压力位分批减仓。"
         else:
             action_guide = (
-                f"顺势持仓为主，上方关注突破前高 ${breakout_level:.2f}，下方以破前低 ${invalidation_level:.2f} 失效为趋势底线。"
+                f"顺势持仓为主，上方关注突破前高 {breakout_level:.2f}，下方以破前低 {invalidation_level:.2f} 失效为趋势底线。"
                 if breakout_level is not None and invalidation_level is not None
                 else "价格位于上升通道中段，顺势跟踪均线支撑与成交量配合。"
             )
     elif direction == "downtrend":
         action_guide = (
-            f"空头通道内高点下移，以观望防守或反弹上轨减仓为主；有效站上 ${invalidation_level:.2f} 再看趋势反转。"
+            f"空头通道内高点下移，以观望防守或反弹上轨减仓为主；有效站上 {invalidation_level:.2f} 再看趋势反转。"
             if invalidation_level is not None
             else "处于下降通道内，暂不盲目抄底，等待底部抬高与均线走平。"
         )
     else:
         action_guide = (
-            f"箱体区间震荡（参考下沿 ${invalidation_level:.2f} / 上沿 ${breakout_level:.2f}），宜高抛低吸或待放量突破后顺势跟随。"
+            f"箱体区间震荡（参考下沿 {invalidation_level:.2f} / 上沿 {breakout_level:.2f}），宜高抛低吸或待放量突破后顺势跟随。"
             if breakout_level is not None and invalidation_level is not None
             else "高低点交错震荡，等待放量突破通道上下轨确认新方向。"
         )
