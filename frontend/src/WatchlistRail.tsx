@@ -327,6 +327,7 @@ export default function WatchlistRail({
           const actionText = s.verdict?.action ?? s.long_plan?.status ?? "观察";
           const actionTip =
             s.verdict?.action_meaning || s.verdict?.headline || actionText;
+          const instrument = s.market.code === "US" ? undefined : s.instrument;
           const changeClass =
             s.change_percent == null
               ? "muted"
@@ -370,17 +371,15 @@ export default function WatchlistRail({
                     />
                   </button>
                   <b className="stock-row-ticker" title={ticker(s.symbol)}>{s.market.code === "CN" ? s.symbol.slice(0, -3) : ticker(s.symbol)}</b>
-                  {s.market.code !== "US" && s.instrument ? (
-                    <span className="market-badge" title={s.instrument.risk_notice || s.instrument.type_label}>
-                      {s.instrument.type_label}
-                    </span>
-                  ) : <span
-                    className={`verdict-chip tone-${tone}`}
-                    title={`${actionText}：${actionTip}`}
-                  >
-                    {actionText}
-                  </span>}
                 </div>
+                <span
+                  className={`stock-row-tag ${instrument ? "market-badge" : `verdict-chip tone-${tone}`}`}
+                  title={instrument
+                    ? [instrument.type_label, instrument.risk_notice].filter(Boolean).join(" · ")
+                    : `${actionText}：${actionTip}`}
+                >
+                  <span>{instrument?.type_label ?? actionText}</span>
+                </span>
                 <strong className="stock-row-price">
                   {s.quote?.last != null ? pricePrefix(s.currency) + fmt(s.quote.last, 2) : "—"}
                 </strong>
@@ -395,33 +394,31 @@ export default function WatchlistRail({
                     {s.name || (s.market.code === "US" ? "观察标的" : "名称待同步")}
                   </span>
                 </div>
-                <div className="stock-row-nums">
-                  <span className={`stock-row-chg ${changeClass}`}>
-                    {s.change_percent != null
-                      ? (s.change_percent >= 0 ? "+" : "") +
-                        fmt(s.change_percent, 2) +
-                        "%"
-                      : "待更新"}
+                <span className={`stock-row-chg ${changeClass}`}>
+                  {s.change_percent != null
+                    ? (s.change_percent >= 0 ? "+" : "") +
+                      fmt(s.change_percent, 2) +
+                      "%"
+                    : "待更新"}
+                </span>
+                {s.forecast?.rating?.available ? (
+                  <span
+                    className={`rating-mini tone-text-${s.forecast.rating.tone}`}
+                    title={s.forecast.rating.summary}
+                  >
+                    {s.forecast.rating.label} {fmt(s.forecast.rating.score, 0)}
                   </span>
-                  {s.forecast?.rating?.available ? (
-                    <span
-                      className={`rating-mini tone-text-${s.forecast.rating.tone}`}
-                      title={s.forecast.rating.summary}
-                    >
-                      {s.forecast.rating.label} {fmt(s.forecast.rating.score, 0)}
-                    </span>
-                  ) : (
-                    <span className="stock-row-meta">
-                      {s.primary?.score != null
-                        ? `分 ${fmt(s.primary.score, 0)}`
-                        : s.instrument?.is_fund
-                          ? s.instrument.type_label
-                          : s.research?.valuation?.pe_ttm != null
-                            ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
-                            : "—"}
-                    </span>
-                  )}
-                </div>
+                ) : (
+                  <span className="stock-row-meta" title={s.primary?.score == null ? s.instrument?.type_label : undefined}>
+                    {s.primary?.score != null
+                      ? `分 ${fmt(s.primary.score, 0)}`
+                      : s.instrument?.is_fund
+                        ? s.instrument.type_label
+                        : s.research?.valuation?.pe_ttm != null
+                          ? `PE ${fmt(s.research.valuation.pe_ttm, 1)}`
+                          : "—"}
+                  </span>
+                )}
               </div>
 
               {s.extended_hours?.available &&
