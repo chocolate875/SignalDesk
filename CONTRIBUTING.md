@@ -21,17 +21,20 @@
 
 ## 第一次参与开发
 
-在克隆后的仓库根目录执行以下命令，启用本仓库的提交模板和中文标题检查。钩子使用项目的 `uv` 环境。
+外部贡献者先在 GitHub 上 fork 仓库，把自己的 fork 克隆到本机。在克隆后的仓库根目录执行以下命令。`origin` 指向你的 fork，`upstream` 指向项目仓库。
 
 ```powershell
 uv sync --frozen
 git config --local core.hooksPath .githooks
 git config --local commit.template .gitmessage
-git fetch origin
-git switch --no-track -c feat/chart-range origin/develop
+git remote add upstream https://github.com/chocolate875/SignalDesk.git
+git fetch upstream
+git switch --no-track -c feat/chart-range upstream/develop
 ```
 
-将示例中的 `feat/chart-range` 换成本次任务的分支名。提交前用 `git diff --staged` 核对内容。推送自己的任务分支后，在 GitHub 选择 `develop` 作为 PR 的 base。
+将 `feat/chart-range` 换成本次任务的分支名。提交前用 `git diff --staged` 核对内容。执行 `git push -u origin feat/chart-range` 后，向 `chocolate875/SignalDesk:develop` 创建 PR。已有仓库写权限且直接克隆上游的成员，可从 `origin/develop` 建立任务分支。
+
+用 Agent 开发时，先让它读取 [AGENTS.md](AGENTS.md)。提交者负责审阅最终差异，在 PR 里列出实际运行的验证，以及需要维护者重点检查的地方。测试行情、通知与 Agent 出站内容时使用合成数据。首次从 fork 提交的工作流可能需要维护者批准运行。
 
 ## 中文提交规范
 
@@ -60,17 +63,9 @@ chore(release): 发布 0.2.0 版本
 
 本地钩子和 GitHub CI 使用同一校验脚本，检查类型、标点和摘要是否含汉字。审查人确认中文表意清楚、正文与改动一致。规则适用于新提交，旧版本的提交保留原文。
 
-## GitHub 首次上线
+## 审查与合并条件
 
-1. 仓库管理员创建空的 GitHub 仓库。核对仓库可见性、成员和写入权限。确认发布后，在本地设置 `origin`，仅推送两个长期分支。
-
-   ```powershell
-   git remote add origin https://github.com/OWNER/SignalDesk.git
-   git push -u origin main develop
-   ```
-
-2. 将默认分支设为 `main`。在 **Settings → General → Pull Requests** 启用 squash 和 merge commit，两者的默认提交信息均选 **Pull request title**。
-3. 首次推送触发 Actions 后，在 **Settings → Rules → Rulesets** 为 `main` 和 `develop` 启用分支保护。要求通过 PR、至少一位其他成员批准、解决审查讨论，并将 **提交规范**、**工程验证** 设为必需检查。禁止强推和删除长期分支，允许发布流程使用合并提交。
-4. **提交规范** 检查 PR 标题、该 PR 引入的每条提交和技能目录历史。首次推送从协作基线 `8cd4ba0` 起检查新增提交，后续推送从上次分支位置起检查。**工程验证** 在 Windows 上执行 Ruff 和最小字号审计，按锁文件安装前端依赖并构建后，再运行全量 pytest。API 测试会请求构建产物中的图标。
-
-本地 `.agents/skills/` 供个人工具使用，Git 忽略该目录。共享的 UI、接口和数据安全约定见 [AGENTS.md](AGENTS.md)。首次发布仅使用上述明确列出的分支，尤其避免镜像推送本机归档引用。
+- `main` 和 `develop` 都通过 PR 更新，禁止强推和删除。合并前须与目标分支保持最新、解决所有审查讨论，并通过 GitHub Actions 的 **提交规范** 和 **工程验证**。若 GitHub 提示分支已落后，先将目标分支的最新提交同步到任务分支，再等待 CI。
+- [CODEOWNERS](.github/CODEOWNERS) 指定 `@chocolate875` 审查全仓库，包括 CI 和规则文件。贡献者的 PR 需要维护者批准，推送影响已有审查的新改动后须重新审批。维护者可以通过 PR 自合，但同样需要通过两项 CI。默认合并标题取自中文 PR 标题。
+- **提交规范** 检查中文 PR 标题与新增提交、误跟踪的忽略文件、本机技能目录历史，以及合入 `main` 的来源分支。**工程验证** 在 Windows 上运行 Ruff、最小字号审计、前端锁定依赖安装、生产构建和全量 pytest。
+- CI 在 `pull_request` 事件下用只读令牌验证外部代码。同一 PR 推送新改动时，旧运行会取消。规则可在仓库的 [Rulesets](https://github.com/chocolate875/SignalDesk/settings/rules) 中查看。
