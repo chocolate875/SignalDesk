@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
@@ -23,11 +23,13 @@ def test_pythonw_server_initializes_without_console_streams(monkeypatch):
 
 
 def test_missing_intraday_bar_resets_signal_warmup():
-    bars = [b for b in demo.make_bars("NVDA.US", "15m", utcnow()) if b["session"] == "regular"]
-    full = enrich(bars, "15m", utcnow(), RuleSettings())
+    # 使用固定交易日收盘后时刻，避免在美股开盘首小时 bars[-5] 恰好落在前一交易日尾盘
+    now = datetime(2026, 11, 18, 22, 0, tzinfo=timezone.utc)
+    bars = [b for b in demo.make_bars("NVDA.US", "15m", now) if b["session"] == "regular"]
+    full = enrich(bars, "15m", now, RuleSettings())
     assert pd.notna(full.iloc[-1].score)
     missing = bars[:-5] + bars[-4:]
-    frame = enrich(missing, "15m", utcnow(), RuleSettings())
+    frame = enrich(missing, "15m", now, RuleSettings())
     assert pd.isna(frame.iloc[-1].score)
 
 
