@@ -1,5 +1,18 @@
 # V0.1.0 验收记录
 
+## 2026-11-25 交接清单 5 项界面精修、COMEX 黄金双源、因果筹码分布与中级波浪升级
+
+- **5 项交接清单落地与顶栏/K 线交互精修。**
+  - **K 线默认视图与跨股缩放保持（[Chart.tsx](../frontend/src/Chart.tsx)）**：将默认范围由 `252` 根改为「近6月」（`DEFAULT_RANGE_BARS = 126`），默认关闭 `MACD` 副图（`showMacd = false`，并在 [GuidePopover.tsx](../frontend/src/GuidePopover.tsx) 标明 `动能强弱 · 默认关闭`）；移除与「近3月（63根）」重复的「最新（60根）」按钮（精简为 `近3月 / 近6月 / 近1年 / 全部`）；建立跨标的共享的视图窗口与二分日期映射（`sharedViewWindow` + `resolveViewWindow`），切换不同标的时严格保持当前缩放跨度与历史时间位置一致。
+  - **顶栏去重与外置三态主题（[App.tsx](../frontend/src/App.tsx)、[style.css](../frontend/src/style.css)）**：精简 `TopbarMoreMenu` 移除重复的连接状态、外观主题与市场大势入口（仅留京/纽双时钟、涨跌配色、通知投递记录）；新增 `ThemeModeSwitch`（`role="radiogroup"` 支持方向键导航，`height: 32px`）外置顶栏右侧，支持 `light / dark / system` 三态并实时监听 `prefers-color-scheme`，同步更新 `document.documentElement`、`meta[name="theme-color"]` 与 ECharts 配色。
+  - **COMEX 黄金公开双源接入（[research.py](../signaldesk/research.py)、[demo.py](../signaldesk/demo.py)、[service.py](../signaldesk/service.py)、[security.py](../signaldesk/security.py)、[GuidePopover.tsx](../frontend/src/GuidePopover.tsx)）**：实现 `parse_yahoo_comex_gold()` / `parse_eastmoney_comex_gold()` / `fetch_comex_gold()`（Yahoo `query1`/`query2` `GC=F` → 东方财富 `101.GC00Y` 热备，避免将 2 个月前 `chartPreviousClose` 误作昨收）与 `gold_context()`（联动 10Y TIPS 实际利率解读）；`Monitor.refresh_macro()` 每 5 分钟刷新并缓存 `comex_gold:live`；`snapshot()` 顶层输出 `gold` 并纳入 `safe_snapshot()` 白名单透传；顶栏胶囊并列展示 `美债10Y · COMEX金`（`<=1360px` 隐藏涨跌幅后缀），二级弹层新增通栏「COMEX 黄金主力与 10Y TIPS 实际利率联动」卡片。
+- **因果筹码分布（Volume Profile）、核心突破/防守位与中级波浪升级。**
+  - **因果筹码引擎与点位呈现（[forecast.py](../signaldesk/forecast.py)、[Chart.tsx](../frontend/src/Chart.tsx)、[StockInspector.tsx](../frontend/src/StockInspector.tsx)）**：新增 `compute_volume_profile()`（126 日三角典型价核 + 90 日半衰期，提取 `POC`、`VAL–VAH`、上下筹码峰 `HVN`、低量真空 `LVN` 与获利/套牢占比），将其与波浪前高/前低和 60 日移动保护共振提炼 `breakout_level`（主要突破位）与 `defense_level`（主要防守位）；K 线主图升级为动态可见窗口紧密 Y 轴（`computeTightPriceBounds` + `datazoom` 实时贴合，显著消除大片上下留白）、买卖区半透明色带（`markArea`）、防重叠碰撞调度的 `▲ 突破 / ▼ 防守` 主线与右侧可一键开关的半透明水平筹码直方图（`custom` series）。
+  - **中级波浪回溯时长升级（[wave_trend.py](../signaldesk/wave_trend.py)、[WaveTrendSection.tsx](../frontend/src/WaveTrendSection.tsx)）**：依据 Frost & Prechter、Lunde & Timmermann (2004) 与 Pagan & Sossounov (2003) 文献，将趋势通道窗口由 `90` 日升至 `126` 日、因果拐点滤网由 `max(2.2×ATR14, 4.5%)` 升至 `max(2.8×ATR14, 6.5%)`、可见拐点上限扩至 `16` 个并输出波浪跨度 `span_days` 与 `degree_label`；顺手修复 [test_desktop_and_gaps.py](../tests/test_desktop_and_gaps.py) 在开盘首小时因依赖墙上时钟偶发的 flaky 边界。
+- **自动化验证与双分辨率浏览器复核。**
+  - 新增 COMEX 黄金双源解析/降级/联动、筹码分布双峰识别/零量降级及中级波浪 126 日通道单元测试；`ruff check signaldesk tests` 零告警，全量 `pytest -q` **111 项全部通过**，全站 CSS `299` 处 `font-size` 最小值保持 `12.0px`（`bad = 0`），`tsc -b && vite build` 零错误构建通过；
+  - 在 `1440×810` 与 `1280×720` 双视口下完成隔离演示实例端到端浏览器复核与两轮细节打磨：顶栏 `52px` 单行零溢出、三态主题与「更多」精简菜单正常、`美债10Y · COMEX金` 弹层完整、`1280×720` 自动隐藏黄金涨跌后缀、主图 Y 轴紧密贴合 K 线、突破/防守/POC/持仓成本/计划失效标签自动错位零重叠、波浪低点胶囊不被底边裁切，全程控制台 **0 errors**。
+
 ## 2026-11-24 项目区前端设计技能（`.agents/skills/`）安装与安全审查
 
 - **技能选型与安装路径**：在仓库根目录 `.agents/skills/` 下安装 4 项互补的纯规范型前端设计技能（无可执行脚本或网络外联逻辑）：

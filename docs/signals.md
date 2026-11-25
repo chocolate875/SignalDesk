@@ -49,6 +49,8 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 
 取美国财政部同一观察日的 3 个月（`BC_3MONTH`）、2 年期（`BC_2YEAR`）和 10 年期（`BC_10YEAR`）国债平价收益率。期限利差 `10Y-2Y = (10 年期 − 2 年期) × 100 bp`，`10Y-3M = (10 年期 − 3 个月) × 100 bp`，未来 12 个月衰退参考概率采用纽约联储单变量 Probit 基准公式 `Φ(-0.5333 - 0.6330 × (10Y - 3M))`（Estrella & Mishkin 1998），比较窗口为向前 21 个有效观测。个股估值除名义股债利差（盈利收益率 − 10Y 名义美债）外，还同时对照扣除通胀后的 10Y TIPS 实际利率利差（盈利收益率 − `DFII10`，回应 Asness 2003 对 Fed Model 通胀错配批评），两者均仅作收益率水平参照、不充当预期回报。当月样本不足时向前取月度记录，最多读取三个月，刷新失败时显示缓存日期及失败状态。[财政部数据接口](https://home.treasury.gov/treasury-daily-interest-rate-xml-feed)
 
+同步接入免 API Key 的 **COMEX 黄金主力公开双源行情**（`signaldesk/research.py`：`fetch_comex_gold` / `gold_context`）：主源为 Yahoo Finance `GC=F`（`query1`/`query2` 主备节点，近 2 个月日线与最新价；昨收严格取 `previousClose` 或倒数第二根有效收盘价，绝不误用 2 个月前的 `chartPreviousClose`），热备源为东方财富 `101.GC00Y`（`COMEX黄金` 日线回退）。实盘每 5 分钟异步更新并缓存至 `comex_gold:live`（失败保留缓存并标 `refresh_failed = True`），结合 10Y TIPS 实际利率与近 21 日金价变动输出客观联动标签，并在 `snapshot()["gold"]` 与 `safe_snapshot()["research"]["gold"]` 脱敏透传。
+
 ### 宏观水位、流动性与「市场大势」（`macro-1.0.0`）
 
 `signaldesk/macro.py` 定位为**市场整体的风险环境底色**，不做择时信号、不输出 0–100 黑箱总分、不预测指数点位；当前第一阶段仅做展示与脱敏背景透传，**不自动干预个股买卖评级**。
@@ -82,7 +84,7 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 `signaldesk/factors.py` 仅使用本机已确认前复权日线与 `macro-live-fwd-v3` 中的 `SPY` 基准日线进行零未来函数计算：
 
 1. **残差动量信息比（`residual_mom_z`）**：对齐近 `60–252` 个共同交易日，采用 Blitz et al. (2011) 扣市场 `Beta` 不扣自身 `Alpha` 的特质超额收益口径，剔除近 `21` 日短期反转窗口后输出标准化信息比（$\sum (r_i - \hat{\beta} r_m) / (\sigma_e \sqrt{L})$）。
-2. **蛙跳动量 / 信息离散度（`info_discreteness` / `id_label`）**：按 Da, Gurun & Warachka (2014) 计算 $ID = \text{sign}(R) \times (\%\text{下跌日} - \%\text{上涨日})$，区分「连续慢牛」（`ID <= -0.06`）、「节奏均衡」与「脉冲跳涨」（`ID >= +0.08`）。
+2. **蛙跳动量 / 信息离散度（`info_discreteness` / `id_label`）**：按 Da, Gurun & Warachka (2014) 计算 $ID = \text{sign}(R) \times (\%\text{下跌日} - \%\text{上涨日})$，在正收益时区分「连续慢牛」（`ID <= -0.10`）、「节奏均衡」与「脉冲跳涨」（`ID >= +0.05`），负收益且 `ID <= -0.10` 标为「持续阴跌」。
 3. **52 周高点比（`high_52w_ratio`）**：George & Hwang (2004) `close / high_52w` 锚定比，统一覆盖个股与 ETF。
 4. **三维尾部与摩擦画像**：融合隔夜跳空与日内振幅的 **Yang-Zhang 20/60 日无偏年化波动率**（`yang_zhang_hv20_pct` / `yang_zhang_hv60_pct`）、`SPY` 下跌日条件敏感度 **下行 Beta**（`downside_beta`）、近 21 日最大 5 日均值涨幅 **`MAX5` 彩票过热**（`max5_21d_pct` / `lottery_overheated`）、**近 60 日已实现偏度**（`realized_skew_60d`）与 **20 日 `Amihud` 非流动性冲击**（`amihud_20d`）。
 
@@ -125,8 +127,8 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 
 每只股票由 `signaldesk/wave_trend.py` 的 `compute_wave_trend()` 基于连续已确认常规时段日线尾部序列（要求 `>= 60` 根且收盘价与 `ATR14` 有效）执行严格因果计算，输出 `trend`（道氏结构与线性回归平行趋势通道）与 `wave`（艾略特波浪识别与斐波那契测算）：
 
-1. **严格因果摆动拐点（ATR 自适应 ZigZag）**：仅按时间从左到右顺序扫描已确认 K 线，反转阈值取 `max(2.2 × ATR14_i, 4.5% × close_i)`（ATR14 预热期内使用截至当日的因果滚动波幅均值）。只有当后续 K 线反向突破阈值时才确认拐点（`confirmed = True`），当前尚未反转的末端极值单独标记为 `confirmed = False`（图上以虚线与 `*` 区分），严禁未来数据泄露；对相邻同向确认拐点标注道氏结构 `HH`（高点抬高）/ `HL`（低点抬高）/ `LH`（高点降低）/ `LL`（低点降低）。
-2. **线性回归平行趋势通道与方向判定**：对最近 `min(len, 90)` 根连续有效常规日线拟合普通最小二乘回归中轨 `mid(t)`，取 `max(1.75 × σ_resid, P88(|resid|), 1.25 × ATR14, 2% × close)` 作为平行通道半宽，确保上下轨满足 `lower < mid < upper`；综合道氏高低点偏向、`MA20/MA50/MA200` 排列与 20 日通道斜率判定 `上升趋势` / `下降趋势` / `箱体震荡`，计算收盘价在通道内的相对分位 `channel_position_pct`、突破确认位 `breakout_level`（前高）与趋势结构防守/反转位 `invalidation_level`（多头前低 / 空头前高）。
+1. **严格因果摆动拐点（中级波浪 ATR 自适应 ZigZag）**：仅按时间从左到右顺序扫描已确认 K 线，反转阈值采用面向美股中长期复核的中级波浪滤网 `max(2.8 × ATR14_i, 6.5% × close_i)`（参考 Frost & Prechter 中级浪尺度、Lunde & Timmermann 2004 与 Pagan & Sossounov 2003 股市拐点过滤实证，有效滤除 4%–5% 的次级毛刺震荡；ATR14 预热期内使用截至当日的因果滚动波幅均值）。只有当后续 K 线反向突破阈值时才确认拐点（`confirmed = True`），当前尚未反转的末端极值单独标记为 `confirmed = False`（图上以虚线与 `*` 区分），严禁未来数据泄露；对相邻同向确认拐点标注道氏结构 `HH` / `HL` / `LH` / `LL`，最多保留最近 `16` 个拐点并输出实际自然日跨度（`span_days`）与波浪级别标签（`degree_label`）。
+2. **线性回归平行趋势通道与方向判定**：对最近 `min(len, 126)` 根（约 6 个月，与 K 线默认看盘视图及 126 日筹码分布同频）连续有效常规日线拟合普通最小二乘回归中轨 `mid(t)`，取 `max(1.75 × σ_resid, P88(|resid|), 1.25 × ATR14, 2% × close)` 作为平行通道半宽，确保上下轨满足 `lower < mid < upper`；综合道氏高低点偏向、`MA20/MA50/MA200` 排列与 20 日通道斜率判定 `上升趋势` / `下降趋势` / `箱体震荡`，计算收盘价在通道内的相对分位 `channel_position_pct`、突破确认位 `breakout_level`（前高）与趋势结构防守/反转位 `invalidation_level`（多头前低 / 空头前高）。
 3. **艾略特波浪铁律校验与诚实降级**：从尾部因果拐点匹配上升/下降推动浪（`0→1→2→3→4→5` 或进行中的 2/3/4 浪）及三浪调整结构（`0→A→B→C`），严格校验三条核心规则（浪 2 不破浪 1 起点、浪 3 非最短推动浪、浪 4 不与浪 1 价格区间重叠），并输出关键斐波那契测算位（`0.618 / 1.0 / 1.618`）。若近期拐点未形成清晰浪型，绝不强行套用 1–5 浪，诚实标记为 `箱体整理 / 待定浪` 并仅展示客观高低点结构与趋势通道。
 4. **脱敏边界与免责属性**：`safe_snapshot()` 仅透传脱敏的 `wave_trend` 方向、浪型阶段与结构位摘要，不含账户与仓位隐私；所有波浪与趋势通道结果仅作客观结构复核参考，不构成投资建议。
 
@@ -135,9 +137,11 @@ RVOL日线基准为此前20个已完成交易日的成交量均值；分时基�
 每只股票由 `signaldesk/forecast.py` 的 `compute_forecast()` 基于已确认日线序列、技术摘要、严格因果学术因子、波浪结构位、估值/美债研究上下文、宏观大势与长期计划价进行确定性因果计算，输出 `levels`（参考买卖点与防守止损）、`rating`（5 级综合评级）与 `risk_budget`（波动率与宏观联动风险预算及 60 日移动保护）。
 
 1. **前置因果条件**：仅截取最近一段无中断的连续有效常规时段（`regular`）日线尾部序列，要求连续有效常规日线 `>= 60` 根、`summary.valid == True`、`summary.confirmed_price_available == True`、`close >= 0.05` 且 `ATR14 > 0`。历史不足、缺交易日断档切断预热或行情失效时，诚实返回 `levels.available = False` 与 `rating.code = "unavailable"`（`暂不评级`）。
-2. **去重锚点测算与严格单调约束**：合并高度重合的 `MA20 / EMA20 / BOLL 中轨` 为单一「20 日趋势中枢」，结合 `BOLL 上/下轨`、`MA50`、`MA200`、近 20/60 日高低点、波浪前高突破位/前低结构位、20 日枢轴支撑/阻力（`S1`/`R1`）及 `ATR14` 波动倍数，分别锚定参考买点上沿（`buy_high`）、深度买点（`buy_low`）、防守止损（`stop_loss`）、第一卖点（`sell_low`）与第二卖点（`sell_high`）。经 `math.floor(close * 100) / 100` 与两位小数舍入后，强制满足严格单调关系：
-   `0 < stop_loss < buy_low < buy_high <= close < sell_low < sell_high`
-   同时输出买点中枢 `ideal_buy`、现价盈亏比 `risk_reward_ratio`、买点盈亏比 `entry_risk_reward_ratio` 与位置标记 `position_label`（`接近买点区` / `区间中段` / `接近卖点压力`）。
+2. **严格因果 126 日筹码分布（`volume_profile`）与共振防守/突破点位**：
+   - 基于最近 `min(len, 126)` 根有效有量常规日线（最少 40 根、无量时诚实返回 `available = False`）划为 28 档价格桶，每根 K 线成交量按以典型价 `(H + L + 2C) / 4` 为峰值的三角核分配至 `[low, high]` 覆盖桶并施加 90 交易日半衰期温和衰减；计算主筹码峰 **`POC`**、70% 价值区 **`VAL–VAH`**、局部高量支撑/压力峰 **`support_hvn / resistance_hvn`**、低量真空 **`lvn_price`**、筹码集中度及获利/套牢盘占比。
+   - **去重锚点与严格单调约束**：在均线（`MA20 / MA50 / MA200`）、布林带、20/60 日高低点、波浪前高/前低与枢轴位基础上，高优先级融入筹码锚点（`POC / VAL / VAH / 上下筹码峰`），经 `math.floor(close * 100) / 100` 与两位小数舍入后强制满足：
+     `0 < stop_loss < buy_low < buy_high <= close < sell_low < sell_high`
+   - **核心突破位（`breakout_level`）与核心防守位（`defense_level`）**：分别综合「波浪前高 + 筹码价值区上沿 VAH / 上方筹码峰 + 箱体上沿」与「筹码价值区下沿 VAL / 下方筹码峰 + 波浪前低 + 60 日移动保护位」计算，并在近距（`<= max(0.85×ATR14, 1.8%×close)`）多维重合时显式标记为「共振突破 / 共振防守」；同时在 `safe_snapshot()["forecast"]["volume_profile"]` 与 `levels` 中脱敏透传摘要。
 3. **正交四维加权 5 级评级（消除二次扣分）**：
    - 维度与基准权重：`技术结构`（个股/普通 ETF 40%，杠杆 ETF 45%：在日线 `summary.score` 基础上叠加残差动量 `residual_mom_z`、FIP 趋势连续度 `id_label` 与 `52W` 高点比 `high_52w_ratio` 修正）、`估值利率`（个股 30%，融合名义股债利差 `yield_gap_pp` 与 10Y TIPS 实际利率利差 `real_yield_gap_pp`；ETF 改为近 1 年回撤分位与 10Y 变动）、`点位赔率`（个股 20%，普通 ETF 25%，杠杆 ETF 20%）、`风险控制`（个股/普通 ETF 10%，杠杆 ETF 15%：彻底移除对日线已计入的 `RSI`/`MA20 偏离` 的重复扣分，正交评估 `MAX5` 彩票过热、`downside_beta`、Yang-Zhang 60 日年化波动率、`Amihud` 非流动性与高换手拥挤）。若估值数据缺失或过期，其余有效维度权重自动归一化至 100%。
    - 五级映射：`>= 78` `strong_buy`（强烈买入，5 星）、`>= 64` `buy`（建议买入，4 星）、`>= 46` `hold`（中性观望，3 星）、`>= 32` `reduce`（谨慎减持，2 星）、`< 32` `sell`（建议卖出，1 星），并依估值/利率新鲜度与独立风险数给出置信度（`高` / `中` / `低`）。

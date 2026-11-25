@@ -1,8 +1,8 @@
 # SignalDesk 工程交接、Git 远程发布清单与待续开发指南
 
-生成时间：2026-11-24  
+生成时间：2026-11-24（已于 2026-11-25 全部落地第四节待续项及筹码/波浪/缩放精修）
 仓库根目录：`SignalDesk/`（独立 Git 仓库，当前分支 `main`）  
-当前状态：**开发已按指令安全暂停，工作区干净，全量 108 项自动化测试通过，随时可推送远程仓库或无缝恢复开发。**
+当前状态：**第四节 5 项用户批注与延伸的筹码分布、紧密 K 线缩放及中级波浪升级已全部完成并通过全量 111 项自动化测试与 `1440×810` / `1280×720` 双分辨率浏览器验收。**
 
 ---
 
@@ -78,23 +78,23 @@
 
 ---
 
-## 四、已暂停待续任务：5 项用户批注与前端优化精准实施指南（恢复开发第一步）
+## 四、已完成交接任务清单：5 项用户批注与 K 线筹码/波浪精修（2026-11-25 全部落地）
 
-以下为用户在实盘看板批注的 5 项体验优化，**前期代码行号定位与数据源实测已全部完成**，下一个开发会话可直接按此清单编码落地（实施时请先阅读 `.agents/skills/` 下的 `frontend-design`、`web-design-guidelines`、`vercel-composition-patterns` 与 `emil-design-eng` 规范，保持当前亮色企业简洁风基调）：
+> 以下 5 项交接任务及用户追加的 K 线紧凑 Y 轴、因果筹码分布（Volume Profile）与防守/突破点位、中级波浪时长升级及跨股缩放保持已全部完成落地并通过 111 项全量测试与双分辨率视觉验收（详见 [verification.md](verification.md)）。
 
-### 1. K 线默认时间范围改为「近6月」
+### 1. [x] K 线默认时间范围改为「近6月」并支持跨股保持缩放位置（去重「最新」按钮）
 - **目标文件**：[`frontend/src/Chart.tsx`](../frontend/src/Chart.tsx)
 - **精确位置**：
   - 第 `439` 行：`const [activeRange, setActiveRange] = useState<number>(252);` → 改为 `126`（提取常量 `const DEFAULT_RANGE_BARS = 126;`）；
   - 第 `757` 行与第 `760` 行：切股初始化 `setActiveRange(252)` 与 `let left = Math.max(0, rows.length - 252);` → 统一改为 `DEFAULT_RANGE_BARS`（`126`）。
 
-### 2. K 线默认不开启 `MACD` 副图
+### 2. [x] K 线默认不开启 `MACD` 副图
 - **目标文件**：[`frontend/src/Chart.tsx`](../frontend/src/Chart.tsx)
 - **精确位置**：
   - 第 `434` 行：`const [showMacd, setShowMacd] = useState(true);` → 改为 `false`（与 `showRsi = false` 一致，默认仅开启「日线价格 + 成交量」2 窗格，主图纵向空间最大化，用户可随时点击工具栏 `MACD` 按钮开启）；
   - 同步更新 [`GuidePopover.tsx`](../frontend/src/GuidePopover.tsx) 中 `MACD` 说明标签标注为 `默认关闭`。
 
-### 3. 消除顶栏「更多」菜单与外部按钮的功能重复
+### 3. [x] 消除顶栏「更多」菜单与外部按钮的功能重复
 - **目标文件**：[`frontend/src/App.tsx`](../frontend/src/App.tsx)（`TopbarMoreMenu`，约第 `320–418` 行）
 - **问题定位**：
   - 顶栏左侧 `.status-pill-merged` 已展示实时连接状态，「更多」内顶部的 `实时流已连接` 属重复；
@@ -102,14 +102,14 @@
   - 外观主题按钮按第 4 项外置到顶栏后，也从「更多」中移除；
 - **精简后「更多」定位**：收敛为清爽无重复的二级辅助面板（仅保留：北京/纽约双时钟、红涨绿跌/绿涨红跌配色切换、通知投递记录）。
 
-### 4. 外观深浅色切换外置到顶栏，并支持「跟随系统」三态
+### 4. [x] 外观深浅色切换外置到顶栏，并支持「跟随系统」三态
 - **目标文件**：[`frontend/src/App.tsx`](../frontend/src/App.tsx)（约第 `424–470`、`883–910` 行）与 [`frontend/src/style.css`](../frontend/src/style.css)
 - **实现要点**：
   - 新增类型 `ThemeMode = "light" | "dark" | "system"`（`localStorage` 键如 `sd-theme-mode`，兼容读取旧 `sd-theme-v2`）；
   - 通过 `window.matchMedia("(prefers-color-scheme: dark)")` 监听系统主题变更事件（`change`），计算实际生效的 `resolvedTheme: "light" | "dark"`，写入 `document.documentElement.dataset.theme = resolvedTheme` 并传给 `<Chart theme={resolvedTheme} />`；
   - 在顶栏右侧 `.topbar-right`（「更多」左侧）放置精致紧凑的三态切换分段控件或带即时切换胶囊（`Sun` 浅色 / `Moon` 深色 / `Monitor` 跟随系统，`height: 32px`，符合 `emil-design-eng` 轻快过渡与 `a11y` `aria-pressed` / `radiogroup` 规范）。
 
-### 5. 顶栏美债收益率胶囊与二级解读面板新增 COMEX 黄金信息
+### 5. [x] 顶栏美债收益率胶囊与二级解读面板新增 COMEX 黄金信息
 - **本机网络实测已验证可用的免 Key 公开双源方案**（2026-11-24 实测通过）：
   1. **主源（全球通用 JSON）**：Yahoo Finance COMEX 期金主力 `https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF?range=2mo&interval=1d`（及 `query2` 镜像，`User-Agent: Mozilla/5.0`，实测 HTTP `200`，`exchangeName: "CMX"`, `fullExchangeName: "COMEX"`, `currency: "USD"`，单次返回实时价 `regularMarketPrice`、昨收、日内高低与近 2 个月日线以计算 21 日变动 `%`）；
   2. **热备源（中国大陆直连 183ms）**：东方财富 COMEX 黄金主力日线 `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=101.GC00Y&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56&klt=101&fqt=0&lmt=30&end=20500101`（实测 HTTP `200`，返回 `GC00Y COMEX黄金` 最新价、昨收与 21 日序列）；
