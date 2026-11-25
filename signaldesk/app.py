@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import startup
+from . import __version__, startup
 from .broker_oauth import CALLBACK, FLOW_SECONDS
 from .models import (
     AgentProviderId,
@@ -131,7 +131,7 @@ def create_app(directory: Path | None = None, background: bool = True, *, lan: b
         yield
         await monitor.stop()
 
-    app = FastAPI(title="SignalDesk", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app = FastAPI(title="SignalDesk", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.monitor = monitor
     if not lan:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(LOCAL_HOSTS))
@@ -182,7 +182,7 @@ def create_app(directory: Path | None = None, background: bool = True, *, lan: b
 
     @app.get("/api/health")
     async def health():
-        return {"app": "SignalDesk", "version": "0.1.0", "status": monitor.status, "lan": lan}
+        return {"app": "SignalDesk", "version": __version__, "status": monitor.status, "lan": lan}
 
     @app.post("/api/lan/login")
     async def login(request: Request, value: LanLogin):

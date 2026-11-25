@@ -1,6 +1,6 @@
 [project]
 name = "signaldesk"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first US equity long-horizon review workbench with causal academic factors, macro regime, and official multi-agent (ACP / Codex) review"
 readme = "README.md"
 requires-python = ">=3.12"
