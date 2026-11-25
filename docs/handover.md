@@ -1,7 +1,7 @@
 # SignalDesk 工程交接、Git 远程发布清单与待续开发指南
 
 生成时间：2026-11-24（已于 2026-11-25 全部落地第四节待续项及筹码/波浪/缩放精修）
-仓库根目录：`SignalDesk/`（独立 Git 仓库，当前分支 `main`）  
+仓库根目录为 `SignalDesk/`。发布分支为 `main`，开发集成分支为 `develop`。
 当前状态：**第四节 5 项用户批注与延伸的筹码分布、紧密 K 线缩放及中级波浪升级已全部完成并通过全量 111 项自动化测试与 `1440×810` / `1280×720` 双分辨率浏览器验收。**
 
 ---
@@ -19,7 +19,7 @@
 3. **16:9 企业简洁风界面与前端设计技能体系**
    - 补齐多格式品牌图标（`favicon.svg` / `.ico` / `apple-touch-icon.png`），右侧研判栏重构为 7 个可自定义显隐与拖拽排序的独立模块（[inspectorModules.ts](../frontend/src/inspectorModules.ts)）；
    - 全量 `288` 处 CSS `font-size` 最小值保持 `12.0px`（`bad = 0`）；
-   - 项目内置 4 套前端设计与 React 19 工程规范技能于 [`.agents/skills/`](../.agents/skills)（`frontend-design`、`web-design-guidelines`、`vercel-composition-patterns`、`emil-design-eng`）。
+   - 前端设计工具可在开发者本机安装，团队共用的视觉与交互要求见 [AGENTS.md](../AGENTS.md)。
 
 ---
 
@@ -48,33 +48,17 @@
 
 ## 三、Git 远程同步文件完整清单与上传前安全审计
 
-### 1. 受 Git 追踪的同步文件分类清单（共 103 个文件）
+### 1. 发布内容
 
-| 目录 / 类别 | 文件数 | 包含内容说明 |
-|---|---:|---|
-| **根目录工程配置与启停脚本** | 11 | `.env.example`、`.gitattributes`、`.gitignore`、`.python-version`、`pyproject.toml`、`uv.lock`、`AGENTS.md`、`README.md`、`TODO.md`、`Start-SignalDesk.cmd`、`Stop-SignalDesk.cmd` |
-| **自动化初始化脚本（`scripts/`）** | 1 | `scripts/setup.ps1` |
-| **Python 后端核心包（`signaldesk/`）** | 28 | `__init__.py`、`agent_bridge.py`、`app.py`、`broker_oauth.py`、`calendar.py`、`codex_bridge.py`、`demo.py`、`desktop.py`、`events.py`、`extended_hours.py`、`factor_eval.py`、`factors.py`、`forecast.py`、`indicators.py`、`instruments.py`、`launcher.py`、`macro.py`、`models.py`、`notifications.py`、`operators.py`、`providers.py`、`replay.py`、`research.py`、`security.py`、`service.py`、`startup.py`、`storage.py`、`wave_trend.py` |
-| **前端工程源码（`frontend/`）** | 21 | `index.html`、`package.json`、`package-lock.json`、`tsconfig.json`、`vite.config.js`、`public/` 下 3 个品牌图标、`src/` 下 13 个 TS/TSX/CSS 源码文件 |
-| **自动化测试套件（`tests/`）** | 18 | 覆盖因果指标、学术因子、波浪、点位、ETF 分类、拆股与实时试算、宏观、盘外、OAuth、安全隔离与多 Agent ACP 协议的 18 个测试模块（共 108 项用例） |
-| **架构、口径与交接文档（`docs/`）** | 5 | `signals.md`、`research.md`、`research_todo.md`、`verification.md`、`handover.md`（本文档） |
-| **项目级前端设计技能（`.agents/skills/`）** | 19 | `frontend-design`、`web-design-guidelines`、`vercel-composition-patterns`、`emil-design-eng` 规范文档 |
+`main` 和 `develop` 共享前后端源码、测试、工程文档、依赖锁文件、启动脚本、提交钩子与 GitHub 工作流。运行 `git ls-files` 可查看当前分支的完整清单。
 
-### 2. 已严格排除（不进 Git）的本地私密与构建路径（`.gitignore` 已验证）
+### 2. 本地文件
 
-- **私密凭据与实盘状态**：`.env`、`*.encrypted`、`**/credentials/`、`*.db`、`*.sqlite*`、`.runtime/`、`data/`、`logs/`、`**/codex-exports/`、`**/agent-exports/`（且实盘默认存于仓库外的 `%LOCALAPPDATA%\SignalDesk`）；
-- **本地虚拟环境与构建缓存**：`.venv/`、`frontend/node_modules/`、`frontend/dist/`、`__pycache__/`、`.pytest_cache/`、`.ruff_cache/`、`output/`、`.playwright-cli/`（仓库内历史遗留的未追踪 `output/` 与 `.playwright-cli/` 临时截图目录已清理完毕）。
+`.agents/skills/` 仅供开发者本机使用。`.runtime/`、`data/`、`logs/`、凭据、数据库、Agent 导出及 `frontend/dist/` 均由 Git 忽略。真实配置保存在仓库外的数据目录，随仓库发布的配置示例为 `.env.example`。
 
-### 3. 全仓库与历史提交敏感信息扫描结论
+### 3. 首次发布
 
-- 对全部追踪文件及完整 `git log -p --all` 提交历史执行正则扫描：**0 处 API Key / Token / 私钥泄露，0 处本机个人绝对路径硬编码，0 处真实券商持仓股数/成本/资金泄露**；
-- **上传前唯一人工确认项**：历史 Git Commit 的作者元信息为 `Choco <2251094944@qq.com>`。若推送到私有仓库无需任何处理；若推送到完全公开的 GitHub 仓库且不希望公开个人 QQ 邮箱，可在推送前决定是否保留或重写作者邮箱。
-- **推送远程仓库参考命令**（由仓库持有人按需执行）：
-  ```powershell
-  Set-Location D:\Work\Code\Finance\SignalDesk
-  git remote add origin <你的远程仓库URL>
-  git push -u origin main
-  ```
+2026-11-24 的发布前审计记录显示，当时检查的追踪文件和历史未发现密钥或实盘账户数据。Git 提交元数据包含作者邮箱，公开仓库的读者可见。首次推送的分支范围、默认分支及受保护分支的设置见 [协作指南](../CONTRIBUTING.md)。
 
 ---
 

@@ -59,14 +59,10 @@
 
 ---
 
-## 4. UI 视觉规范与项目级前端设计技能（`.agents/skills/`）
+## 4. UI 视觉规范与前端自检
 
-修改前端页面或样式（`frontend/src/`）前，应结合仓库内置的 4 项前端设计与交互工程技能执行设计与自检：
-- **项目级设计技能目录**（[`.agents/skills/`](.agents/skills)）：
-  - `frontend-design`（[SKILL.md](.agents/skills/frontend-design/SKILL.md)）：视觉层级、留白节奏、色彩规划与反 AI 模板化设计；
-  - `web-design-guidelines`（[SKILL.md](.agents/skills/web-design-guidelines/SKILL.md)）：Web 界面可访问性（a11y）、键盘焦点、语义标签与表单/弹层审计清单；
-  - `vercel-composition-patterns`（[SKILL.md](.agents/skills/vercel-composition-patterns/SKILL.md)）：React 19 组件组合、状态提升解耦与显式变体模式；
-  - `emil-design-eng`（[SKILL.md](.agents/skills/emil-design-eng/SKILL.md)）：GPU 合成动效、Popover 原点缩放、`<= 200ms` 缓动与 `prefers-reduced-motion` 微交互细节。
+修改 `frontend/src/` 时检查视觉层级、色彩、键盘焦点、表单和弹层语义、React 组件组合及 reduced-motion 支持。本机已安装的设计技能可辅助自检，`.agents/skills/` 由 Git 忽略。
+
 - **色彩与质感**：默认亮色「企业简洁风」（保留深色与跟随系统、红绿涨跌色切换）。画布底色 `#f8fafc`，白卡 `#ffffff` 配 `1px solid #e5e7eb` 与 `12px` 圆角；主色 `#1e40af`（Corporate Blue），焦点色 `#3b82f6`。
 - **字号硬底线**：**全站 CSS 严禁出现任何 `< 12.0px` 的 `font-size`**（每次改动样式后必须运行下方字号审计命令确认 `bad = 0`）；金融数字统一启用 `font-variant-numeric: tabular-nums`。
 - **16:9 信息分层**：一级视图聚焦核心结论、关键点位与紧凑网格，长篇点位依据、护栏细则、波浪历史拐点与免责声明统一收纳进 `<details>` 二级折叠区或说明弹窗，确保 `1440×810` 与 `1280×720` 下零横向溢出、零按钮挤压裁切。
@@ -81,7 +77,7 @@
 # 1. 同步锁定的 Python 3.12+ 虚拟环境（含 pytest / ruff 开发依赖）
 uv sync --frozen
 
-# 2. 后端代码规范与全量单元测试（当前基线：108 passed）
+# 2. 后端代码规范与全量单元测试
 uv run ruff check signaldesk tests
 uv run pytest -q
 
@@ -102,4 +98,5 @@ uv run signaldesk --headless --port 8765
 
 1. 每次完成功能、口径或 UI 变更后，同步更新 [README.md](README.md)、[TODO.md](TODO.md)、[docs/signals.md](docs/signals.md) 与 [docs/verification.md](docs/verification.md)。
 2. 提交前运行 `git status --short` 与 `uv run pytest tests/test_integrations.py -k test_no_private_runtime_files_tracked -q`，确保 `.runtime/`、`data/`、`*.sqlite*`、`*.encrypted`、`**/codex-exports/`、`**/agent-exports/`、`frontend/dist/`、`.env` 等绝不进入 Git 追踪区。
-3. 使用清晰的 Conventional Commits 提交到本地分支；**除非用户明确下达推送指令，绝不擅自执行 `git push`。**
+3. 提交和 PR 标题统一使用 `类型(范围): 中文摘要`，正文用中文说明原因与验证。日常任务从 `develop` 建分支，发布目标为 `main`。分支流向、示例和初始化命令见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+4. **仅在用户明确授权推送时执行 `git push`。**

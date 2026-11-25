@@ -1,5 +1,12 @@
 # V0.1.0 验收记录
 
+## 2026-11-25 GitHub 多人协作基线
+
+- **发布内容**。在临时目录用 `git clone --no-local` 复现 Git 传输。克隆内的分支与标签历史中无 `.agents/skills/` 路径，逐一查询原目录的 19 个文件对象均返回 `missing`。本机原始提交历史已归档至 `refs/archive/before-skill-cleanup`。
+- **中文提交**。在临时克隆启用钩子后，实际提交 `fix(chart): 修复缩放范围丢失` 成功，纯英文摘要被拒绝。PR 校验接受规范的中文标题，拒绝英文摘要和缺少类型的标题。历史检查能够发现先添加、后移除的技能文件，普通合并可通过。
+- **全新安装**。Windows 临时克隆执行 `uv sync --frozen`、Ruff、`pytest -q`、`npm ci` 与前端生产构建成功。111 项测试通过，依赖产生 1 条 Starlette TestClient 弃用提示。项目 CSS 共 299 处显式像素字号，最小值为 12px。
+- **远程启用**。GitHub Actions 工作流已通过本地 YAML 解析。GitHub 托管运行和保护规则在首次推送后按 [协作指南](../CONTRIBUTING.md) 验收。
+
 ## 2026-11-25 交接清单 5 项界面精修、COMEX 黄金双源、因果筹码分布与中级波浪升级
 
 - **5 项交接清单落地与顶栏/K 线交互精修。**
@@ -15,11 +22,7 @@
 
 ## 2026-11-24 项目区前端设计技能（`.agents/skills/`）安装与安全审查
 
-- **技能选型与安装路径**：在仓库根目录 `.agents/skills/` 下安装 4 项互补的纯规范型前端设计技能（无可执行脚本或网络外联逻辑）：
-  - [frontend-design](../.agents/skills/frontend-design/SKILL.md)（源自 `anthropics/skills`，含 `LICENSE.txt`）：视觉方向、排版层级、色彩规划与反 AI 模板化约束；
-  - [web-design-guidelines](../.agents/skills/web-design-guidelines/SKILL.md)（源自 `vercel-labs/agent-skills`，含 `references/command.md`）：191 条 Web 界面、可访问性（a11y）、键盘焦点与交互细节审计清单；
-  - [vercel-composition-patterns](../.agents/skills/vercel-composition-patterns/SKILL.md)（源自 `vercel-labs/agent-skills`，含 `rules/` 与 `AGENTS.md`）：React 19 复合组件、状态解耦与防布尔属性膨胀架构模式；
-  - [emil-design-eng](../.agents/skills/emil-design-eng/SKILL.md)（源自 `emilkowalski/skills`）：按压反馈、Popover 触发原点缩放、GPU 合成属性、`<= 200ms` 缓动与 `prefers-reduced-motion` 微交互规范。
+- 当日在开发机安装了 `frontend-design`、`web-design-guidelines`、`vercel-composition-patterns` 和 `emil-design-eng`。技能文件仅保存在开发者本机。
 - **安全审查与仓库验证**：逐一审查各 `SKILL.md` 及关联文件（无敏感路径读取、无外传命令、无提示词注入）；运行 `ruff check signaldesk tests` 零警告、`pytest tests/test_integrations.py -k test_no_private_runtime_files_tracked -q` 通过、全量 `pytest -q` **108 项全部通过**。
 
 ## 2026-11-24 多 Agent 长期复核泛化、Google Antigravity CLI 官方 ACP 接入与 Codex 官方接口核查
