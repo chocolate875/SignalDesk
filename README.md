@@ -78,7 +78,8 @@ SignalDesk/
 ├── pyproject.toml           # Python 项目元数据、依赖与命令入口定义
 ├── uv.lock                  # uv 精确跨平台依赖锁文件
 ├── Start-SignalDesk.cmd     # Windows 一键启动脚本
-└── Stop-SignalDesk.cmd      # Windows 一键停止脚本
+├── Stop-SignalDesk.cmd      # Windows 一键停止脚本
+└── Clean-SignalDesk.cmd     # Windows 本地数据清理脚本
 ```
 
 ---
@@ -140,6 +141,15 @@ uv run signaldesk-replay --output .runtime\replay-demo.json
 ```
 
 ---
+
+## 清理本地数据
+
+在 Windows 双击 [Clean-SignalDesk.cmd](Clean-SignalDesk.cmd)，也可在终端指定 `Clean-SignalDesk.cmd cache` 或 `Clean-SignalDesk.cmd all`。脚本显示当前数据目录，包含 `SIGNALDESK_DATA_DIR` 覆盖设置。
+
+- **只清 K 线缓存**（`cache`）删除所有市场的日线、分时与宏观基准 K 线。设置、持仓分类、自选和凭据保留。下次实盘同步会重新拉取行情。
+- **重置全部本地数据**（`all`）删除 SignalDesk 数据库、长桥及 QQ 凭据和 AI 复核导出。下次启动会进入默认演示模式，再使用实盘时需重新接入。
+
+输入 `CLEAN` 后，脚本会停止该数据目录中运行的 SignalDesk 再清理。完成后可重新运行启动脚本。其他平台可用 `uv run python -m signaldesk.cleanup` 打开同一个菜单。
 
 ## 局域网只读看板
 

@@ -4,6 +4,8 @@
 
 ## 数据前提
 
+- 本地清理脚本的缓存模式清空 SQLite 的 `bars` 表，下一次启动演示模式会重建合成行情，实盘连接后会重新补齐历史。已保存的设置、计划和提醒记录随原数据库保留。
+
 - 港股数字代码内部以五位存储，例如 `00700.HK`。长桥请求转换成其使用的 `700.HK`，返回数据再归一。升级时一次性清理港股与沪深 K 线缓存，并在实盘同步时重新拉取。
 - 港股及沪深名称优先使用长桥静态资料的中文字段。标的类型结合券商板块、交易所代码范围和名称识别。指数、衍生品与类型待确认的证券提供行情与技术结构观察。基金类使用基金指标，杠杆和反向类型启用相应评级护栏。[长桥证券基本信息](https://open.longbridge.com/zh-CN/docs/quote/pull/static) · [港交所代码分配](https://www.hkex.com.hk/-/media/HKEX-Market/Products/Securities/Stock-Code-Allocation-Plan/scap.pdf) · [深交所 ETF 代码区间](https://www.szse.cn/marketServices/technicalservice/notice/t20230825_602945.html)
 

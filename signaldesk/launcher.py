@@ -94,6 +94,8 @@ def stop_desktop(directory: Path, timeout=60):
         return
     if not instance.generation:
         raise RuntimeError("Instance is starting or predates this script. Retry or exit it from its tray/console.")
+    if instance.port == 0:
+        raise RuntimeError("SignalDesk 正在清理本地数据。")
     request = instance.stop_request(directory)
     request.touch()
     deadline = time.monotonic() + timeout
