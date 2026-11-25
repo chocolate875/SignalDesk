@@ -9,11 +9,18 @@
 | `main` | 首次发布基线 | — | 正式版本与 `vX.Y.Z` 发布标签 |
 | `develop` | `main` | `main` | 集成已通过审查的改动，统一验收 |
 | `feat/<主题>`、`fix/<主题>` | `develop` | `develop` | 单项功能、常规缺陷修复 |
-| `docs/<主题>`、`chore/<主题>`、`codex/<主题>` | `develop` | `develop` | 文档、工程维护或智能体协作任务 |
+| `docs/<主题>`、`chore/<主题>` | `develop` | `develop` | 文档与工程维护 |
+| `codex/<主题>`、`agent/<主题>` | 当前任务基线 | 仅本地 | Agent 临时工作区，独立于用于提交 PR 的正式分支 |
 | `release/<版本>` | `develop` | `main` | 发布稳定期间需要并行开发时创建，集中处理验收修正 |
 | `hotfix/<主题>` | `main` | `main` | 已发布版本的紧急修复 |
 
-主题用小写英文单词和连字符，例如 `fix/chart-zoom`。同一需求的接口、界面与测试由一个 PR 交付。短期分支合并后可删除。
+主题用小写英文单词和连字符，例如 `fix/chart-zoom`。同一需求的接口、界面与测试由一个 PR 交付。正式任务分支合并后可删除。
+
+### 使用 Agent 时
+
+从任务基线创建本地临时分支，例如 `git switch --no-track -c codex/chart-zoom develop`。保留中间提交供本机回看。结束工作后切回原分支，临时分支继续保存在本地，不设置 upstream。
+
+需要提交 PR 时，由贡献者确认交付范围和推送权限，从最新目标分支新建正式任务分支（如 `fix/chart-zoom`），用 `git cherry-pick <已审阅的提交>` 挑选成果，再推送该正式分支。只推送明确指定的分支。仓库的 pre-push 钩子会拦截从临时工作区直接推送，以及将临时分支作为推送源或目标。`codex`、`agent` 及其子分支名在上游 GitHub 仓库均已保留给本地使用。
 
 - **日常 PR** 采用 Squash and merge，以通过检查的中文 PR 标题作为合并提交标题。
 - **发布 PR** 从 `develop`（或 `release/<版本>`）合入 `main`，采用 Create a merge commit，保留共同祖先。在验收通过的 `main` 提交上打版本标签。
