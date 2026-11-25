@@ -54,7 +54,7 @@
 
 ### 2. 本地文件
 
-`.agents/skills/` 仅供开发者本机使用。`.runtime/`、`data/`、`logs/`、凭据、数据库、Agent 导出及 `frontend/dist/` 均由 Git 忽略。真实配置保存在仓库外的数据目录，随仓库发布的配置示例为 `.env.example`。
+`.agents/skills/` 仅供开发者本机使用。`.runtime/`、`data/`、`logs/`、凭据、数据库、Agent 导出及 `frontend/dist/` 均由 Git 忽略。长桥 OAuth 令牌保存在本机加密凭据库。数据目录和 Linux 凭据库密钥的环境变量见 [README](../README.md#数据安全与文档索引)。
 
 ### 3. 首次发布
 

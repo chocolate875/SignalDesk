@@ -17,7 +17,7 @@
 - [x] **工程化整理、环境锁定与多 Agent 官方协议升级（2026-11-24）**
   - 建立 `OfficialAgentBridge` 标准协议契约（[agent_bridge.py](signaldesk/agent_bridge.py)），将单通道 Codex 总结泛化为可扩展的**本地官方多 Agent 长期复核系统**；
   - 严格依据官方文档接入 **Google Antigravity CLI 官方 ACP 协议（`agy acp`，JSON-RPC 2.0 over stdio）**，握手显式关闭客户端读写与终端能力并自动拒绝一切 `session/request_permission`；核查确认 OpenAI Codex CLI 保持官方原生 `codex exec --output-schema` 接口，API 层 `422` 拦截一切非官方 Agent；
-  - 完善 `uv` 环境锁定体系（`.python-version`、`pyproject.toml`、`uv.lock`、`.env.example`、`.gitattributes`）与全栈架构交接规范 [AGENTS.md](AGENTS.md)；安装项目级前端设计与 React 工程规范技能；全量 `pytest` 提升至 **108 项全部通过**。
+  - 完善 `uv` 环境锁定体系（`.python-version`、`pyproject.toml`、`uv.lock`）与全栈架构交接规范 [AGENTS.md](AGENTS.md)；安装项目级前端设计与 React 工程规范技能；全量 `pytest` 提升至 **108 项全部通过**。
 - [x] **Phase 0–4 学术因子升级、`fusion-2.0.0` 规则降噪浓缩与风险预算闭环（2026-11-24）**
   - 完成本机 75 只美股 / 9,307 截面严格因果回放实证（[factor_eval.py](signaldesk/factor_eval.py)、[docs/research.md](docs/research.md)）；
   - 规则升级至 `fusion-2.0.0`（权重平滑迁移为 `趋势 45% + 动量 40% + 10日平滑量价 15%`，剔除共线冗余的 `zscore20/rank20/corr20`，消除 `verdict` 多分数冲突与 `RSI/MA20` 二次重复扣分）；

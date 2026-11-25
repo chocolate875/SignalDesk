@@ -74,7 +74,6 @@ SignalDesk/
 │   └── verification.md      # 历次自动化测试与双分辨率实盘验收记录
 ├── AGENTS.md                # 协作者与 AI 智能体架构交接规范及工程红线
 ├── TODO.md                  # 里程碑归档与下一阶段路线图（选股推荐工作台等）
-├── .env.example             # 可选本机环境变量说明模板
 ├── .python-version          # Python 解释器版本锁定（3.12）
 ├── pyproject.toml           # Python 项目元数据、依赖与命令入口定义
 ├── uv.lock                  # uv 精确跨平台依赖锁文件
@@ -103,13 +102,14 @@ SignalDesk/
 ## 外部通道接入说明（全部可选）
 
 ### 1. 长桥（LongPort / Longbridge）只读行情与自选
-- 在看板「设置 → 长桥数据」选择默认的 **OAuth 2.0（推荐）**，点击「登录长桥」在浏览器完成只读授权（`account.read` 与只读 `watchlist`），令牌经本机系统 DPAPI 加密存储并自动续期；亦兼容手动录入 API Key。
+- 在看板「设置 → 长桥数据」选择默认的 **OAuth 2.0**，点击「登录长桥」并在浏览器完成只读授权（`account.read` 与 `watchlist`）。SignalDesk 自动注册客户端，将令牌加密保存在本机并按需续期。也可在同一设置页手动录入 API Key。
 - 连接时自动测速优选 `.cn` / `.com` 网关，支持断线自动回退、盘前/盘后/夜盘实时报价及前复权日线自动对齐。
 
 ### 2. 本地官方 Agent 长期复核（Antigravity CLI / Codex CLI）
 在看板「设置 → Agent 复核」或右侧「AI 复核」面板可随时切换默认首选引擎：
 - **Google Antigravity CLI（官方 ACP 协议）**：按官方文档安装 `agy` 后，在本机终端运行一次 `agy acp --login` 完成登录（或配置 `GEMINI_API_KEY`），SignalDesk 即通过官方 `agy acp` 标准协议调用。
 - **OpenAI Codex CLI（官方非交互模式）**：安装 Codex CLI 后运行 `codex login` 登录，SignalDesk 通过 `codex exec --output-schema` 隔离只读调用。
+- 若已为 Agent CLI 配置 API Key，SignalDesk 可从启动进程的环境向子进程传递 `GEMINI_API_KEY` 或 `OPENAI_API_KEY`。
 - 本地 CLI 执行时，脱敏分析文本会发送至对应模型服务商（Google / OpenAI）完成推理；本工具所有复核均为用户手动点击触发，后台绝不自动消耗额度。
 
 ### 3. QQ 官方机器人通知
@@ -144,7 +144,8 @@ npm run build
 
 ## 数据安全与文档索引
 
-- **本机加密与脱敏**：运行状态与加密凭据默认位于 `%LOCALAPPDATA%\SignalDesk`（Linux 为 `~/.local/share/signaldesk`，可通过 `SIGNALDESK_DATA_DIR` 覆盖，参考 [.env.example](.env.example)）。服务仅绑定 `127.0.0.1` 并校验同源会话令牌。
+- **本机数据目录**默认为 Windows 的 `%LOCALAPPDATA%\SignalDesk` 或 Linux 的 `$XDG_DATA_HOME/signaldesk`（未设置时为 `~/.local/share/signaldesk`）。需要更换目录时，在启动进程的环境中设置 `SIGNALDESK_DATA_DIR`。
+- **凭据加密**在 Windows 上由当前用户的 DPAPI 完成。Linux 用户如需保存或读取长桥、QQ 凭据，须在启动进程的环境中设置 `SIGNALDESK_VAULT_KEY`，并在后续启动时使用同一把 Fernet 密钥。服务仅绑定 `127.0.0.1` 并校验同源会话令牌。
 - **延伸文档**：
   - 工程交接、Git 同步清单与待续任务说明：[docs/handover.md](docs/handover.md)
   - 多人开发、分支流向、中文提交格式与 GitHub 上线步骤：[CONTRIBUTING.md](CONTRIBUTING.md)
