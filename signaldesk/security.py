@@ -248,9 +248,33 @@ def safe_snapshot(
                     "sell_low",
                     "sell_high",
                     "stop_loss",
+                    "defense_level",
+                    "defense_anchor",
+                    "defense_confluence",
+                    "breakout_level",
+                    "breakout_anchor",
+                    "breakout_confluence",
                     "risk_reward_ratio",
                 )
             },
+            "volume_profile": {
+                k: (forecast.get("volume_profile") or {}).get(k)
+                for k in (
+                    "available",
+                    "window_days",
+                    "poc",
+                    "vah",
+                    "val",
+                    "support_hvn",
+                    "resistance_hvn",
+                    "profit_ratio_pct",
+                    "overhead_supply_pct",
+                    "concentration_pct",
+                    "position_label",
+                )
+            }
+            if forecast.get("volume_profile")
+            else {},
             "risk_budget": {
                 k: risk_budget.get(k)
                 for k in (

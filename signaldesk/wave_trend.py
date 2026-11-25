@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pandas as pd
 
@@ -9,7 +11,11 @@ from .calendar import NY
 from .forecast import _contiguous_regular_tail
 from .indicators import finite
 
-WAVE_DISCLAIMER = "基于已确认日线与因果拐点算法测算波浪与趋势通道，仅作结构复核参考，不构成投资建议。"
+WAVE_DISCLAIMER = "基于已确认日线与因果拐点算法测算中级波浪（126日回归通道 + 2.8×ATR14/6.5%滤网），仅作结构复核参考，不构成投资建议。"
+TREND_CHANNEL_WINDOW = 126
+SWING_ATR_MULT = 2.8
+SWING_MIN_PCT = 0.065
+MAX_VISIBLE_PIVOTS = 16
 
 
 def _unavailable_wave_trend(reason: str = "有效连续常规日线不足 60 根，暂不识别波浪与趋势结构") -> dict:
@@ -39,6 +45,8 @@ def _unavailable_wave_trend(reason: str = "有效连续常规日线不足 60 根
             "phase_label": "样本不足，暂不标浪",
             "tone": "muted",
             "confidence": "低",
+            "span_days": None,
+            "degree_label": "",
             "rules_passed": [],
             "fib_targets": [],
             "pivots": [],
@@ -92,7 +100,7 @@ def _causal_swings(tail: pd.DataFrame) -> list[dict]:
         a = atrs[idx]
         if not np.isfinite(a) or a <= 0:
             a = running_range[idx]
-        return max(2.2 * float(a), 0.045 * float(closes[idx]))
+        return max(SWING_ATR_MULT * float(a), SWING_MIN_PCT * float(closes[idx]))
 
     swings: list[dict] = []
     direction = 0  # 0 undecided, 1 tracking upward leg, -1 tracking downward leg
@@ -212,8 +220,8 @@ def _causal_swings(tail: pd.DataFrame) -> list[dict]:
 
 
 def _compute_trend_channel(tail: pd.DataFrame, atr: float) -> dict:
-    """Linear regression parallel trend channel over the recent confirmed window."""
-    win = min(len(tail), 90)
+    """Linear regression parallel trend channel over the recent confirmed window (126 trading days ≈ 6M)."""
+    win = min(len(tail), TREND_CHANNEL_WINDOW)
     if win < 30:
         return {"available": False}
     seg = tail.tail(win)
@@ -275,6 +283,8 @@ def _classify_elliott_wave(swings: list[dict], trend_dir: str) -> dict:
             "phase_label": "拐点数量尚少，先按趋势通道与高低点结构观察",
             "tone": "neutral",
             "confidence": "低",
+            "span_days": None,
+            "degree_label": "",
             "rules_passed": [],
             "fib_targets": [],
         }
@@ -623,7 +633,7 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
 
     wave_info = _classify_elliott_wave(swings, direction)
 
-    # Keep only the recent 12 swings for clean K-line rendering and compact JSON payload.
+    # Keep recent 16 swings (~1–2 years of Intermediate-degree waves) for continuous K-line rendering.
     visible_pivots = [
         {
             "date": p["date"],
@@ -633,8 +643,29 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
             "wave_label": p["wave_label"],
             "confirmed": p["confirmed"],
         }
-        for p in swings[-12:]
+        for p in swings[-MAX_VISIBLE_PIVOTS:]
     ]
+
+    # 计算当前已标注波浪的实际时间跨度（自然日 / 月数），便于直观识别波浪级别
+    labeled_pivots = [p for p in visible_pivots if p["wave_label"]]
+    span_source = labeled_pivots if len(labeled_pivots) >= 2 else visible_pivots
+    span_days: int | None = None
+    degree_label = ""
+    if len(span_source) >= 2:
+        try:
+            d0 = date.fromisoformat(span_source[0]["date"])
+            d1 = date.fromisoformat(span_source[-1]["date"])
+            span_days = max(0, (d1 - d0).days)
+            months = span_days / 30.44
+            if months >= 9.0:
+                degree_label = f"主级波段 · 跨度约 {months:.1f} 个月"
+            elif months >= 2.0:
+                degree_label = f"中级波段 · 跨度约 {months:.1f} 个月"
+            else:
+                degree_label = f"次级波段 · 跨度约 {span_days} 天"
+        except ValueError:
+            span_days = None
+            degree_label = ""
 
     if direction == "uptrend":
         if pos_pct is not None and pos_pct <= 30:
@@ -687,6 +718,8 @@ def compute_wave_trend(frame: pd.DataFrame | None, summary: dict) -> dict:
         },
         "wave": {
             **wave_info,
+            "span_days": span_days,
+            "degree_label": degree_label,
             "pivots": visible_pivots,
         },
         "disclaimer": WAVE_DISCLAIMER,

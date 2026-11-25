@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
 import numpy as np
+import pytest
 
 from signaldesk.demo import DEMO_NAMES, DEMO_PLANS, make_bars, yield_curve
-from signaldesk.forecast import TIER_ORDER, compute_forecast
+from signaldesk.forecast import TIER_ORDER, compute_forecast, compute_volume_profile
 from signaldesk.indicators import enrich, summarize
 from signaldesk.models import RuleSettings
 from signaldesk.research import research_context
@@ -59,6 +60,13 @@ def test_forecast_monotonic_and_all_demo_scenarios():
             < levels["sell_high"]
         ), f"Monotonic check failed for {symbol}: {levels} close={close}"
         assert levels["buy_low"] <= levels["ideal_buy"] <= levels["buy_high"]
+        assert 0 < levels["defense_level"] < close < levels["breakout_level"]
+        assert levels["defense_anchor"] and levels["breakout_anchor"]
+        vp = forecast["volume_profile"]
+        assert vp["available"] is True
+        assert vp["val"] <= vp["poc"] <= vp["vah"]
+        assert vp["profit_ratio_pct"] + vp["overhead_supply_pct"] == pytest.approx(100.0, abs=0.2)
+        assert len(vp["bins"]) == 28
         assert levels["risk_reward_ratio"] > 0
         assert levels["entry_risk_reward_ratio"] > 0
         assert 1 <= rating["stars"] <= 5
@@ -194,3 +202,41 @@ def test_forecast_rating_guardrails_and_missing_valuation():
     val_factor = next(f for f in fc_no_val["rating"]["factors"] if f["key"] == "valuation")
     assert val_factor["score"] is None and val_factor["weight"] == 0.0
     assert abs(sum(f["weight"] for f in fc_no_val["rating"]["factors"]) - 1.0) <= 0.01
+
+
+def test_volume_profile_detects_chip_clusters_and_honest_fallback():
+    now = datetime(2026, 11, 19, 22, 0, tzinfo=timezone.utc)
+    base = make_bars("NVDA.US", "day", now)[-126:]
+    # 构造两个清晰筹码密集带：前期在 $100 放巨量堆积支撑峰，中期在 $130 放巨量堆积压力峰，当前收在 $114
+    synthetic = []
+    for i, bar in enumerate(base):
+        if i < 45:
+            px, vol = 100.0 + (i % 5) * 0.6, 80_000_000
+        elif i < 95:
+            px, vol = 130.0 - (i % 5) * 0.6, 85_000_000
+        else:
+            px, vol = 114.0 + ((i - 95) % 4 - 1.5) * 0.4, 8_000_000
+        synthetic.append(
+            {
+                **bar,
+                "open": px - 0.5,
+                "high": px + 1.2,
+                "low": px - 1.2,
+                "close": px,
+                "volume": vol,
+                "turnover": float(vol * px),
+            }
+        )
+    frame = enrich(synthetic, "day", now, RuleSettings())
+    vp = compute_volume_profile(frame, atr=2.5, window=126, num_bins=28)
+    assert vp["available"] is True
+    assert vp["support_hvn"] is not None and 97.0 <= vp["support_hvn"] <= 106.0
+    assert vp["resistance_hvn"] is not None and 124.0 <= vp["resistance_hvn"] <= 133.0
+    assert 20.0 <= vp["profit_ratio_pct"] <= 80.0
+    assert any(b["is_poc"] for b in vp["bins"])
+
+    # 无成交量时必须诚实降级为 available=False
+    zero_vol = frame.copy()
+    zero_vol["volume"] = 0.0
+    assert compute_volume_profile(zero_vol)["available"] is False
+    assert compute_volume_profile(frame.tail(20))["available"] is False

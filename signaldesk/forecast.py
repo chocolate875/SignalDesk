@@ -21,6 +21,27 @@ DISCLAIMER = "基于已确认日线、历史波动率与公开估值/利率测�
 ETF_DISCLAIMER = "基于已确认日线、历史回撤分位、波动率与美债利率测算（不采用失真的基金主体 PE），仅供复核参考，不构成投资建议。"
 
 
+def _unavailable_volume_profile(reason: str = "有效成交量日线样本不足，暂不测算筹码分布") -> dict:
+    return {
+        "available": False,
+        "reason": reason,
+        "window_days": 0,
+        "poc": None,
+        "vah": None,
+        "val": None,
+        "support_hvn": None,
+        "support_zone_low": None,
+        "resistance_hvn": None,
+        "resistance_zone_high": None,
+        "lvn_price": None,
+        "profit_ratio_pct": None,
+        "overhead_supply_pct": None,
+        "concentration_pct": None,
+        "position_label": "数据待补",
+        "bins": [],
+    }
+
+
 def _unavailable_payload(reason: str = "已确认日线窗口或波动率数据不足，暂不生成点位预测") -> dict:
     return {
         "levels": {
@@ -32,6 +53,12 @@ def _unavailable_payload(reason: str = "已确认日线窗口或波动率数据�
             "sell_low": None,
             "sell_high": None,
             "stop_loss": None,
+            "defense_level": None,
+            "defense_anchor": "",
+            "defense_confluence": False,
+            "breakout_level": None,
+            "breakout_anchor": "",
+            "breakout_confluence": False,
             "buy_discount_pct": None,
             "upside_pct": None,
             "target_upside_pct": None,
@@ -43,6 +70,7 @@ def _unavailable_payload(reason: str = "已确认日线窗口或波动率数据�
             "sell_anchors": [],
             "stop_anchor": "",
         },
+        "volume_profile": _unavailable_volume_profile(reason),
         "rating": {
             "available": False,
             "code": "unavailable",
@@ -70,6 +98,231 @@ def _unavailable_payload(reason: str = "已确认日线窗口或波动率数据�
             "trailing_breached": False,
             "note": "",
         },
+    }
+
+
+def compute_volume_profile(
+    tail: pd.DataFrame | None,
+    atr: float | None = None,
+    window: int = 126,
+    num_bins: int = 28,
+) -> dict:
+    """严格因果 126 日滚动成交量筹码分布（Volume Profile），提取 POC、70% 价值区与上下筹码峰。
+
+    算法说明：
+    - 仅读取已确认连续常规日线的尾部窗口（默认 126 个交易日 ≈ 近 6 个月，零未来函数）；
+    - 每根日线成交量按三角核（峰值落在典型价 `(H + L + 2C) / 4`，两翼覆盖 `[L, H]`）分摊至覆盖的价格桶；
+    - 采用 90 个交易日半衰期的温和指数衰减权重，使近期换手筹码更具代表性而不丢弃中期主筹码峰。
+    """
+    if tail is None or tail.empty or "volume" not in tail.columns:
+        return _unavailable_volume_profile()
+    seg = tail.tail(max(40, int(window)))
+    if len(seg) < 40:
+        return _unavailable_volume_profile()
+
+    highs = seg["high"].to_numpy(dtype=float)
+    lows = seg["low"].to_numpy(dtype=float)
+    closes = seg["close"].to_numpy(dtype=float)
+    volumes = seg["volume"].to_numpy(dtype=float)
+
+    valid_vol = np.isfinite(volumes) & (volumes > 0)
+    if int(valid_vol.sum()) < 30:
+        return _unavailable_volume_profile("有效成交量记录不足，暂不测算筹码分布")
+
+    p_min = float(np.nanmin(lows))
+    p_max = float(np.nanmax(highs))
+    close_now = float(closes[-1])
+    if not (math.isfinite(p_min) and math.isfinite(p_max) and math.isfinite(close_now)) or p_max - p_min <= 1e-6:
+        return _unavailable_volume_profile("价格区间缺乏波动，暂不测算筹码分布")
+
+    bins_n = max(12, min(int(num_bins), 48))
+    edges = np.linspace(p_min, p_max, bins_n + 1, dtype=float)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bin_w = float(edges[1] - edges[0])
+
+    n = len(seg)
+    ages = np.arange(n - 1, -1, -1, dtype=float)
+    time_weights = np.power(0.5, ages / 90.0)
+    bucket_vols = np.zeros(bins_n, dtype=float)
+
+    for i in range(n):
+        vol = volumes[i]
+        if not math.isfinite(vol) or vol <= 0:
+            continue
+        w_vol = float(vol) * float(time_weights[i])
+        lo_i = float(lows[i])
+        hi_i = float(highs[i])
+        cl_i = float(closes[i])
+        if hi_i <= lo_i + 1e-9:
+            b_idx = int(np.clip((cl_i - p_min) / bin_w, 0, bins_n - 1))
+            bucket_vols[b_idx] += w_vol
+            continue
+        first_bin = max(0, int(math.floor((lo_i - p_min) / bin_w)))
+        last_bin = min(bins_n - 1, int(math.floor((hi_i - p_min) / bin_w)))
+        if first_bin == last_bin:
+            bucket_vols[first_bin] += w_vol
+            continue
+        tp = (hi_i + lo_i + 2.0 * cl_i) / 4.0
+        half_lo = max(tp - lo_i, 1e-6)
+        half_hi = max(hi_i - tp, 1e-6)
+        weights = np.zeros(last_bin - first_bin + 1, dtype=float)
+        for j, b_idx in enumerate(range(first_bin, last_bin + 1)):
+            ov_lo = max(lo_i, float(edges[b_idx]))
+            ov_hi = min(hi_i, float(edges[b_idx + 1]))
+            overlap = max(0.0, ov_hi - ov_lo)
+            if overlap <= 0:
+                continue
+            mid = 0.5 * (ov_lo + ov_hi)
+            # 三角密度核：收盘典型价处权重最高，向高低影线末端平滑递减至 0.25 基底
+            if mid <= tp:
+                density = 0.25 + 0.75 * max(0.0, 1.0 - (tp - mid) / half_lo)
+            else:
+                density = 0.25 + 0.75 * max(0.0, 1.0 - (mid - tp) / half_hi)
+            weights[j] = overlap * density
+        w_sum = float(weights.sum())
+        if w_sum > 0:
+            bucket_vols[first_bin : last_bin + 1] += w_vol * (weights / w_sum)
+
+    total_vol = float(bucket_vols.sum())
+    if total_vol <= 0 or not math.isfinite(total_vol):
+        return _unavailable_volume_profile("有效筹码累计量为零")
+
+    poc_idx = int(np.argmax(bucket_vols))
+    poc_price = round(float(centers[poc_idx]), 2)
+
+    # 70% Value Area（从 POC 向高量侧逐步扩张）
+    va_low_idx = poc_idx
+    va_high_idx = poc_idx
+    va_sum = float(bucket_vols[poc_idx])
+    target_va = total_vol * 0.70
+    while va_sum < target_va and (va_low_idx > 0 or va_high_idx < bins_n - 1):
+        left_v = float(bucket_vols[va_low_idx - 1]) if va_low_idx > 0 else -1.0
+        right_v = float(bucket_vols[va_high_idx + 1]) if va_high_idx < bins_n - 1 else -1.0
+        if right_v >= left_v and va_high_idx < bins_n - 1:
+            va_high_idx += 1
+            va_sum += float(bucket_vols[va_high_idx])
+        elif va_low_idx > 0:
+            va_low_idx -= 1
+            va_sum += float(bucket_vols[va_low_idx])
+        else:
+            break
+
+    val_price = round(float(edges[va_low_idx]), 2)
+    vah_price = round(float(edges[va_high_idx + 1]), 2)
+
+    # 现价下方获利筹码占比 & 上方套牢筹码占比
+    profit_vol = 0.0
+    for idx in range(bins_n):
+        b_lo = float(edges[idx])
+        b_hi = float(edges[idx + 1])
+        if close_now >= b_hi:
+            profit_vol += float(bucket_vols[idx])
+        elif close_now > b_lo:
+            profit_vol += float(bucket_vols[idx]) * ((close_now - b_lo) / max(b_hi - b_lo, 1e-9))
+    profit_ratio_pct = round(float(np.clip(profit_vol / total_vol * 100.0, 0.0, 100.0)), 1)
+    overhead_supply_pct = round(100.0 - profit_ratio_pct, 1)
+
+    # 轻度 3 点平滑识别局部高量峰（HVN）与低量真空区（LVN）
+    kernel = np.array([0.2, 0.6, 0.2], dtype=float)
+    padded = np.pad(bucket_vols, (1, 1), mode="edge")
+    smoothed = np.convolve(padded, kernel, mode="valid")
+    mean_v = float(np.mean(smoothed))
+    hvn_indices: list[int] = []
+    for idx in range(bins_n):
+        left_ok = idx == 0 or smoothed[idx] >= smoothed[idx - 1]
+        right_ok = idx == bins_n - 1 or smoothed[idx] >= smoothed[idx + 1]
+        if left_ok and right_ok and smoothed[idx] >= mean_v * 1.12:
+            hvn_indices.append(idx)
+    if poc_idx not in hvn_indices:
+        hvn_indices.append(poc_idx)
+
+    eff_atr = finite(atr)
+    min_sep = max(0.15 * eff_atr, close_now * 0.004) if eff_atr and eff_atr > 0 else close_now * 0.005
+
+    below_hvns = [idx for idx in hvn_indices if float(centers[idx]) <= close_now - min_sep]
+    above_hvns = [idx for idx in hvn_indices if float(centers[idx]) >= close_now + min_sep]
+
+    support_hvn: float | None = None
+    support_zone_low: float | None = None
+    if below_hvns:
+        # 下方筹码峰综合考量筹码厚度与邻近度，避免选取过于遥远的陈旧底部峰
+        best_sup = max(
+            below_hvns,
+            key=lambda idx: float(smoothed[idx])
+            / (1.0 + abs(close_now - float(centers[idx])) / max(p_max - p_min, 1e-6)),
+        )
+        support_hvn = round(float(centers[best_sup]), 2)
+        support_zone_low = round(float(edges[max(0, best_sup)]), 2)
+    elif val_price < close_now:
+        support_zone_low = val_price
+
+    resistance_hvn: float | None = None
+    resistance_zone_high: float | None = None
+    if above_hvns:
+        best_res = max(
+            above_hvns,
+            key=lambda idx: float(smoothed[idx])
+            / (1.0 + abs(float(centers[idx]) - close_now) / max(p_max - p_min, 1e-6)),
+        )
+        resistance_hvn = round(float(centers[best_res]), 2)
+        resistance_zone_high = round(float(edges[min(bins_n, best_res + 1)]), 2)
+    elif vah_price > close_now:
+        resistance_zone_high = vah_price
+
+    # 识别最接近现价且位于主体区间的低量真空谷（LVN）
+    lvn_price: float | None = None
+    interior_lvn = [
+        idx
+        for idx in range(1, bins_n - 1)
+        if smoothed[idx] <= smoothed[idx - 1]
+        and smoothed[idx] <= smoothed[idx + 1]
+        and smoothed[idx] <= mean_v * 0.65
+    ]
+    if interior_lvn:
+        nearest_lvn = min(interior_lvn, key=lambda idx: abs(float(centers[idx]) - close_now))
+        lvn_price = round(float(centers[nearest_lvn]), 2)
+
+    concentration_pct = round((vah_price - val_price) / max(poc_price, 1e-6) * 100.0, 1)
+    near_poc_tol = max(0.6 * eff_atr, close_now * 0.015) if eff_atr and eff_atr > 0 else close_now * 0.015
+    if close_now > vah_price:
+        pos_label = "站上价值区上沿（上方套牢轻）"
+    elif close_now < val_price:
+        pos_label = "位于价值区下方（上方套牢偏重）"
+    elif abs(close_now - poc_price) <= near_poc_tol:
+        pos_label = "贴近主筹码峰（多空成本中枢）"
+    else:
+        pos_label = "70%筹码价值区内运行"
+
+    max_bucket = float(np.max(bucket_vols))
+    bins_payload = [
+        {
+            "price_low": round(float(edges[idx]), 2),
+            "price_high": round(float(edges[idx + 1]), 2),
+            "price": round(float(centers[idx]), 2),
+            "ratio": round(float(bucket_vols[idx] / max_bucket), 4) if max_bucket > 0 else 0.0,
+            "is_poc": idx == poc_idx,
+            "in_value_area": va_low_idx <= idx <= va_high_idx,
+        }
+        for idx in range(bins_n)
+    ]
+
+    return {
+        "available": True,
+        "reason": "",
+        "window_days": n,
+        "poc": poc_price,
+        "vah": vah_price,
+        "val": val_price,
+        "support_hvn": support_hvn,
+        "support_zone_low": support_zone_low,
+        "resistance_hvn": resistance_hvn,
+        "resistance_zone_high": resistance_zone_high,
+        "lvn_price": lvn_price,
+        "profit_ratio_pct": profit_ratio_pct,
+        "overhead_supply_pct": overhead_supply_pct,
+        "concentration_pct": concentration_pct,
+        "position_label": pos_label,
+        "bins": bins_payload,
     }
 
 
@@ -101,13 +354,82 @@ def _contiguous_regular_tail(frame: pd.DataFrame | None) -> pd.DataFrame:
 
 
 def _pick_anchor(
-    candidates: list[tuple[str, float]], low: float, high: float, target: float, fallback: float
+    candidates: list[tuple[str, float] | tuple[str, float, float]],
+    low: float,
+    high: float,
+    target: float,
+    fallback: float,
 ) -> tuple[float, str | None]:
-    in_range = [(name, val) for name, val in candidates if val is not None and low <= val <= high]
+    """在区间 `[low, high]` 内按「距离 target × 亲和系数」选取最具代表性的结构/筹码锚点。"""
+    in_range: list[tuple[str, float, float]] = []
+    for item in candidates:
+        name = item[0]
+        val = item[1]
+        affinity = item[2] if len(item) >= 3 else 1.0
+        if val is not None and low <= val <= high:
+            in_range.append((name, val, affinity))
     if in_range:
-        chosen_name, chosen_val = min(in_range, key=lambda item: abs(item[1] - target))
+        chosen_name, chosen_val, _ = min(
+            in_range,
+            key=lambda item: abs(item[1] - target) * item[2],
+        )
         return chosen_val, f"{chosen_name} ${chosen_val:.2f}"
     return fallback, None
+
+
+def _resolve_key_level(
+    candidates: list[tuple[str, float, float]],
+    close: float,
+    atr: float,
+    direction: str,
+    fallback_val: float,
+    fallback_label: str,
+) -> tuple[float, str, bool]:
+    """综合筹码分布、波浪结构与均线/箱体候选锚点，提炼主要防守位或突破位并检测多维共振。"""
+    valid: list[tuple[str, float, float]] = []
+    for label, val, priority in candidates:
+        if val is None or not math.isfinite(val) or val <= 0:
+            continue
+        if direction == "defense" and 0 < val < close:
+            valid.append((label, float(val), priority))
+        elif direction == "breakout" and val > close:
+            valid.append((label, float(val), priority))
+
+    if not valid:
+        return round(fallback_val, 2), f"{fallback_label} ${fallback_val:.2f}", False
+
+    # 检测近距多源共振（差值 <= max(0.85*ATR, 1.8%现价)）：多个独立维度重合时可信度显著提高
+    cluster_tol = max(0.85 * atr, close * 0.018)
+    best_cluster: list[tuple[str, float, float]] = []
+    best_score = -1.0
+    for _, anchor_val, _ in valid:
+        members = [item for item in valid if abs(item[1] - anchor_val) <= cluster_tol]
+        # 按优先级加权，并鼓励筹码与结构跨维度共振
+        score = sum(item[2] for item in members)
+        if score > best_score:
+            best_score = score
+            best_cluster = members
+
+    # 若共振组有 2 个及以上独立依据，取优先级加权均价作为精确共识位；否则取优先级最高项
+    distinct_labels = list(dict.fromkeys(item[0] for item in best_cluster))
+    if len(distinct_labels) >= 2:
+        w_sum = sum(item[2] for item in best_cluster)
+        chosen = sum(item[1] * item[2] for item in best_cluster) / max(w_sum, 1e-6)
+        chosen_r = round(chosen, 2)
+        if direction == "defense":
+            chosen_r = min(round(close - 0.01, 2), max(0.01, chosen_r))
+        else:
+            chosen_r = max(round(close + 0.01, 2), chosen_r)
+        anchor_text = f"{' + '.join(distinct_labels[:2])}共振 ${chosen_r:.2f}"
+        return chosen_r, anchor_text, True
+
+    primary = max(best_cluster, key=lambda item: item[2])
+    chosen_r = round(primary[1], 2)
+    if direction == "defense":
+        chosen_r = min(round(close - 0.01, 2), max(0.01, chosen_r))
+    else:
+        chosen_r = max(round(close + 0.01, 2), chosen_r)
+    return chosen_r, f"{primary[0]} ${chosen_r:.2f}", False
 
 
 def compute_forecast(
@@ -159,20 +481,33 @@ def compute_forecast(
     wt_breakout = finite(wt_trend.get("breakout_level"))
     wt_inval = finite(wt_trend.get("invalidation_level"))
 
+    # 计算 126 日严格因果筹码分布（Volume Profile），提供真实成交量堆积的支撑与压力锚点
+    vp = compute_volume_profile(tail, atr=atr, window=126, num_bins=28)
+    vp_poc = finite(vp.get("poc")) if vp.get("available") else None
+    vp_val = finite(vp.get("val")) if vp.get("available") else None
+    vp_vah = finite(vp.get("vah")) if vp.get("available") else None
+    vp_sup_hvn = finite(vp.get("support_hvn")) if vp.get("available") else None
+    vp_sup_low = finite(vp.get("support_zone_low")) if vp.get("available") else None
+    vp_res_hvn = finite(vp.get("resistance_hvn")) if vp.get("available") else None
+    vp_res_high = finite(vp.get("resistance_zone_high")) if vp.get("available") else None
+
     pivot = (high_20 + low_20 + close) / 3.0
     s1 = 2.0 * pivot - high_20
     r1 = 2.0 * pivot - low_20
 
-    # 1) Buy high (去重后的支撑锚点：移除与 MA20 重合的 EMA20/布林中轨)
+    # 1) Buy high (去重后的支撑锚点：优先筹码密集承接区 POC/VAL/下方筹码峰 + 波浪前低 + 均线)
     bh_candidates = [
-        (name, val)
-        for name, val in [
-            ("MA20 均线", ma20),
-            ("MA50 均线", ma50),
-            ("MA200 年线", ma200),
-            ("波浪前低", wt_inval if wt_dir != "downtrend" else None),
-            ("枢轴支撑 S1", s1),
-            ("20日低点", low_20),
+        (name, val, affinity)
+        for name, val, affinity in [
+            ("主筹码峰 POC", vp_poc if vp_poc is not None and vp_poc <= close else None, 0.72),
+            ("下方筹码峰", vp_sup_hvn, 0.74),
+            ("筹码价值区下沿 VAL", vp_val if vp_val is not None and vp_val <= close else None, 0.76),
+            ("波浪前低", wt_inval if wt_dir != "downtrend" else None, 0.80),
+            ("MA20 均线", ma20, 0.92),
+            ("MA50 均线", ma50, 0.88),
+            ("MA200 年线", ma200, 0.88),
+            ("枢轴支撑 S1", s1, 1.0),
+            ("20日低点", low_20, 0.95),
         ]
         if val is not None
     ]
@@ -181,21 +516,24 @@ def compute_forecast(
         close - (0.45 * atr if rsi is not None and rsi <= 35 else 0.75 * atr),
     )
     bh_raw, bh_anchor = _pick_anchor(
-        bh_candidates, max(0.03, close - 1.5 * atr), close, close - 0.55 * atr, bh_fallback
+        bh_candidates, max(0.03, close - 1.6 * atr), close, close - 0.55 * atr, bh_fallback
     )
     bh_raw = min(close, max(0.03, bh_raw))
 
-    # 2) Buy low (深层结构支撑)
+    # 2) Buy low (深层结构与筹码下沿支撑)
     bl_candidates = [
-        (name, val)
-        for name, val in [
-            ("MA50 支撑", ma50),
-            ("MA200 支撑", ma200),
-            ("布林下轨", bb_lower),
-            ("波浪前低", wt_inval if wt_dir != "downtrend" else None),
-            ("20日低点", low_20),
-            ("60日低点", low_60),
-            ("枢轴支撑 S1", s1),
+        (name, val, affinity)
+        for name, val, affinity in [
+            ("筹码价值区下沿 VAL", vp_val if vp_val is not None and vp_val < bh_raw else None, 0.72),
+            ("下方筹码支撑下沿", vp_sup_low if vp_sup_low is not None and vp_sup_low < bh_raw else None, 0.74),
+            ("下方筹码峰", vp_sup_hvn if vp_sup_hvn is not None and vp_sup_hvn < bh_raw else None, 0.76),
+            ("波浪前低", wt_inval if wt_dir != "downtrend" else None, 0.78),
+            ("MA50 支撑", ma50, 0.88),
+            ("MA200 支撑", ma200, 0.86),
+            ("布林下轨", bb_lower, 0.96),
+            ("20日低点", low_20, 0.94),
+            ("60日低点", low_60, 0.95),
+            ("枢轴支撑 S1", s1, 1.0),
         ]
         if val is not None
     ]
@@ -206,39 +544,45 @@ def compute_forecast(
         bl_candidates, bl_low_bound, bl_high_bound, bh_raw - 1.1 * atr, bl_fallback
     )
 
-    # 3) Stop loss (防跌破买区下沿的 ATR 防守位)
-    stop_candidate = min(bl_raw - 0.8 * atr, low_20 - 0.4 * atr)
+    # 3) Stop loss (防跌破买区下沿与筹码支撑下沿的 ATR 防守位)
+    stop_struct_refs = [x for x in (low_20, vp_sup_low, vp_val) if x is not None and x < close]
+    stop_ref_low = min(stop_struct_refs) if stop_struct_refs else low_20
+    stop_candidate = min(bl_raw - 0.75 * atr, stop_ref_low - 0.35 * atr)
     stop_floor = max(0.01, min(bl_raw - 0.02, bl_raw - 2.2 * atr))
     stop_ceil = max(stop_floor, min(bl_raw - 0.01, bl_raw - 0.5 * atr))
     stop_raw = min(stop_ceil, max(stop_floor, stop_candidate))
 
-    # 4) First sell target (结构前高 / 波动通道上轨压力)
+    # 4) First sell target (筹码压力上沿 / 波浪前高 / 波动通道压力)
     sl_candidates = [
-        (name, val)
-        for name, val in [
-            ("波浪前高", wt_breakout),
-            ("20日高点压力", high_20),
-            ("布林上轨", bb_upper),
-            ("枢轴阻力 R1", r1),
-            ("MA20 压力", ma20),
-            ("MA50 压力", ma50),
-            ("MA200 压力", ma200),
+        (name, val, affinity)
+        for name, val, affinity in [
+            ("上方筹码峰", vp_res_hvn, 0.74),
+            ("筹码价值区上沿 VAH", vp_vah if vp_vah is not None and vp_vah > close else None, 0.74),
+            ("波浪前高", wt_breakout, 0.76),
+            ("20日高点压力", high_20, 0.88),
+            ("布林上轨", bb_upper, 0.94),
+            ("枢轴阻力 R1", r1, 1.0),
+            ("MA20 压力", ma20, 0.95),
+            ("MA50 压力", ma50, 0.92),
+            ("MA200 压力", ma200, 0.90),
         ]
         if val is not None
     ]
     sl_raw, sl_anchor = _pick_anchor(
-        sl_candidates, close + 0.9 * atr, close + 3.2 * atr, close + 1.8 * atr, close + 1.8 * atr
+        sl_candidates, close + 0.85 * atr, close + 3.2 * atr, close + 1.8 * atr, close + 1.8 * atr
     )
 
-    # 5) Second sell target (波段高点 / 中长期压力)
+    # 5) Second sell target (波段高点 / 上方筹码密集区上沿 / 中长期压力)
     sh_candidates = [
-        (name, val)
-        for name, val in [
-            ("60日高点阻力", high_60),
-            ("空头反转前高", wt_inval if wt_dir == "downtrend" else None),
-            ("布林上轨", bb_upper),
-            ("枢轴阻力 R1", r1),
-            ("MA200 压力", ma200),
+        (name, val, affinity)
+        for name, val, affinity in [
+            ("筹码压力上沿", vp_res_high if vp_res_high is not None and vp_res_high > sl_raw else None, 0.74),
+            ("筹码价值区上沿 VAH", vp_vah if vp_vah is not None and vp_vah > sl_raw else None, 0.76),
+            ("60日高点阻力", high_60, 0.85),
+            ("空头反转前高", wt_inval if wt_dir == "downtrend" else None, 0.80),
+            ("布林上轨", bb_upper, 0.96),
+            ("枢轴阻力 R1", r1, 1.0),
+            ("MA200 压力", ma200, 0.92),
         ]
         if val is not None
     ]
@@ -262,6 +606,59 @@ def compute_forecast(
     sell_high = max(round(sell_low + 0.01, 2), round(sh_raw, 2))
     ideal_buy = round((buy_low + buy_high) / 2.0, 2)
 
+    # 6) 提炼 K 线主图两大核心实战点位：主要防守位（defense_level）与主要突破位（breakout_level）
+    # 提前计算 60 日峰值移动保护位，参与多维防守锚点共振评估
+    peak_60d = round(high_60, 2)
+    trailing_stop = round(max(0.01, peak_60d - 2.5 * atr), 2)
+
+    def _in_band(val: float | None, lo_mult: float, hi_mult: float, above: bool) -> float | None:
+        if val is None or not math.isfinite(val) or val <= 0:
+            return None
+        dist = (val - close) if above else (close - val)
+        if lo_mult * atr <= dist <= hi_mult * atr:
+            return val
+        return None
+
+    defense_candidates: list[tuple[str, float, float]] = []
+    for label, cand_val, prio in [
+        ("筹码价值区下沿 VAL", _in_band(vp_val, 0.45, 4.5, False), 1.35),
+        ("下方筹码支撑下沿", _in_band(vp_sup_low, 0.45, 4.5, False), 1.25),
+        ("波浪前低", _in_band(wt_inval if wt_dir != "downtrend" else None, 0.45, 4.8, False), 1.35),
+        ("60日移动保护", _in_band(trailing_stop, 0.45, 4.2, False), 1.05),
+        ("20日箱体下沿", _in_band(low_20, 0.45, 4.2, False), 0.95),
+        ("MA200 年线", _in_band(ma200, 0.5, 4.0, False), 0.90),
+    ]:
+        if cand_val is not None:
+            defense_candidates.append((label, cand_val, prio))
+    defense_level, defense_anchor, defense_confluence = _resolve_key_level(
+        defense_candidates,
+        close=close,
+        atr=atr,
+        direction="defense",
+        fallback_val=stop_loss,
+        fallback_label="ATR 防守止损",
+    )
+
+    breakout_candidates: list[tuple[str, float, float]] = []
+    for label, cand_val, prio in [
+        ("波浪前高", _in_band(wt_breakout, 0.35, 5.2, True), 1.35),
+        ("空头反转前高", _in_band(wt_inval if wt_dir == "downtrend" else None, 0.35, 5.5, True), 1.35),
+        ("筹码价值区上沿 VAH", _in_band(vp_vah, 0.35, 5.0, True), 1.35),
+        ("上方筹码压力上沿", _in_band(vp_res_high, 0.35, 5.2, True), 1.25),
+        ("20日箱体上沿", _in_band(high_20, 0.35, 4.8, True), 1.05),
+        ("60日高点阻力", _in_band(high_60, 0.5, 5.5, True), 1.0),
+    ]:
+        if cand_val is not None:
+            breakout_candidates.append((label, cand_val, prio))
+    breakout_level, breakout_anchor, breakout_confluence = _resolve_key_level(
+        breakout_candidates,
+        close=close,
+        atr=atr,
+        direction="breakout",
+        fallback_val=sell_low,
+        fallback_label="第一阻力参考",
+    )
+
     buy_discount_pct = round((buy_high / close - 1.0) * 100.0, 2)
     upside_pct = round((sell_low / close - 1.0) * 100.0, 2)
     target_upside_pct = round((sell_high / close - 1.0) * 100.0, 2)
@@ -280,15 +677,28 @@ def compute_forecast(
         bh_anchor or f"ATR14 回调 ${buy_high:.2f}",
         bl_anchor or f"ATR14 支撑 ${buy_low:.2f}",
     ]
+    if vp.get("available") and vp_val is not None and vp_val <= close:
+        val_tag = f"筹码价值区下沿 VAL ${vp_val:.2f}"
+        if not any("VAL" in a for a in buy_anchors):
+            buy_anchors.append(val_tag)
     buy_anchors = list(dict.fromkeys(buy_anchors))[:3]
 
     sell_anchors = [
         sl_anchor or f"ATR14 一卖 ${sell_low:.2f}",
         sh_anchor or f"ATR14 二卖 ${sell_high:.2f}",
     ]
+    if vp.get("available") and vp_vah is not None and vp_vah >= close:
+        vah_tag = f"筹码价值区上沿 VAH ${vp_vah:.2f}"
+        if not any("VAH" in a for a in sell_anchors):
+            sell_anchors.append(vah_tag)
     sell_anchors = list(dict.fromkeys(sell_anchors))[:3]
 
-    stop_anchor = f"20日低点(${low_20:.2f})下方 ATR14 防守"
+    if vp.get("available") and vp_sup_low is not None and abs(stop_ref_low - vp_sup_low) <= 0.05:
+        stop_anchor = f"筹码支撑下沿(${vp_sup_low:.2f})下方 ATR14 防守"
+    elif vp.get("available") and vp_val is not None and abs(stop_ref_low - vp_val) <= 0.05:
+        stop_anchor = f"筹码价值区下沿(${vp_val:.2f})下方 ATR14 防守"
+    else:
+        stop_anchor = f"20日低点(${low_20:.2f})下方 ATR14 防守"
 
     levels = {
         "available": True,
@@ -299,6 +709,12 @@ def compute_forecast(
         "sell_low": sell_low,
         "sell_high": sell_high,
         "stop_loss": stop_loss,
+        "defense_level": defense_level,
+        "defense_anchor": defense_anchor,
+        "defense_confluence": defense_confluence,
+        "breakout_level": breakout_level,
+        "breakout_anchor": breakout_anchor,
+        "breakout_confluence": breakout_confluence,
         "buy_discount_pct": buy_discount_pct,
         "upside_pct": upside_pct,
         "target_upside_pct": target_upside_pct,
@@ -611,8 +1027,6 @@ def compute_forecast(
         macro_label = "宏观基准"
     suggested_exposure_ratio = round(float(np.clip(vol_scale * macro_multiplier, 0.20, 1.25)), 2)
 
-    peak_60d = round(high_60, 2)
-    trailing_stop = round(max(0.01, peak_60d - 2.5 * atr), 2)
     trailing_drawdown_pct = round((close / peak_60d - 1.0) * 100.0, 2) if peak_60d > 0 else None
     trailing_breached = bool(close <= trailing_stop)
     risk_budget = {
@@ -637,12 +1051,13 @@ def compute_forecast(
     guard_note = f"（已触发风控护栏：{guardrails[0]}）" if guardrails else ""
     rating_summary = (
         f"综合评级「{label}」（{raw_score:.1f}分，置信度{confidence}）："
-        f"参考买点 ${buy_low:.2f}–${buy_high:.2f}，第一卖点 ${sell_low:.2f}，"
-        f"现价盈亏比 {risk_reward_ratio:.2f}:1{guard_note}。"
+        f"防守 ${defense_level:.2f} / 突破 ${breakout_level:.2f}，"
+        f"参考买点 ${buy_low:.2f}–${buy_high:.2f}，现价盈亏比 {risk_reward_ratio:.2f}:1{guard_note}。"
     )
 
     return {
         "levels": levels,
+        "volume_profile": vp,
         "rating": {
             "available": True,
             "code": code,

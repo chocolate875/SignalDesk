@@ -57,9 +57,11 @@ def test_wave_trend_all_demo_stocks_and_channel_ordering():
         assert wt["trend"]["direction"] in {"uptrend", "downtrend", "sideways"}
         ch = wt["trend"]["channel"]
         assert ch["available"] is True
+        assert ch["window"] == 126
         assert ch["start_lower"] < ch["start_mid"] < ch["start_upper"]
         assert ch["end_lower"] < ch["end_mid"] < ch["end_upper"]
         assert wt["summary"] and wt["action_guide"]
+        assert wt["wave"]["span_days"] is None or wt["wave"]["span_days"] >= 0
 
 
 def test_wave_trend_strict_causal_no_future_leakage():
@@ -106,6 +108,8 @@ def test_wave_trend_recognizes_five_wave_impulse_up_and_obeys_rules():
     assert wt["available"] is True
     assert wt["trend"]["direction"] == "uptrend"
     assert wt["wave"]["pattern"] == "impulse_up"
+    assert wt["wave"]["span_days"] is not None and wt["wave"]["span_days"] > 60
+    assert wt["wave"]["degree_label"]
     labels = [p["wave_label"] for p in wt["wave"]["pivots"] if p["wave_label"]]
     assert labels == ["0", "1", "2", "3", "4", "5"]
     assert len(wt["wave"]["rules_passed"]) == 3
