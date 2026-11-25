@@ -16,6 +16,12 @@
 
 主题用小写英文单词和连字符，例如 `fix/chart-zoom`。同一需求的接口、界面与测试一起交付。
 
+### 选择 rebase 或 merge
+
+- **个人独立开发**：尚未推送、未被其他人使用的个人或 Agent 临时分支，可以用 `rebase` 整理并对齐最新基线，让提交历史保持清晰。
+- **多人协作**：涉及他人共同开发或已经共享的分支，优先用 `merge` 整合变更，保留共同历史，避免改写他人依赖的提交。不要擅自对已共享分支执行 rebase 后强推；如有特殊需要，先与相关协作者约定。
+- `merge` 同样可能产生代码冲突，不能保证减少冲突数量；遇到冲突时仍需沟通、解决并重新验证。同步 `main` 和 `develop` 时保留双方历史，不重写已共享的长期分支。
+
 ### 本地 Agent 开发与交付
 
 以 `codex/chart-zoom` 为例，先更新本地 `develop`，再创建不跟踪远程的工作分支。
@@ -26,7 +32,7 @@ git pull --ff-only origin develop
 git switch --no-track -c codex/chart-zoom
 ```
 
-完成任务、审阅并提交改动后，把临时分支的提交重放到最新的 `develop` 上。遇到冲突先解决并重新验证。
+完成任务、审阅并提交改动后，先更新本地 `develop`。个人独立开发且临时分支未共享时，可把临时分支的提交重放到最新 `develop` 上。
 
 ```powershell
 git fetch origin
@@ -36,7 +42,9 @@ git switch codex/chart-zoom
 git rebase develop
 ```
 
-在重放后的版本上验证通过，再快进合并并推送集成分支。
+涉及协作时，在上述 `git switch codex/chart-zoom` 后改用 `git merge -m "chore(git): 合并最新开发分支" develop`，保留已有提交历史。无论选择哪种方式，出现冲突都须解决并重新验证。
+
+在整合后的版本上验证通过，再快进合并并推送集成分支。
 
 ```powershell
 git switch develop
@@ -50,7 +58,7 @@ git push origin develop
 
 ### 贡献与发布
 
-- **贡献 PR** 向 `develop` 提交时采用 Squash and merge，以符合下方要求的 PR 标题作为合并提交标题。
+- **贡献 PR** 向 `develop` 提交时优先采用 Create a merge commit，保留协作历史。合并提交标题应符合下方中文标题要求；若 GitHub 默认标题不符合，请在合并时修改。
 - **发布 PR** 从 `develop`（或 `release/<版本>`）合入 `main`，采用 Create a merge commit，保留共同祖先。在验收通过的 `main` 提交上打版本标签。
 - **回同步** 发布或热修复后，将 `main` 的发布历史同步回本地 `develop` 并正常推送。两条分支已经分叉时，保留双方提交并解决冲突。
 
