@@ -21,7 +21,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import WaveTrendCard from "./WaveTrendSection";
 import {
   DEFAULT_INSPECTOR_ORDER,
@@ -424,6 +424,7 @@ function ForecastCard({
   onApplyForecastLevels: (stopLoss: number, sellLow?: number | null) => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const unit = pricePrefix(stock.currency);
   const forecast = stock.forecast;
   const rating = forecast?.rating;
@@ -571,33 +572,38 @@ function ForecastCard({
                   敞口 {fmt(rb.suggested_exposure_ratio, 2)}x
                 </span>
               )}
+            </div>
+            <div className="forecast-actions">
               {guardrailCount > 0 && (
                 <button
                   type="button"
                   className="guardrail-pill-btn"
                   onClick={() => setDetailsOpen((v) => !v)}
+                  aria-expanded={detailsOpen}
+                  aria-controls={detailsId}
                   title={rating!.guardrails.join("；")}
                 >
                   <TriangleAlert size={12} />
                   <span>风控警示 {guardrailCount}</span>
                 </button>
               )}
+              {levels!.stop_loss != null && levels!.sell_low != null && (
+                <button
+                  type="button"
+                  className="button secondary forecast-apply-btn"
+                  onClick={() =>
+                    onApplyForecastLevels(levels!.stop_loss!, levels!.sell_low!)
+                  }
+                  title="将参考止损与参考卖点预填到个人计划价"
+                >
+                  采纳计划价
+                </button>
+              )}
             </div>
-            {levels!.stop_loss != null && levels!.sell_low != null && (
-              <button
-                type="button"
-                className="button secondary forecast-apply-btn"
-                onClick={() =>
-                  onApplyForecastLevels(levels!.stop_loss!, levels!.sell_low!)
-                }
-                title="将参考止损与参考卖点预填到个人计划价"
-              >
-                采纳计划价
-              </button>
-            )}
           </div>
 
           <details
+            id={detailsId}
             className="insp-sub-details"
             open={detailsOpen}
             onToggle={(e) => setDetailsOpen(e.currentTarget.open)}

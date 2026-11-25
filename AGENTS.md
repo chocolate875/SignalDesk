@@ -36,7 +36,7 @@
 | `agent_bridge.py` | **`OfficialAgentBridge` 协议接口**、Google Antigravity 官方 `agy acp`（ACP v1 JSON-RPC over stdio）客户端与多引擎协调器 `AgentHub` | 新增任何本地 Agent 必须实现 `OfficialAgentBridge` 且**仅限官方原生协议**；ACP 握手强制关闭读写/终端并自动拒绝一切 `session/request_permission` |
 | `codex_bridge.py` | 实现 `OfficialAgentBridge` 协议的 OpenAI 官方 `codex exec --output-schema` 桥接器 | 最小目录只读隔离运行，不使用第三方非官方 `codex-acp` 包装器 |
 | `events.py` / `notifications.py` | 状态转移事件去重冷却、本机桌面通知与 QQ 官方机器人出站通道 | 风险告警不被机会过滤器吞没；QQ 消息经 `qq_text()` 白名单脱敏 |
-| `service.py` | 核心协调器 `Monitor`（行情生命周期、拆股自愈、衍生缓存管理、`live_evaluation_for` 实时试算与 `snapshot` 聚合） | `rebuild()` 与 `_sync_macro_benchmarks()` 必须同步清理 `academic_factors`、`forecast_cache` 与 `live_eval_cache` |
+| `service.py` | 核心协调器 `Monitor`（行情生命周期、拆股自愈、衍生缓存管理、`live_evaluation_for` 实时试算与 `snapshot` 聚合） | `rebuild()` 与历史后台任务刷新行情后，必须同步清理受影响的 `academic_factors`、`forecast_cache` 与 `live_eval_cache` |
 | `app.py` / `desktop.py` / `launcher.py` | FastAPI 路由与本地 Origin/Session 鉴权、Windows 托盘驻留及启停进程管理 | 默认监听 `127.0.0.1`。显式 `--lan` 提供有访问码的私有 IPv4 只读看板，账户详情与管理接口保留在本机 |
 
 ### 2.2 前端模块（`frontend/src/`）

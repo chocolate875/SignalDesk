@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -110,7 +112,7 @@ async def test_connect_fetches_quotes_before_history_and_skips_synced_daily_back
             call_order.append("subscribe")
             self.symbols.update(symbols)
 
-        def valuations(self, symbols):
+        def valuations(self, symbols, cached):
             call_order.append("valuations")
             return {"NVDA.US": {"pe_ttm": 25.0, "pb": 10.0, "dividend_yield_pct": 0.1, "fetched_at": now.isoformat()}}
 
@@ -135,7 +137,7 @@ async def test_connect_fetches_quotes_before_history_and_skips_synced_daily_back
 
     monkeypatch.setattr(monitor.oauth, "credentials", fake_creds)
     monkeypatch.setattr(monitor, "_create_feed_with_fallback", fake_create)
-    monkeypatch.setattr(monitor, "_sync_macro_benchmarks", lambda: _noop())
+    monkeypatch.setattr("signaldesk.service.MACRO_BENCHMARK_SYMBOLS", ())
 
     try:
         await monitor._connect()
@@ -149,8 +151,11 @@ async def test_connect_fetches_quotes_before_history_and_skips_synced_daily_back
         assert nvda_item["quote"]["prev_close"] == 150.0
         assert nvda_item["change_percent"] == pytest.approx(10.0)
 
-        # 盘中例行轮询 skip_synced_daily=True 时同样不重复拉取已对齐的日线
-        await monitor._poll(skip_synced_daily=True)
+        await monitor._poll()
+        assert call_order == ["account", "quotes", "subscribe", "valuations"]
+        await monitor._poll()
+        await monitor._backfill_missing_history(["NVDA.US"])
+        assert call_order == ["account", "quotes", "subscribe", "valuations"]
         assert history_calls == []
     finally:
         await monitor.stop()
@@ -191,7 +196,83 @@ async def test_intraday_push_without_prev_close_falls_back_to_cached_daily_close
         stock = monitor.stock(alloc)
         assert stock["quote"]["prev_close"] == pytest.approx(prev_day_close)
         assert stock["change_percent"] == pytest.approx(5.0, abs=0.1)
-        assert monitor.quote_resync_needed is True
+        assert monitor.quote_resync == set()
+    finally:
+        await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_quote_push_is_consumed_while_scheduled_sync_waits(tmp_path, monkeypatch):
+    monitor = Monitor(Store(tmp_path))
+    monitor.settings.mode = monitor.active_mode = "live"
+    monitor.feed = SimpleNamespace(renew_at=None, close=lambda: None)
+    monitor.next_history_check = float("inf")
+    monitor.loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    received = asyncio.Event()
+
+    async def sync():
+        started.set()
+        await asyncio.Event().wait()
+
+    async def receive(symbol, quote):
+        received.set()
+
+    monkeypatch.setattr(monitor, "_poll", sync)
+    monkeypatch.setattr(monitor, "_quote", receive)
+    monkeypatch.setattr(monitor, "_closing_digest", _noop)
+    monitor.tasks = [asyncio.create_task(monitor.run())]
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        monitor.emit({"type": "quote", "symbol": "AAPL.US", "quote": {}})
+        await asyncio.wait_for(received.wait(), 2)
+    finally:
+        await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_history_rate_and_monthly_quota_do_not_cause_retry_storm(tmp_path, monkeypatch):
+    monkeypatch.setattr("signaldesk.service.utcnow", lambda: datetime(2026, 11, 23, 22, tzinfo=timezone.utc))
+    monkeypatch.setattr("signaldesk.service.MACRO_BENCHMARK_SYMBOLS", ())
+    monkeypatch.setattr("signaldesk.service.HISTORY_REQUEST_INTERVAL", 0)
+    monitor = Monitor(Store(tmp_path))
+    monitor.settings.mode = "live"
+    calls = []
+
+    class BrokerError(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    def history(symbol, timeframe, full):
+        calls.append(symbol)
+        raise BrokerError(301607 if symbol == "AAPL.US" else 301606)
+
+    monitor.feed = SimpleNamespace(history=history, close=lambda: None)
+    try:
+        await monitor._backfill_missing_history(["AAPL.US", "META.US", "QQQ.US"])
+        assert calls == ["AAPL.US", "META.US"]
+        assert monitor.store.get("history-quota:live") == {"AAPL.US": "2026-11"}
+        assert monitor.next_history_request > time.monotonic() + 25
+        # After cooldown, still skip the monthly-quota symbol.
+        monitor.next_history_request = 0
+        await monitor._backfill_missing_history(["AAPL.US"])
+        assert calls == ["AAPL.US", "META.US"]
+    finally:
+        await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_quote_fallback_only_targets_missing_stopped_or_overflowed_symbols(tmp_path):
+    now = datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)
+    mono = time.monotonic()
+    monitor = Monitor(Store(tmp_path))
+    symbols = ["AAPL.US", "META.US", "NVDA.US", "MSFT.US", "QQQ.US", "00700.HK"]
+    try:
+        monitor.quotes.update({("live", symbol): {"last": 100} for symbol in symbols if symbol != "META.US"})
+        monitor.last_push.update({("AAPL.US", "regular"): mono, ("NVDA.US", "regular"): mono - 130})
+        monitor.quote_resync.update(["MSFT.US", "QQQ.US"])
+        monitor.quote_retry_at["QQQ.US"] = mono + 10
+        assert monitor._quote_targets(symbols, now) == ["META.US", "NVDA.US", "MSFT.US"]
     finally:
         await monitor.stop()
 

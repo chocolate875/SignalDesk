@@ -223,7 +223,7 @@ class LongPortFeed:
         market = market_for(symbol)
         return [normalize_bar(c, timeframe, bar_end(aware(c.timestamp), timeframe, market) <= now) for c in batch]
 
-    def valuations(self, symbols: list[str]) -> dict:
+    def valuations(self, symbols: list[str], cached: dict | None = None) -> dict:
         from .indicators import finite
         from .instruments import classify_instrument
 
@@ -234,20 +234,26 @@ class LongPortFeed:
             if member is not None:
                 fields.append(member)
         result = {}
+        cached = cached or {}
+        now = datetime.now(timezone.utc)
         for group in self._market_batches(symbols):
             for symbol in group:
                 result[symbol] = {}
             if market_for(group[0]) != US:
+                due = []
+                for symbol in group:
+                    stamp = cached.get(symbol, {}).get("profile_fetched_at")
+                    if not stamp or now - datetime.fromisoformat(stamp) >= timedelta(days=7):
+                        due.append(symbol)
                 try:
-                    profiles = self.quote_context.static_info([broker_symbol(symbol) for symbol in group])
-                except Exception:
+                    profiles = self._request_symbol_batch(
+                        due, lambda batch: self.quote_context.static_info([broker_symbol(s) for s in batch]),
+                    ) if due else []
+                except Exception as error:
+                    if getattr(error, "code", None) == 301606:
+                        result.update({symbol: {"refresh_failed": True} for symbol in group})
+                        break
                     profiles = []
-                    # A rejected or unsupported code can make a whole provider batch fail.
-                    for symbol in group:
-                        try:
-                            profiles.extend(self.quote_context.static_info([broker_symbol(symbol)]))
-                        except Exception:
-                            continue
                 for profile in profiles:
                     symbol = normalize_symbol(profile.symbol, broker=True)
                     result[symbol] = {
@@ -260,21 +266,28 @@ class LongPortFeed:
                         }.items()
                         if value
                     }
+                    if result[symbol]:
+                        result[symbol]["profile_fetched_at"] = now.isoformat()
             eligible = []
             for symbol in group:
                 profile = result[symbol]
-                instrument = classify_instrument(symbol, board=profile.get("board", ""))
+                board = profile.get("board") or cached.get(symbol, {}).get("board", "")
+                instrument = classify_instrument(symbol, board=board)
                 if instrument["asset_type"] not in {"index", "derivative"}:
                     eligible.append(symbol)
             if not eligible:
                 continue
             try:
-                batch = self.quote_context.calc_indexes([broker_symbol(symbol) for symbol in eligible], fields)
-            except Exception:
+                batch = self._request_symbol_batch(
+                    eligible, lambda chunk: self.quote_context.calc_indexes([broker_symbol(s) for s in chunk], fields),
+                )
+            except Exception as error:
                 for symbol in eligible:
                     result[symbol]["refresh_failed"] = True
+                if getattr(error, "code", None) == 301606:
+                    break
                 continue
-            fetched = datetime.now(timezone.utc).isoformat()
+            fetched = now.isoformat()
             for item in batch:
                 symbol = normalize_symbol(item.symbol, broker=True)
                 result.setdefault(symbol, {}).update({
@@ -285,6 +298,9 @@ class LongPortFeed:
                     "market_cap": finite(getattr(item, "total_market_value", None)),
                     "fetched_at": fetched,
                 })
+            for symbol in eligible:
+                if "fetched_at" not in result[symbol]:
+                    result[symbol]["refresh_failed"] = True
         return result
 
     @staticmethod
@@ -296,29 +312,49 @@ class LongPortFeed:
             for start in range(0, len(group), 100):
                 yield group[start:start + 100]
 
-    def subscribe(self, symbols: list[str]):
-        new = [symbol for symbol in dict.fromkeys(symbols) if symbol not in self.symbols]
-        for symbol in new:
+    @staticmethod
+    def _request_symbol_batch(symbols: list[str], request) -> list:
+        """Isolate symbol-related rejections without retrying every symbol on systemic failures."""
+        pending = [symbols]
+        results = []
+        for _ in range(24):
+            if not pending:
+                break
+            batch = pending.pop()
             try:
-                self.quote_context.subscribe([broker_symbol(symbol)], [self.lp.SubType.Quote])
-            except Exception:
-                continue
-            self.symbols.add(symbol)
+                results.extend(request(batch))
+            except Exception as error:
+                if getattr(error, "code", None) not in {301600, 301603, 301604}:
+                    raise
+                if len(batch) > 1:
+                    pivot = len(batch) // 2
+                    # Try the earlier symbols first to preserve the held/favorite priority.
+                    pending.extend((batch[pivot:], batch[:pivot]))
+        return results
+
+    def subscribe(self, symbols: list[str]):
+        desired = list(dict.fromkeys(symbols))[:500]
+        removed = self.symbols.difference(desired)
+        if removed:
+            self.quote_context.unsubscribe([broker_symbol(symbol) for symbol in sorted(removed)], [self.lp.SubType.Quote])
+            self.symbols.difference_update(removed)
+        new = [symbol for symbol in desired if symbol not in self.symbols]
+        if not new:
+            return
+
+        def apply(batch):
+            self.quote_context.subscribe([broker_symbol(symbol) for symbol in batch], [self.lp.SubType.Quote])
+            self.symbols.update(batch)
+            return []
+
+        self._request_symbol_batch(new, apply)
 
     def quotes(self, symbols: list[str]) -> list[dict]:
-        if not symbols:
-            return []
         result = []
-        for batch in self._market_batches(symbols):
-            try:
-                items = self.quote_context.quote([broker_symbol(symbol) for symbol in batch])
-            except Exception:
-                items = []
-                for sym in batch:
-                    try:
-                        items.extend(self.quote_context.quote([broker_symbol(sym)]))
-                    except Exception:
-                        continue
+        for start in range(0, len(symbols), 500):
+            items = self._request_symbol_batch(
+                symbols[start:start + 500], lambda batch: self.quote_context.quote([broker_symbol(s) for s in batch]),
+            )
             for quote in items:
                 extended = {}
                 for sess_key, attr in (
@@ -434,18 +470,6 @@ class LongPortFeed:
             "net_assets": float(usd.net_assets) if usd else None,
             "cash": float(usd.total_cash) if usd else None,
             "unsupported": unsupported,
-        }
-
-    def market_calendar(self):
-        today = datetime.now(timezone.utc).date()
-        days = self.quote_context.trading_days(
-            self.lp.Market.US, today - timedelta(days=5), today + timedelta(days=30)
-        )
-        sessions = self.quote_context.trading_session()
-        return {
-            "trade_days": [str(day) for day in days.trading_days],
-            "half_trade_days": [str(day) for day in days.half_trading_days],
-            "session_metadata_available": bool(sessions),
         }
 
     def close(self):

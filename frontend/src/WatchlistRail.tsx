@@ -62,6 +62,9 @@ export default function WatchlistRail({
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortMode>("rating");
   const [showLegend, setShowLegend] = useState(false);
+  const lastSync = watchlistSync?.last_sync;
+  const syncTime = lastSync ? time(lastSync) : null;
+  const unsupportedCount = watchlistSync?.unsupported_count ?? 0;
 
   const counts = useMemo(
     () => ({
@@ -295,24 +298,24 @@ export default function WatchlistRail({
       )}
 
       {(watchlistSync?.error ||
-        (mode === "live" &&
-          (watchlistSync?.last_sync ||
-            (watchlistSync?.unsupported_count ?? 0) > 0))) && (
+        (mode === "live" && (lastSync || unsupportedCount > 0))) && (
         <div
           className={`rail-sync-note ${watchlistSync?.error ? "error" : ""}`}
         >
           {watchlistSync?.error ? (
             <span>{watchlistSync.error}</span>
           ) : (
-            <span>
-              自选同步{" "}
-              {watchlistSync?.last_sync
-                ? time(watchlistSync.last_sync)
-                : "等待首次同步"}
-              {(watchlistSync?.unsupported_count ?? 0) > 0
-                ? ` · ${watchlistSync?.unsupported_count} 个代码暂不支持`
-                : ""}
-            </span>
+            <>
+              <span>
+                自选同步{" "}
+                {lastSync && syncTime ? (
+                  <time dateTime={lastSync} title={syncTime}>{syncTime.replace(/^\d{4}\//, "")}</time>
+                ) : "待同步"}
+              </span>
+              {unsupportedCount > 0 && (
+                <span title={`${unsupportedCount} 个代码暂不支持`}>{unsupportedCount} 个不支持</span>
+              )}
+            </>
           )}
         </div>
       )}

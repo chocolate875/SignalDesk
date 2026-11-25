@@ -893,9 +893,14 @@ p {
 }
 
 .rail-sync-note {
-  padding: 6px 12px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 3px 12px;
   border-bottom: 1px solid var(--line);
   font-size: 12px;
+  line-height: 16px;
   color: var(--muted);
   background: var(--panel-alt);
 }
@@ -3371,8 +3376,7 @@ p {
 .forecast-action-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px 8px;
+  gap: 5px 8px;
   flex-wrap: wrap;
   margin-top: 8px;
 }
@@ -3391,9 +3395,19 @@ p {
   flex-shrink: 0;
 }
 
+.forecast-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1 0 auto;
+  gap: 8px;
+}
+
 .button.forecast-apply-btn {
+  min-height: 28px;
   height: auto;
-  padding: 4px 10px;
+  margin-inline-start: auto;
+  padding: 3px 8px;
   font-size: 12px;
   white-space: nowrap;
   flex-shrink: 0;
@@ -6007,6 +6021,7 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-height: 28px;
   padding: 2px 7px;
   border-radius: var(--radius-badges);
   border: 1px solid var(--tone-warning-bd);
