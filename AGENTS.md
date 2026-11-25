@@ -77,9 +77,8 @@
 # 1. 同步锁定的 Python 3.12+ 虚拟环境（含 pytest / ruff 开发依赖）
 uv sync --frozen
 
-# 2. 后端代码规范与全量单元测试
+# 2. 后端代码规范
 uv run ruff check signaldesk tests
-uv run pytest -q
 
 # 3. CSS 最小字号合规审计（必须输出 bad=0）
 uv run python -c "import re, pathlib; text=pathlib.Path('frontend/src/style.css').read_text(encoding='utf-8'); vals=[float(m.group(1)) for m in re.finditer(r'font-size\s*:\s*([0-9.]+)px', text)]; bad=[v for v in vals if v < 12.0]; print(f'total={len(vals)}, min={min(vals) if vals else 0}px, bad={len(bad)}')"
@@ -90,7 +89,10 @@ npm ci
 npm run build
 Set-Location ..
 
-# 5. 启动无界面本机服务（或双击 Start-SignalDesk.cmd）
+# 5. 全量测试（API 图标路由需要上一步生成的静态资源）
+uv run pytest -q
+
+# 6. 启动无界面本机服务（或双击 Start-SignalDesk.cmd）
 uv run signaldesk --headless --port 8765
 ```
 

@@ -123,6 +123,10 @@ SignalDesk/
 # 同步锁定环境（含 pytest / ruff 开发工具组）
 uv sync --frozen
 
+# 构建前端静态资源，供 API 图标路由测试和本机服务使用
+npm --prefix frontend ci
+npm --prefix frontend run build
+
 # 运行代码静态检查与全量单元测试
 uv run ruff check signaldesk tests
 uv run pytest -q
@@ -133,11 +137,6 @@ uv run signaldesk --headless --port 8765
 # 运行离线多股因果因子回放评测或单标的回放
 uv run signaldesk-eval --output .runtime\factor_eval.json
 uv run signaldesk-replay --output .runtime\replay-demo.json
-
-# 构建前端静态资源
-Set-Location frontend
-npm ci
-npm run build
 ```
 
 ---
