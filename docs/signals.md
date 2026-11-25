@@ -4,6 +4,9 @@
 
 ## 数据前提
 
+- 港股数字代码内部以五位存储，例如 `00700.HK`。长桥请求转换成其使用的 `700.HK`，返回数据再归一。升级时一次性清理港股与沪深 K 线缓存，并在实盘同步时重新拉取。
+- 港股及沪深名称优先使用长桥静态资料的中文字段。标的类型结合券商板块、交易所代码范围和名称识别。指数、衍生品与类型待确认的证券提供行情与技术结构观察。基金类使用基金指标，杠杆和反向类型启用相应评级护栏。[长桥证券基本信息](https://open.longbridge.com/zh-CN/docs/quote/pull/static) · [港交所代码分配](https://www.hkex.com.hk/-/media/HKEX-Market/Products/Securities/Stock-Code-Allocation-Plan/scap.pdf) · [深交所 ETF 代码区间](https://www.szse.cn/marketServices/technicalservice/notice/t20230825_602945.html)
+
 - OHLCV按UTC时间排序并去重；只使用明确已确认且结束时间不晚于当前时刻的K线。
 - 实盘标的当地常规交易时段，图表接口（`detail_for`）及前端 K 线会在末尾附加一根标记为 `intraday_forming = True` 的**当日盘中实时 K 线**（由实时常规报价与推送中的当日 `open/high/low/last/volume/turnover` 实时合成，图面以半透明虚线与 `盘中` 胶囊区分）；该未收盘 K 线**仅用于实时视觉看图**，绝不进入 MA/EMA/MACD/RSI/ATR、日线评分、波浪拐点或 5 级买卖评级计算。
 - 当前工作台只采集常规交易时段日线。兼容回放的15分钟序列按 regular/pre/post/overnight 独立计算，避免把薄弱盘外量与盘中混算。

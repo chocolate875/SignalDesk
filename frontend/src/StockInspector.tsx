@@ -954,6 +954,14 @@ function formatMarketCap(cap: number | null | undefined, unit: string): string |
 /** 估值与资产特征独立模块：个股自动展示估值与美债对照，ETF 自动展示基金与指数特征 */
 function ValuationOrFundCard({ stock }: { stock: Stock }) {
   const unit = pricePrefix(stock.currency);
+  if (stock.instrument && !stock.instrument.company_valuation_applicable && !stock.instrument.is_fund) {
+    return (
+      <section className="insp-card">
+        <div className="insp-card-head"><h3>证券类型</h3></div>
+        <p>{stock.instrument.type_label} · {stock.instrument.risk_notice || "等待券商资料确认"}</p>
+      </section>
+    );
+  }
   if (stock.instrument?.is_fund) {
     return (
       <section className="insp-card fund-profile-card">

@@ -444,6 +444,8 @@ def compute_forecast(
     macro: dict | None = None,
 ) -> dict:
     """Compute causal support/resistance price levels, 5-tier rating, and risk budget."""
+    if (instrument or {}).get("asset_type") in {"index", "derivative", "unknown"}:
+        return _unavailable_payload("该类标的提供行情与技术结构观察")
     tail = _contiguous_regular_tail(frame)
     if (
         len(tail) < 60

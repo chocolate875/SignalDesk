@@ -7,6 +7,7 @@ import math
 import secrets
 import time
 from contextlib import asynccontextmanager
+from ipaddress import IPv4Address, IPv4Network
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -73,9 +74,56 @@ class StartupRequest(BaseModel):
     enabled: bool
 
 
-def create_app(directory: Path | None = None, background: bool = True) -> FastAPI:
+class LanLogin(BaseModel):
+    code: str
+
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "testserver"}
+LAN_NETWORKS = tuple(IPv4Network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def _is_lan_ip(value: str) -> bool:
+    try:
+        address = IPv4Address(value)
+    except ValueError:
+        return False
+    return any(address in network for network in LAN_NETWORKS)
+
+
+def _for_lan(payload: dict) -> dict:
+    for key in ("stocks", "stock"):
+        stocks = payload.get(key)
+        if isinstance(stocks, dict):
+            stocks = [stocks]
+        for stock in stocks or []:
+            for field in ("broker_quantity", "available_quantity", "long_quantity", "short_quantity",
+                          "cost_price", "weight_percent", "pnl_percent", "verdict"):
+                stock.pop(field, None)
+    if payload.get("live_eval"):
+        payload["live_eval"] = {key: value for key, value in payload["live_eval"].items() if key != "verdict"}
+    if "stocks" in payload:
+        payload.update(events=[], analyses=[], channels={})
+        payload["summary"].pop("sleeve_weights", None)
+    return payload
+
+
+def create_app(directory: Path | None = None, background: bool = True, *, lan: bool = False) -> FastAPI:
     monitor = Monitor(Store(directory or data_directory()))
     token = session_token()
+    lan_token = session_token() if lan else ""
+    lan_code = secrets.token_urlsafe(12) if lan else ""
+
+    def access_scope(connection) -> str | None:
+        host_header = connection.headers.get("host", "")
+        host, separator, port = host_header.partition(":")
+        if separator and (not port.isascii() or not port.isdecimal()):
+            return None
+        peer = connection.client.host if connection.client else ""
+        if host in LOCAL_HOSTS and peer in {"127.0.0.1", "::1", "testclient"}:
+            return "local"
+        if lan and _is_lan_ip(host) and (peer == "127.0.0.1" or _is_lan_ip(peer)):
+            return "lan"
+        return None
 
     @asynccontextmanager
     async def lifespan(application):
@@ -85,25 +133,44 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
 
     app = FastAPI(title="SignalDesk", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.monitor = monitor
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
+    if not lan:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=sorted(LOCAL_HOSTS))
 
     @app.middleware("http")
     async def local_session(request: Request, call_next):
-        if request.url.path.startswith("/api/"):
+        scope = access_scope(request)
+        if scope is None:
+            return JSONResponse({"detail": "当前地址无法访问 SignalDesk"}, status_code=403 if lan else 400)
+        path = request.url.path
+        request.state.lan = scope == "lan"
+        if request.state.lan and (
+            path == CALLBACK
+            or (path.startswith("/api/") and path != "/api/lan/login" and not (
+                request.method == "GET"
+                and (path in {"/api/bootstrap", "/api/health", "/api/dashboard", "/api/macro"}
+                     or path.startswith("/api/stock/"))
+            ))
+        ):
+            return JSONResponse({"detail": "局域网看板为只读，管理操作请在主机上进行"}, status_code=403)
+        if path.startswith("/api/"):
             if (
                 not local_origin(request.headers.get("origin"), request.headers.get("host"))
                 or request.headers.get("sec-fetch-site") == "cross-site"
             ):
-                return JSONResponse({"detail": "只接受本机同源请求"}, status_code=403)
-            if request.url.path not in {"/api/bootstrap", "/api/health"}:
-                if not secrets.compare_digest(request.cookies.get("signaldesk_session", ""), token):
-                    return JSONResponse({"detail": "请从本机看板建立会话"}, status_code=401)
+                return JSONResponse({"detail": "只接受同源请求"}, status_code=403)
+            public = {"/api/health", "/api/lan/login"} if request.state.lan else {"/api/bootstrap", "/api/health"}
+            expected = lan_token if request.state.lan else token
+            if path not in public and not secrets.compare_digest(request.cookies.get("signaldesk_session", ""), expected):
+                detail = "请输入局域网访问码" if request.state.lan else "请从本机看板建立会话"
+                return JSONResponse({"detail": detail}, status_code=401, headers={"Cache-Control": "no-store"})
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
+        websocket_origin = f"ws://{request.headers['host']}"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+            f"default-src 'self'; connect-src 'self' {websocket_origin}; img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
         )
         if request.url.path.startswith("/api/") or request.url.path == CALLBACK:
             response.headers["Cache-Control"] = "no-store"
@@ -115,35 +182,50 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
 
     @app.get("/api/health")
     async def health():
-        return {"app": "SignalDesk", "version": "0.1.0", "status": monitor.status}
+        return {"app": "SignalDesk", "version": "0.1.0", "status": monitor.status, "lan": lan}
+
+    @app.post("/api/lan/login")
+    async def login(request: Request, value: LanLogin):
+        if not request.state.lan:
+            raise HTTPException(404, "请从局域网地址访问")
+        if not secrets.compare_digest(value.code.strip().encode(), lan_code.encode()):
+            raise HTTPException(401, "访问码不正确")
+        response = JSONResponse({"ok": True})
+        response.set_cookie("signaldesk_session", lan_token, httponly=True, samesite="strict")
+        return response
 
     @app.get("/api/bootstrap")
-    async def bootstrap():
-        response = JSONResponse(_sanitize_json(await monitor.snapshot()))
-        response.set_cookie("signaldesk_session", token, httponly=True, samesite="strict")
+    async def bootstrap(request: Request):
+        payload = await monitor.snapshot()
+        response = JSONResponse(_sanitize_json(_for_lan(payload) if request.state.lan else payload))
+        if not request.state.lan:
+            response.set_cookie("signaldesk_session", token, httponly=True, samesite="strict")
         return response
 
     @app.get("/api/dashboard")
-    async def dashboard():
-        return _sanitize_json(await monitor.snapshot())
+    async def dashboard(request: Request):
+        payload = await monitor.snapshot()
+        return _sanitize_json(_for_lan(payload) if request.state.lan else payload)
 
     @app.get("/api/macro")
     async def macro_regime():
         return _sanitize_json(monitor.macro_regime())
 
     @app.get("/api/stock/{symbol}")
-    async def stock(symbol: str, timeframe: str = "day", session: str = "regular"):
+    async def stock(request: Request, symbol: str, timeframe: str = "day", session: str = "regular"):
         if timeframe not in {"15m", "day"} or session not in {"regular", "pre", "post", "overnight"}:
             raise HTTPException(400, "不支持的周期或时段")
         normalized = Allocation(symbol=symbol).symbol
-        return _sanitize_json(
-            monitor.detail_for(normalized, timeframe, "regular" if timeframe == "day" else session)
-        )
+        payload = monitor.detail_for(normalized, timeframe, "regular" if timeframe == "day" else session)
+        return _sanitize_json(_for_lan(payload) if request.state.lan else payload)
 
     @app.get("/api/stock/{symbol}/live-eval")
-    async def stock_live_eval(symbol: str):
+    async def stock_live_eval(request: Request, symbol: str):
         normalized = Allocation(symbol=symbol).symbol
-        return _sanitize_json(monitor.live_evaluation_for(normalized))
+        payload = monitor.live_evaluation_for(normalized)
+        if request.state.lan:
+            payload = {key: value for key, value in payload.items() if key != "verdict"}
+        return _sanitize_json(payload)
 
     @app.put("/api/allocations")
     async def allocation(value: Allocation):
@@ -182,6 +264,7 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
     @app.get("/api/settings")
     async def settings():
         return {
+            "lan": {"enabled": lan, "code": lan_code},
             "settings": monitor.settings.model_dump(),
             "credentials": {service: monitor.vault.configured(service) for service in ["longport", "qq"]},
             "broker_platform": monitor.vault.load("longport").get("platform", "longport"),
@@ -322,9 +405,11 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
 
     @app.websocket("/api/stream")
     async def stream(socket: WebSocket):
-        if not local_origin(
+        scope = access_scope(socket)
+        expected = lan_token if scope == "lan" else token
+        if scope is None or not local_origin(
             socket.headers.get("origin"), socket.headers.get("host")
-        ) or not secrets.compare_digest(socket.cookies.get("signaldesk_session", ""), token):
+        ) or not secrets.compare_digest(socket.cookies.get("signaldesk_session", ""), expected):
             await socket.close(code=1008)
             return
         await socket.accept()
@@ -332,7 +417,8 @@ def create_app(directory: Path | None = None, background: bool = True) -> FastAP
         last_sent = 0.0
         try:
             while True:
-                payload = _sanitize_json(await monitor.snapshot())
+                payload = await monitor.snapshot()
+                payload = _sanitize_json(_for_lan(payload) if scope == "lan" else payload)
                 digest = _snapshot_fingerprint(payload)
                 now_mono = time.monotonic()
                 # 仅在业务数据变化或心跳超过20秒时推送，避免休市/静止时每2秒灌入数百KB重复JSON

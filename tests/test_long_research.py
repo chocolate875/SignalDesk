@@ -241,7 +241,7 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     parsed = feed.watchlist()
     assert len(parsed["groups"]) == 2
     assert parsed["unsupported"] == ["INVALID!"]
-    assert "700.HK" in parsed["groups"][0]["symbols"]
+    assert "00700.HK" in parsed["groups"][0]["symbols"]
     nvda_entry = next(s for s in parsed["securities"] if s["symbol"] == "NVDA.US")
     assert nvda_entry["groups"] == ["AI 与算力", "核心持仓"]
 
@@ -272,7 +272,7 @@ async def test_longport_watchlist_sync_merges_groups_and_preserves_favorites(tmp
     )
     await monitor._sync_account()
     live_items = {a.symbol: a for a in monitor.portfolio("live")}
-    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US", "700.HK", "600519.SH", "000001.SZ"}
+    assert set(live_items) == {"NVDA.US", "AMD.US", "TSLA.US", "00700.HK", "600519.SH", "000001.SZ"}
     assert live_items["NVDA.US"].broker_quantity == 10 and live_items["NVDA.US"].in_watchlist
     assert live_items["AMD.US"].watch_only and live_items["AMD.US"].watchlist_groups == ["AI 与算力"]
     assert monitor.watchlist_unsupported == ["INVALID!"]

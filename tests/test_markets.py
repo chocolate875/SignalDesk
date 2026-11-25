@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from signaldesk.calendar import bar_end, latest_expected_end, session_for
-from signaldesk.markets import CN, HK, US, normalize_symbol
+from signaldesk.instruments import classify_instrument
+from signaldesk.markets import CN, HK, US, broker_symbol, normalize_symbol
 from signaldesk.models import Allocation
 from signaldesk.providers import LongPortFeed
 from signaldesk.service import Monitor
@@ -16,7 +17,9 @@ from signaldesk.storage import Store
     [
         (" aapl ", "AAPL.US"),
         ("brk.b", "BRK.B.US"),
-        ("00700.hk", "700.HK"),
+        ("00700.hk", "00700.HK"),
+        ("700.HK", "00700.HK"),
+        ("hsi.hk", "HSI.HK"),
         ("600519.sh", "600519.SH"),
         ("000001.sz", "000001.SZ"),
     ],
@@ -26,7 +29,13 @@ def test_allocation_symbol(raw, canonical):
     assert normalize_symbol(canonical, broker=True) == canonical
 
 
-@pytest.mark.parametrize("raw", ["000001", "AAPL.HK", "600519.SG", "VOD.L", "900901.SH", "200012.SZ"])
+def test_hk_wire_code_stays_compatible_with_longbridge():
+    assert broker_symbol("00700.HK") == "700.HK"
+    assert broker_symbol("HSI.HK") == "HSI.HK"
+    assert broker_symbol("000001.SZ") == "000001.SZ"
+
+
+@pytest.mark.parametrize("raw", ["000001", "AAPL!.HK", "600519.SG", "VOD.L", "900901.SH", "200012.SZ"])
 def test_unsupported_security_is_not_assigned_to_another_market(raw):
     with pytest.raises(ValueError):
         Allocation(symbol=raw)
@@ -104,7 +113,7 @@ def test_mixed_positions_use_matching_currency_net_assets(tmp_path):
             assert stock["currency"] == allocation.currency
             assert stock["pnl_percent"] == 25
             if allocation.currency == "HKD":
-                assert stock["symbol"] == "700.HK" and stock["weight_percent"] == 2.5
+                assert stock["symbol"] == "00700.HK" and stock["weight_percent"] == 2.5
             else:
                 assert stock["weight_percent"] is None
             assert stock["research"]["yield_gap_pp"] is None
@@ -124,9 +133,13 @@ def test_valuation_permission_failure_isolated_by_market(tmp_path):
             raise RuntimeError("quote permission unavailable")
         return [SimpleNamespace(symbol=s, pe_ttm_ratio=20, pb_ratio=2, dividend_ratio_ttm=1) for s in symbols]
 
+    profiles = {
+        "80700.HK": SimpleNamespace(symbol="80700.HK", currency="CNY", name_cn="腾讯控股-R", board=lp.SecurityBoard.HKEquity),
+        "000001.SZ": SimpleNamespace(symbol="000001.SZ", name_cn="平安银行", board=lp.SecurityBoard.SZMainConnect),
+    }
     feed.quote_context = SimpleNamespace(
         calc_indexes=indexes,
-        static_info=lambda symbols: [SimpleNamespace(symbol="80700.HK", currency="CNY")],
+        static_info=lambda symbols: [profiles[s] for s in symbols],
     )
     updates = feed.valuations(["AAPL.US", "000001.SZ", "80700.HK"])
     assert updates["AAPL.US"]["pe_ttm"] == 20
@@ -140,5 +153,55 @@ def test_valuation_permission_failure_isolated_by_market(tmp_path):
         cached = store.get("valuations:live")["000001.SZ"]
         assert cached["pe_ttm"] == 11
         assert cached["fetched_at"] == "2025-11-01T00:00:00+00:00"
+        assert cached["board"] == "SZMainConnect"
+        monitor.settings.mode = "live"
+        stock = monitor.stock(Allocation(symbol="000001.SZ", name="PING AN BANK"), macro={})
+        assert stock["name"] == "平安银行" and stock["instrument"]["asset_type"] == "stock"
+    finally:
+        store.close()
+
+
+def test_asian_indices_etfs_and_leveraged_products():
+    assert classify_instrument("000001.SH")["asset_type"] == "index"
+    assert classify_instrument("000001.SZ")["asset_type"] == "stock"
+    assert classify_instrument("HSTECH.HK")["asset_type"] == "index"
+    assert classify_instrument("ABC.HK", board="HKHS")["asset_type"] == "index"
+    assert classify_instrument("02800.HK", "盈富基金")["is_fund"]
+    assert classify_instrument("510300.SH", "沪深300")["is_fund"]
+    assert classify_instrument("158001.SZ")["is_fund"]
+    assert classify_instrument("07200.HK")["leverage"] == 2
+    assert classify_instrument("87500.HK")["leverage"] == -2
+    assert classify_instrument("15000.HK", board="HKWarrant")["asset_type"] == "derivative"
+    assert classify_instrument("ABC.HK")["asset_type"] == "unknown"
+
+
+def test_cache_reset_only_once_and_preserves_portfolio(tmp_path):
+    bar = {"timestamp": "2026-11-24T00:00:00+00:00", "confirmed": True}
+    store = Store(tmp_path)
+    store.set("migration:hk-five-digit-v1", False)
+    store.set("portfolio:live", [{"symbol": "700.HK", "favorite": True, "long_stop_price": 400}])
+    store.set("watchlist-groups:live", [{"name": "港股", "symbols": ["700.HK"]}])
+    store.set("valuations:live", {"700.HK": {"currency": "HKD"}})
+    store.set("state:live:700.HK:long:day:regular", {"last_sent": 1})
+    for symbol in ("700.HK", "000001.SZ", "600519.SH", "AAPL.US"):
+        store.put_bars("live", symbol, "day", [bar])
+    store.close()
+
+    store = Store(tmp_path)
+    try:
+        assert store.get("portfolio:live") == [{"symbol": "00700.HK", "favorite": True, "long_stop_price": 400}]
+        assert store.get("watchlist-groups:live")[0]["symbols"] == ["00700.HK"]
+        assert store.get("valuations:live") == {"00700.HK": {"currency": "HKD"}}
+        assert store.get("state:live:00700.HK:long:day:regular") == {"last_sent": 1}
+        for symbol in ("700.HK", "00700.HK", "000001.SZ", "600519.SH"):
+            assert store.bars("live", symbol, "day") == []
+        assert store.bars("live", "AAPL.US", "day") == [bar]
+        store.put_bars("live", "00700.HK", "day", [bar])
+    finally:
+        store.close()
+
+    store = Store(tmp_path)
+    try:
+        assert store.bars("live", "00700.HK", "day") == [bar]
     finally:
         store.close()

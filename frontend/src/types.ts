@@ -642,6 +642,12 @@ export function isValidDashboard(value: unknown): value is Dashboard {
     Boolean(obj.market && typeof obj.market === "object")
   );
 }
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 export async function api<T = any>(
   path: string,
   options: RequestInit = {},
@@ -664,10 +670,11 @@ export async function api<T = any>(
     }
   }
   if (!response.ok)
-    throw new Error(
+    throw new ApiError(
       typeof data?.detail === "string"
         ? data.detail
         : JSON.stringify(data?.detail || `请求失败（HTTP ${response.status}）`),
+      response.status,
     );
   return data;
 }
@@ -678,7 +685,10 @@ export const fmt = (n: number | null | undefined, digits = 1) =>
         minimumFractionDigits: digits,
         maximumFractionDigits: digits,
       });
-export const ticker = (s: string) => s.replace(".US", "");
+export function ticker(symbol: string) {
+  if (/^\d{1,5}\.HK$/.test(symbol)) return symbol.padStart(8, "0");
+  return symbol.replace(/\.US$/, "");
+}
 export function pricePrefix(currency?: string | null) {
   switch (currency) {
     case "USD": return "$";

@@ -16,7 +16,7 @@ from .extended_hours import summarize_extended_hours
 from .factors import compute_academic_factors
 from .forecast import compute_forecast
 from .indicators import chart_rows, enrich, summarize
-from .instruments import classify_instrument, compute_fund_metrics
+from .instruments import ASIAN_REFERENCE_NAMES, classify_instrument, compute_fund_metrics
 from .macro import (
     MACRO_BENCHMARK_SYMBOLS,
     compute_macro_regime,
@@ -482,10 +482,18 @@ class Monitor:
         last = quote.get("last")
         qty = allocation.broker_quantity
         stop, target = allocation.long_levels()
-        instrument = classify_instrument(allocation.symbol, allocation.name)
-        is_fund = bool(instrument.get("is_fund"))
-        valuation = self.valuations.get(allocation.symbol, {}) if mode == "live" else {}
-        currency = valuation.get("currency") or allocation.currency
+        cached = self.valuations.get(allocation.symbol, {}) if mode == "live" else {}
+        name = cached.get("name_cn") or ASIAN_REFERENCE_NAMES.get(allocation.symbol) or allocation.name
+        instrument = classify_instrument(
+            allocation.symbol, name, board=cached.get("board", ""), name_en=cached.get("name_en", ""),
+        )
+        is_fund = instrument["is_fund"]
+        company_valuation = instrument["company_valuation_applicable"]
+        valuation = {k: v for k, v in cached.items() if k not in {"name_cn", "name_en", "board", "currency"}}
+        if not company_valuation:
+            for key in ("pe_ttm", "pb"):
+                valuation.pop(key, None)
+        currency = cached.get("currency") or allocation.currency
         if not currency:
             currency = {US: "USD", CN: "CNY", HK: "HKD" if mode == "demo" else None}[venue]
         account = self.store.get(f"account:{mode}", {})
@@ -493,7 +501,7 @@ class Monitor:
         if mode == "demo" and currency == "USD":
             net = 50_000
         curve = self.curve if mode == "live" else self.demo_curve
-        if mode == "demo" and summary.get("as_of") and not is_fund:
+        if mode == "demo" and summary.get("as_of") and company_valuation:
             index = next((i for i, d in enumerate(demo.DEMO_NAMES) if d[0] == allocation.symbol), None)
             if index is not None:
                 valuation = {
@@ -530,13 +538,13 @@ class Monitor:
         elif target is not None and close >= target:
             review = "复核计划目标价"
         elif (
-            not is_fund
+            company_valuation
             and research["valuation"]["fresh"]
             and valuation.get("pe_ttm") is not None
             and valuation["pe_ttm"] <= 0
         ):
             review = "复核盈利情况"
-        elif venue == US and not is_fund and research["yield_gap_pp"] is None:
+        elif venue == US and company_valuation and research["yield_gap_pp"] is None:
             review = "补齐估值或利率依据"
         else:
             review = "按计划观察" if allocation.watch_only else "例行持仓复核"
@@ -664,6 +672,7 @@ class Monitor:
         )
         result = {
             **allocation.model_dump(),
+            "name": name,
             "market": {k: market[k] for k in ("code", "name", "timezone", "session", "label", "early_close")},
             "currency": currency,
             "sleeves": allocation.sleeves(),
@@ -750,6 +759,7 @@ class Monitor:
 
         inst = instrument or classify_instrument(allocation.symbol, allocation.name)
         is_fund = bool(inst.get("is_fund"))
+        company_valuation = inst.get("company_valuation_applicable", not is_fund)
         is_leveraged = bool(inst.get("is_leveraged"))
         is_inverse = bool(inst.get("is_inverse"))
         type_label = inst.get("type_label", "个股")
@@ -813,6 +823,9 @@ class Monitor:
                 val_status = type_label
                 val_tone = "warning" if is_leveraged else "muted"
                 val_detail = "有效日线不足60日，等待补齐区间回撤与波动率"
+        elif not company_valuation:
+            second_label, val_status, val_tone = "证券类型", type_label, "muted"
+            val_detail = inst.get("risk_notice") or "等待券商资料确认证券类型"
         else:
             second_label = "估值利率"
             if not val_fresh:
@@ -951,7 +964,12 @@ class Monitor:
             action_meaning = "该持仓尚未划入长期底仓计划，仅保留持仓股数核对"
             headline = "该持仓未划入长期底仓计划，仅保留数量核对。"
             next_step = "如需纳入长期跟踪，请在「编辑计划」中为其分配长期数量。"
-        elif not is_fund and val_fresh and pe is not None and pe <= 0:
+        elif not company_valuation and not is_fund:
+            action, tone, priority = "行情观察", "neutral", 8
+            action_meaning = type_label
+            headline = inst.get("risk_notice") or "证券类型待确认，可查看行情与技术指标。"
+            next_step = ""
+        elif company_valuation and val_fresh and pe is not None and pe <= 0:
             action, tone, priority = "亏损警示", "danger", 3
             action_meaning = "滚动市盈率 PE ≤ 0，说明公司当前处于亏损或估值异常，暂不建议盲目买入"
             headline = f"滚动市盈率为负（PE {pe:.1f}x），公司当前盈利承压或估值异常，长期安全边际需重新确认。"
@@ -1835,8 +1853,9 @@ class Monitor:
         for symbol, incoming in updates.items():
             previous = self.valuations.get(symbol, {})
             current = {**previous, **incoming} if incoming.get("refresh_failed") else dict(incoming)
-            if previous.get("currency") and not current.get("currency"):
-                current["currency"] = previous["currency"]
+            for field in ("currency", "name_cn", "name_en", "board"):
+                if previous.get(field) and not current.get(field):
+                    current[field] = previous[field]
             values[symbol] = current
         self.valuations = values
         self.store.set("valuations:live", values)

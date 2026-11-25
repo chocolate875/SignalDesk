@@ -93,8 +93,7 @@ export default function WatchlistRail({
           return false;
         }
       }
-      const paddedHK = s.market.code === "HK" ? s.symbol.padStart(8, "0") : "";
-      if (q && !`${s.symbol} ${paddedHK} ${s.name}`.toLowerCase().includes(q)) return false;
+      if (q && !`${s.symbol} ${ticker(s.symbol)} ${s.name}`.toLowerCase().includes(q)) return false;
       return true;
     });
 
@@ -367,13 +366,17 @@ export default function WatchlistRail({
                       fill={s.favorite ? "currentColor" : "none"}
                     />
                   </button>
-                  <b className="stock-row-ticker" title={s.symbol}>{s.symbol.slice(0, -3)}</b>
-                  <span
+                  <b className="stock-row-ticker" title={ticker(s.symbol)}>{s.market.code === "CN" ? s.symbol.slice(0, -3) : ticker(s.symbol)}</b>
+                  {s.market.code !== "US" && s.instrument ? (
+                    <span className="market-badge" title={s.instrument.risk_notice || s.instrument.type_label}>
+                      {s.instrument.type_label}
+                    </span>
+                  ) : <span
                     className={`verdict-chip tone-${tone}`}
                     title={`${actionText}：${actionTip}`}
                   >
                     {actionText}
-                  </span>
+                  </span>}
                 </div>
                 <strong className="stock-row-price">
                   {s.quote?.last != null ? pricePrefix(s.currency) + fmt(s.quote.last, 2) : "—"}
@@ -385,8 +388,8 @@ export default function WatchlistRail({
                   <span className="market-badge" data-market={s.market.code} title={`${s.market.name} · ${s.symbol}`}>
                     {s.market.code === "CN" ? (s.symbol.endsWith(".SH") ? "沪A" : "深A") : s.market.name}
                   </span>
-                  <span className="stock-row-name" title={s.name || "观察标的"}>
-                    {s.name || "观察标的"}
+                  <span className="stock-row-name" title={[s.name, s.instrument?.type_label].filter(Boolean).join(" · ")}>
+                    {s.name || (s.market.code === "US" ? "观察标的" : "名称待同步")}
                   </span>
                 </div>
                 <div className="stock-row-nums">

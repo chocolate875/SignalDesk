@@ -6,6 +6,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .markets import normalize_symbol
+
 
 class Store:
     def __init__(self, directory: Path):
@@ -39,6 +41,43 @@ class Store:
                            WHERE status='pending' AND event_id IN
                            (SELECT id FROM events WHERE json_extract(payload,'$.sleeve')='short')""")
         self.db.commit()
+        self._migrate_asian_symbols()
+
+    def _migrate_asian_symbols(self):
+        marker = "migration:hk-five-digit-v1"
+        if self.get(marker):
+            return
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM bars WHERE substr(symbol, -3) IN ('.HK', '.SH', '.SZ')")
+            for mode in ("live", "demo"):
+                key = f"portfolio:{mode}"
+                if (items := self.get(key)) is not None:
+                    for item in items:
+                        if item["symbol"].endswith(".HK"):
+                            item["symbol"] = normalize_symbol(item["symbol"])
+                    self._write_kv(key, items)
+            if (groups := self.get("watchlist-groups:live")) is not None:
+                for group in groups:
+                    group["symbols"] = list(dict.fromkeys(normalize_symbol(s) for s in group["symbols"]))
+                self._write_kv("watchlist-groups:live", groups)
+            if (valuations := self.get("valuations:live")) is not None:
+                self._write_kv("valuations:live", {normalize_symbol(s): v for s, v in valuations.items()})
+            for key, value in self.db.execute("SELECT key, value FROM kv WHERE key LIKE 'state:%:%.HK:%'").fetchall():
+                parts = key.split(":")
+                parts[2] = normalize_symbol(parts[2])
+                self.db.execute("INSERT OR IGNORE INTO kv VALUES(?, ?)", (":".join(parts), value))
+            self.db.execute(
+                """UPDATE events
+                   SET payload = json_set(payload, '$.symbol', printf('%05d.HK', json_extract(payload, '$.symbol')))
+                   WHERE json_extract(payload, '$.symbol') GLOB '[0-9]*.HK'"""
+            )
+            self.db.execute(
+                """UPDATE analyses
+                   SET symbol = printf('%05d.HK', symbol),
+                       payload = json_set(payload, '$.symbol', printf('%05d.HK', symbol))
+                   WHERE symbol GLOB '[0-9]*.HK'"""
+            )
+            self._write_kv(marker, True)
 
     def get(self, key: str, default=None):
         with self.lock:
@@ -46,12 +85,14 @@ class Store:
         return json.loads(row[0]) if row else default
 
     def set(self, key: str, value):
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
         with self.lock, self.db:
-            self.db.execute(
-                "INSERT INTO kv VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, encoded),
-            )
+            self._write_kv(key, value)
+
+    def _write_kv(self, key: str, value):
+        self.db.execute(
+            "INSERT INTO kv VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value, ensure_ascii=False, allow_nan=False)),
+        )
 
     @staticmethod
     def _bar_source(source: str) -> str:

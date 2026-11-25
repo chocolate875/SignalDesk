@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from .calendar import bar_end
-from .markets import HK, US, market_for, normalize_symbol
+from .markets import US, broker_symbol, market_for, normalize_symbol
 
 PLATFORM_DOMAINS: dict[str, tuple[str, ...]] = {
     "longport": ("longportapp.cn", "longportapp.com"),
@@ -211,7 +211,7 @@ class LongPortFeed:
         period = lp.Period.Day if timeframe == "day" else lp.Period.Min_15
         # 采用前复权（ForwardAdjust）：最新价与真实市场价保持一致，同时自动消除拆股、合股与除息断崖跳空
         batch = ctx.history_candlesticks_by_offset(
-            symbol,
+            broker_symbol(symbol),
             period,
             lp.AdjustType.ForwardAdjust,
             False,
@@ -225,6 +225,7 @@ class LongPortFeed:
 
     def valuations(self, symbols: list[str]) -> dict:
         from .indicators import finite
+        from .instruments import classify_instrument
 
         idx = self.lp.CalcIndex
         fields = [idx.PeTtmRatio, idx.PbRatio, idx.DividendRatioTtm]
@@ -234,31 +235,56 @@ class LongPortFeed:
                 fields.append(member)
         result = {}
         for group in self._market_batches(symbols):
-            currencies = {}
-            if market_for(group[0]) == HK:
+            for symbol in group:
+                result[symbol] = {}
+            if market_for(group[0]) != US:
                 try:
-                    currencies = {normalize_symbol(s.symbol, broker=True): s.currency
-                                  for s in self.quote_context.static_info(group)}
+                    profiles = self.quote_context.static_info([broker_symbol(symbol) for symbol in group])
                 except Exception:
-                    pass
+                    profiles = []
+                    # A rejected or unsupported code can make a whole provider batch fail.
+                    for symbol in group:
+                        try:
+                            profiles.extend(self.quote_context.static_info([broker_symbol(symbol)]))
+                        except Exception:
+                            continue
+                for profile in profiles:
+                    symbol = normalize_symbol(profile.symbol, broker=True)
+                    result[symbol] = {
+                        key: value
+                        for key, value in {
+                            "currency": getattr(profile, "currency", ""),
+                            "name_cn": getattr(profile, "name_cn", "") or getattr(profile, "name_hk", ""),
+                            "name_en": getattr(profile, "name_en", ""),
+                            "board": str(getattr(profile, "board", "")).split(".")[-1],
+                        }.items()
+                        if value
+                    }
+            eligible = []
+            for symbol in group:
+                profile = result[symbol]
+                instrument = classify_instrument(symbol, board=profile.get("board", ""))
+                if instrument["asset_type"] not in {"index", "derivative"}:
+                    eligible.append(symbol)
+            if not eligible:
+                continue
             try:
-                batch = self.quote_context.calc_indexes(group, fields)
+                batch = self.quote_context.calc_indexes([broker_symbol(symbol) for symbol in eligible], fields)
             except Exception:
-                for symbol in group:
-                    result[symbol] = {"currency": currencies.get(symbol), "refresh_failed": True}
+                for symbol in eligible:
+                    result[symbol]["refresh_failed"] = True
                 continue
             fetched = datetime.now(timezone.utc).isoformat()
             for item in batch:
                 symbol = normalize_symbol(item.symbol, broker=True)
-                result[symbol] = {
-                    "currency": currencies.get(symbol),
+                result.setdefault(symbol, {}).update({
                     "pe_ttm": finite(item.pe_ttm_ratio),
                     "pb": finite(item.pb_ratio),
                     "dividend_yield_pct": finite(item.dividend_ratio_ttm),
                     "turnover_rate_pct": finite(getattr(item, "turnover_rate", None)),
                     "market_cap": finite(getattr(item, "total_market_value", None)),
                     "fetched_at": fetched,
-                }
+                })
         return result
 
     @staticmethod
@@ -274,7 +300,7 @@ class LongPortFeed:
         new = [symbol for symbol in dict.fromkeys(symbols) if symbol not in self.symbols]
         for symbol in new:
             try:
-                self.quote_context.subscribe([symbol], [self.lp.SubType.Quote])
+                self.quote_context.subscribe([broker_symbol(symbol)], [self.lp.SubType.Quote])
             except Exception:
                 continue
             self.symbols.add(symbol)
@@ -285,12 +311,12 @@ class LongPortFeed:
         result = []
         for batch in self._market_batches(symbols):
             try:
-                items = self.quote_context.quote(batch)
+                items = self.quote_context.quote([broker_symbol(symbol) for symbol in batch])
             except Exception:
                 items = []
                 for sym in batch:
                     try:
-                        items.extend(self.quote_context.quote([sym]))
+                        items.extend(self.quote_context.quote([broker_symbol(sym)]))
                     except Exception:
                         continue
             for quote in items:

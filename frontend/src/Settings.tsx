@@ -225,6 +225,16 @@ export default function SettingsPanel({
                     <p className="muted">
                       关闭看板后后台继续运行；从托盘可以完全退出。
                     </p>
+                    {data.lan?.enabled && (
+                      <details className="notice">
+                        <summary>局域网只读访问已启用</summary>
+                        <p>在同一局域网内，用主机内网 IP 和当前端口打开看板。重启后访问码会更新。</p>
+                        <label className="field">
+                          访问码
+                          <input aria-label="本次局域网访问码" value={data.lan.code} readOnly onFocus={(event) => event.target.select()} />
+                        </label>
+                      </details>
+                    )}
                     <div className="setting-row">
                       <div>
                         <b>登录 Windows 后自动启动</b>
