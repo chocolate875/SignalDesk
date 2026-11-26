@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 HEADER = re.compile(
-    r"(?:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)"
-    r"(?:\([a-z0-9]+(?:[.-][a-z0-9]+)*\))?!?: (?P<summary>\S(?:.*\S)?)"
+    r"[a-zA-Z\u3400-\u9fff][\w.\-]*"
+    r"(?:[（(][^()（）\r\n]+[)）])?!?\s*[:：]\s*(?P<summary>\S(?:.*\S)?)\s*"
 )
 HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0002ebef]")
 
@@ -18,7 +18,7 @@ def valid_title(label: str, title: str) -> bool:
     if match and HAN.search(match["summary"]):
         return True
     print(
-        f"{label} 的标题须使用「类型(可选范围): 中文摘要」，例如 fix(chart): 修复缩放范围丢失",
+        f"{label} 的标题须使用「类型（可选范围）：中文摘要」，例如 fix(chart): 修复缩放范围丢失",
         file=sys.stderr,
     )
     return False

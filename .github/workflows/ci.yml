@@ -5,7 +5,7 @@ on:
     branches: [main, develop]
     types: [opened, reopened, synchronize, edited]
   push:
-    branches: [main, develop]
+    branches: [develop]
 
 permissions:
   contents: read
@@ -37,17 +37,24 @@ jobs:
             echo "提交历史包含本机技能目录 .agents/skills/，请从待合并的提交中移除。"
             exit 1
           fi
-      - name: 检查主分支的合并来源
-        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+      - name: 检查 PR 来源
+        if: github.event_name == 'pull_request'
         shell: bash
         env:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
-          if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
-            case "$GITHUB_HEAD_REF" in develop|release/?*|hotfix/?*) exit 0 ;; esac
+          case "$GITHUB_HEAD_REF" in
+            codex|codex/*|agent|agent/*)
+              echo "Agent 临时分支仅限本地，请将改动合入正式任务分支。"
+              exit 1 ;;
+          esac
+          if [[ "$GITHUB_BASE_REF" == main ]]; then
+            if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" ]]; then
+              case "$GITHUB_HEAD_REF" in develop|release/?*|hotfix/?*) exit 0 ;; esac
+            fi
+            echo "main 仅接受本仓库的 develop、release/* 或 hotfix/*；外部贡献请先提交到 develop。"
+            exit 1
           fi
-          echo "功能 PR 请提交到 develop。main 接受本仓库的 develop、release/* 和 hotfix/*。"
-          exit 1
       - name: 校验 PR 标题与全部新增提交
         if: github.event_name == 'pull_request'
         env:
@@ -55,11 +62,6 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          case "$GITHUB_HEAD_REF" in
-            codex|codex/*|agent|agent/*)
-              echo "请从正式任务分支提交 PR；Agent 临时分支仅限本地。"
-              exit 1 ;;
-          esac
           python3 scripts/check_commits.py --title="$PR_TITLE"
           python3 scripts/check_commits.py --range "$BASE_SHA..$HEAD_SHA"
       - name: 校验长期分支新增提交
@@ -70,12 +72,10 @@ jobs:
         shell: bash
         run: |
           if [[ "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
-            # 首次发布也检查新提交，旧版提交沿用原始标题。
             BASE_SHA=8cd4ba0d9713ddca9751d92729b7ef8174488e46
             git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
           fi
           python3 scripts/check_commits.py --range "$BASE_SHA..$HEAD_SHA"
-
   project:
     name: 工程验证
     runs-on: windows-latest
