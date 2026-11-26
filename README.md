@@ -167,7 +167,7 @@ uv run signaldesk-replay --output .runtime\replay-demo.json
 - **凭据加密**在 Windows 上由当前用户的 DPAPI 完成。Linux 用户如需保存或读取长桥、QQ 凭据，须在启动进程的环境中设置 `SIGNALDESK_VAULT_KEY`，并在后续启动时使用同一把 Fernet 密钥。服务默认绑定 `127.0.0.1` 并校验同源会话令牌。
 - **延伸文档**：
   - 工程交接、Git 同步清单与待续任务说明：[docs/handover.md](docs/handover.md)
-  - 多人开发、分支流向、中文提交格式与 GitHub 上线步骤：[CONTRIBUTING.md](CONTRIBUTING.md)
+  - 个人 rebase、协作 merge、主分支保护与精简后的 GitHub 检查：[CONTRIBUTING.md](CONTRIBUTING.md)
   - 工程规范与模块交接字典：[AGENTS.md](AGENTS.md)
   - 算子、公式与风控口径：[docs/signals.md](docs/signals.md)
   - 学术文献与因果回放实证：[docs/research.md](docs/research.md)
