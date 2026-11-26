@@ -5,7 +5,7 @@ on:
     branches: [main, develop]
     types: [opened, reopened, synchronize, edited]
   push:
-    branches: [main, develop]
+    branches: [develop]
 
 permissions:
   contents: read

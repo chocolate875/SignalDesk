@@ -110,6 +110,7 @@ chore(release): 发布 0.2.0 版本
 
 - `develop` 未启用分支保护，有写权限的成员可直接推送。CI 在推送后验证提交。外部贡献者按 PR 流程由维护者审查。
 - `main` 通过 PR 更新，禁止强推和删除。合并前须与目标分支保持最新、解决所有审查讨论，并通过 GitHub Actions 的 **提交规范** 和 **工程验证**。
+- CI 在推送到 `develop` 时运行，也会在面向 `develop` 或 `main` 的 PR 上运行；`main` 的 PR 合并后不再因推送重复执行。PR 检查覆盖合并前的候选结果，实际合并提交或绕过 PR 的 `main` 推送不会再单独触发此工作流。
 - [CODEOWNERS](.github/CODEOWNERS) 指定 `@chocolate875` 审查全仓库，包括 CI 和规则文件。向 `main` 提交的 PR 启用维护者审批，新改动影响已有审查时须重新审批。维护者可以通过 PR 自合，但同样需要通过两项 CI。
 - **提交规范** 检查中文提交及 PR 标题、误跟踪的忽略文件和本机技能目录历史，并限制 Agent 临时分支直接发起 PR。`main` 的 PR 须来自本仓库的 `develop`、`release/*` 或 `hotfix/*`；外部贡献先向 `develop` 提交。**工程验证** 在 Windows 上运行 Ruff、最小字号审计、前端锁定依赖安装、生产构建和全量 pytest。GitHub 上独立配置的保护规则仍可能适用。
 - CI 在 `pull_request` 事件下用只读令牌验证外部代码。同一 PR 推送新改动时，旧运行会取消。规则可在仓库的 [Rulesets](https://github.com/chocolate875/SignalDesk/settings/rules) 中查看。
